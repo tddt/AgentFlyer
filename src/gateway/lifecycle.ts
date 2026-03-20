@@ -1,0 +1,703 @@
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { join, dirname } from 'node:path';
+import { AnthropicProvider } from '../agent/llm/anthropic.js';
+import { OpenAIProvider, createCompatProvider } from '../agent/llm/openai.js';
+import { createProviderRegistry } from '../agent/llm/provider.js';
+import { generateSoulMd } from '../agent/prompt/soul.js';
+import { AgentRunner } from '../agent/runner.js';
+import { createBashTool } from '../agent/tools/builtin/bash.js';
+import { createFsTools } from '../agent/tools/builtin/fs.js';
+import { createMemoryTools } from '../agent/tools/builtin/memory.js';
+import { createSchedulerTools } from '../agent/tools/builtin/scheduler-tools.js';
+import type { SearchProvider } from '../agent/tools/builtin/search-providers/provider.js';
+import {
+  BingProvider,
+  DuckDuckGoProvider,
+  SerpApiProvider,
+  TavilyProvider,
+  createWebSearchTool,
+} from '../agent/tools/builtin/web-search.js';
+import { createMeshTools } from '../agent/tools/mesh-tools.js';
+import { ToolRegistry } from '../agent/tools/registry.js';
+import { DiscordChannel } from '../channels/discord/index.js';
+import { FeishuChannel } from '../channels/feishu/index.js';
+import { QQChannel } from '../channels/qq/index.js';
+import { TelegramChannel } from '../channels/telegram/index.js';
+import {
+  type ConfigWatcher,
+  getDefaultConfigPath,
+  loadConfig,
+  saveConfig,
+  watchConfig,
+} from '../core/config/loader.js';
+import type { Config } from '../core/config/schema.js';
+import { ConfigSchema } from '../core/config/schema.js';
+import type { AgentConfig } from '../core/config/schema.js';
+import { createLogger } from '../core/logger.js';
+import type { AgentId } from '../core/types.js';
+import { SessionMetaStore } from '../core/session/meta.js';
+import { SessionStore } from '../core/session/store.js';
+import { MemoryStore } from '../memory/store.js';
+import { buildRegistry } from '../skills/registry.js';
+import { filterSkillsForAgent } from '../skills/filter.js';
+import { buildSkillsDirectory } from '../skills/format.js';
+import { createSkillTools } from '../skills/skill-tools.js';
+import { CronScheduler } from '../scheduler/cron.js';
+import { generateToken } from './auth.js';
+import { HookRegistry } from './hooks.js';
+import { logBroadcaster } from './log-buffer.js';
+import type { RpcContext } from './rpc.js';
+import { type GatewayServer, createGatewayServer } from './server.js';
+import { ContentStore } from './content-store.js';
+import { FederationNode } from '../federation/node.js';
+import type { Channel } from '../channels/types.js';
+import { createChannelTools } from '../agent/tools/builtin/channel-tools.js';
+
+const logger = createLogger('gateway:lifecycle');
+
+export const GATEWAY_VERSION = '0.1.0';
+
+export interface GatewayState {
+  runners: Map<string, AgentRunner>;
+  config: Config;
+  startedAt: number;
+  authToken: string;
+  dataDir: string;
+  scheduler: CronScheduler;
+  /** Active config file watcher — stopped on shutdown. */
+  configWatcher: ConfigWatcher | null;
+}
+
+export interface GatewayInstance {
+  state: GatewayState;
+  hooks: HookRegistry;
+  stop(): Promise<void>;
+}
+
+let _server: GatewayServer | null = null;
+let _pidFile: string | null = null;
+
+function hasUsableApiKey(value: string | undefined): boolean {
+  if (!value) return false;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (trimmed.includes('*')) return false;
+  return !['changeme', 'placeholder', 'your-api-key'].includes(trimmed.toLowerCase());
+}
+
+/** Write PID file so CLI can check if gateway is running. */
+async function writePid(dataDir: string): Promise<void> {
+  const pidPath = join(dataDir, 'gateway.pid');
+  await mkdir(dataDir, { recursive: true });
+  await writeFile(pidPath, String(process.pid), 'utf-8');
+  _pidFile = pidPath;
+}
+
+async function removePid(): Promise<void> {
+  if (_pidFile && existsSync(_pidFile)) {
+    await unlink(_pidFile).catch(() => undefined);
+  }
+}
+
+/** Check if a gateway is already running (by pid file + process probe). */
+export async function isGatewayRunning(dataDir: string): Promise<boolean> {
+  const pidPath = join(dataDir, 'gateway.pid');
+  if (!existsSync(pidPath)) return false;
+  try {
+    const pid = Number.parseInt(await readFile(pidPath, 'utf-8'), 10);
+    if (Number.isNaN(pid)) return false;
+    process.kill(pid, 0); // throws if process doesn't exist
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Shared channel map — populated after channels start; tools hold a live reference.
+const sharedChannels = new Map<string, Channel>();
+
+type FlatModelEntry = {
+  provider: string; id: string; maxTokens: number; temperature?: number;
+  apiKey?: string; apiBaseUrl?: string;
+};
+
+/**
+ * Resolve a model key in both the new grouped format ("group/modelKey")
+ * and the legacy flat format ("fast").
+ * RATIONALE: supports zero-downtime migration — old configs continue to work.
+ */
+function resolveModelEntry(
+  models: Record<string, unknown>,
+  fullKey: string,
+): FlatModelEntry | undefined {
+  const slash = fullKey.indexOf('/');
+  if (slash !== -1) {
+    const groupName = fullKey.slice(0, slash);
+    const modelName = fullKey.slice(slash + 1);
+    const group = models[groupName] as { provider: string; apiKey?: string; apiBaseUrl?: string; models?: Record<string, { id: string; maxTokens: number; temperature?: number }> } | undefined;
+    if (!group?.models) return undefined;
+    const def = group.models[modelName];
+    if (!def) return undefined;
+    return { provider: group.provider, apiKey: group.apiKey, apiBaseUrl: group.apiBaseUrl, ...def };
+  }
+  // Legacy flat-format fallback: key directly maps to { provider, id, maxTokens, ... }
+  return models[fullKey] as FlatModelEntry | undefined;
+}
+
+function buildRunner(agentCfg: AgentConfig, state: GatewayState, skillsText = '', agentSkillRegistry?: import('../skills/registry.js').SkillRegistry): AgentRunner {
+  const { config, dataDir } = state;
+  const sessionsDir = join(dataDir, 'sessions');
+  const workspaceDir = agentCfg.workspace ?? config.defaults.workspace ?? process.cwd();
+
+  // Ensure workspace directory structure exists (created on first launch)
+  if (agentCfg.workspace) {
+    mkdirSync(join(agentCfg.workspace, 'output'), { recursive: true });
+    mkdirSync(join(agentCfg.workspace, 'skills'), { recursive: true });
+    // Generate a SOUL.md template if one hasn't been created yet.
+    // The agent picks it up via layer1Workspace, and users can edit it freely.
+    const soulPath = join(agentCfg.workspace, 'SOUL.md');
+    if (!existsSync(soulPath)) {
+      writeFileSync(soulPath, generateSoulMd(agentCfg));
+      logger.info('Generated SOUL.md', { agentId: agentCfg.id, soulPath });
+    }
+    logger.debug('Workspace ready', { agentId: agentCfg.id, workspaceDir: agentCfg.workspace });
+  }
+
+  const sessionStore = new SessionStore(sessionsDir);
+  const metaStore = new SessionMetaStore(sessionsDir);
+  const memoryStore = new MemoryStore(dataDir);
+
+  // Resolve model: agent.model (alias key) → models registry → defaults
+  // Supports both grouped "group/modelKey" and legacy flat "fast" formats.
+  const modelKey = agentCfg.model ?? config.defaults.model;
+  const modelEntry = resolveModelEntry(config.models as Record<string, unknown>, modelKey);
+  const primaryModelId = modelEntry?.id ?? modelKey;
+
+  // LLM providers
+  const providerReg = createProviderRegistry();
+  providerReg.register(new AnthropicProvider());
+
+  // RATIONALE: Register openai-compat/ollama providers BEFORE the generic OpenAIProvider
+  // so that exact model-id matches take precedence over the broad prefix check.
+  // Supports both grouped format { provider, models: { key: { id } } }
+  // and legacy flat format { provider: 'openai-compat', id, apiBaseUrl, apiKey }.
+  for (const [groupName, groupVal] of Object.entries(config.models as Record<string, unknown>)) {
+    const group = groupVal as { provider?: string; apiKey?: string; apiBaseUrl?: string; models?: Record<string, { id: string }> };
+    const provider = group.provider;
+    if (!provider || (provider !== 'openai-compat' && provider !== 'ollama')) continue;
+    const baseURL = group.apiBaseUrl ?? (provider === 'ollama' ? 'http://localhost:11434/v1' : undefined);
+    if (!baseURL) {
+      logger.warn('Skipping compat model registration: missing apiBaseUrl', { groupName });
+      continue;
+    }
+    const envKey = `AGENTFLYER_API_KEY_${groupName.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+    const apiKey = group.apiKey ?? process.env[envKey] ?? process.env.OPENAI_API_KEY ?? 'unused';
+
+    if (group.models && typeof group.models === 'object') {
+      // Grouped format: register one compat provider per model in the group
+      for (const [modelName, modelDef] of Object.entries(group.models)) {
+        providerReg.register(
+          createCompatProvider({
+            baseURL,
+            apiKey,
+            providerId: `${provider}:${groupName}/${modelName}`,
+            modelPrefixes: [(modelDef as { id: string }).id],
+          }),
+        );
+      }
+    } else {
+      // Legacy flat format: the entry itself carries the model id
+      const legacyId = (groupVal as { id?: string }).id;
+      if (legacyId) {
+        providerReg.register(
+          createCompatProvider({
+            baseURL,
+            apiKey,
+            providerId: `${provider}:${groupName}`,
+            modelPrefixes: [legacyId],
+          }),
+        );
+      }
+    }
+  }
+
+  // Generic OpenAIProvider as fallback for gpt-*/o1/o3/o4 models
+  providerReg.register(new OpenAIProvider());
+
+  const provider = providerReg.forModel(primaryModelId);
+
+  // Tool registry
+  const tools = new ToolRegistry();
+  // Pass skill dirs so the agent can read files inside skill directories
+  const skillAllowedDirs = agentSkillRegistry ? agentSkillRegistry.list().map((s) => dirname(s.filePath)) : [];
+  tools.registerMany(createFsTools(workspaceDir, skillAllowedDirs));
+  tools.register(createBashTool({ cwd: workspaceDir }));
+  tools.registerMany(createMemoryTools(memoryStore, config.memory));
+  // Skill tools — let the agent read full SKILL.md content on demand
+  if (agentSkillRegistry) {
+    tools.registerMany(createSkillTools(agentSkillRegistry));
+  }
+  // RATIONALE: Both runners and agentConfigs are passed by reference/value respectively.
+  // The runners Map is fully populated before any tool is invoked at runtime.
+  tools.registerMany(createMeshTools(state.runners, state.config.agents));
+  // Scheduler tools share the same CronScheduler singleton across all agents.
+  tools.registerMany(createSchedulerTools(state.runners, state.scheduler, state.dataDir));
+  // Channel tools — let the agent send text/files to any registered channel.
+  tools.registerMany(createChannelTools({
+    channels: sharedChannels,
+    agentId: agentCfg.id as import('../core/types.js').AgentId,
+    workspaceDir,
+  }));
+
+  // Web search — build provider list from config
+  const searchProviders: SearchProvider[] = [];
+  for (const cfg of config.search.providers) {
+    switch (cfg.provider) {
+      case 'tavily':
+        if (!hasUsableApiKey(cfg.apiKey)) {
+          logger.warn('Skipping Tavily search provider: missing usable apiKey');
+          break;
+        }
+        searchProviders.push(
+          new TavilyProvider({
+            apiKey: cfg.apiKey,
+            maxResults: cfg.maxResults,
+            searchDepth: cfg.searchDepth,
+          }),
+        );
+        break;
+      case 'bing':
+        if (!hasUsableApiKey(cfg.apiKey)) {
+          logger.warn('Skipping Bing search provider: missing usable apiKey');
+          break;
+        }
+        searchProviders.push(
+          new BingProvider({ apiKey: cfg.apiKey, maxResults: cfg.maxResults, market: cfg.market }),
+        );
+        break;
+      case 'serpapi':
+        if (!hasUsableApiKey(cfg.apiKey)) {
+          logger.warn('Skipping SerpApi search provider: missing usable apiKey');
+          break;
+        }
+        searchProviders.push(
+          new SerpApiProvider({
+            apiKey: cfg.apiKey,
+            maxResults: cfg.maxResults,
+            engine: cfg.engine,
+            hl: cfg.hl,
+            gl: cfg.gl,
+          }),
+        );
+        break;
+      case 'duckduckgo':
+        searchProviders.push(
+          new DuckDuckGoProvider({ maxResults: cfg.maxResults, region: cfg.region }),
+        );
+        break;
+    }
+  }
+  if (searchProviders.length > 0) {
+    tools.register(createWebSearchTool({ providers: searchProviders }));
+    logger.info('Web search tool registered', { providers: searchProviders.map((p) => p.name) });
+  }
+
+  return new AgentRunner(agentCfg, {
+    provider,
+    toolRegistry: tools,
+    sessionStore,
+    metaStore,
+    skillsText,
+    systemPromptMaxTokens: config.context?.systemPrompt?.maxTokens,
+    resolvedModel: {
+      id: primaryModelId,
+      maxTokens: modelEntry?.maxTokens ?? 8192,
+      temperature: modelEntry?.temperature,
+    },
+  });
+}
+
+/**
+ * Bootstrap and start the gateway.
+ * Resolves when the server is accepting connections.
+ */
+export async function startGateway(
+  config: Config,
+  dataDir: string,
+  configPath?: string,
+): Promise<GatewayInstance> {
+  logger.info('Starting AgentFlyer gateway', { version: GATEWAY_VERSION });
+
+  // Install log interception as early as possible so all subsequent output
+  // is captured for the web console SSE stream.
+  logBroadcaster.install();
+
+  const hooks = new HookRegistry();
+  await hooks.emit('before:start', {});
+
+  const authToken = config.gateway.auth.token ?? process.env.AGENTFLYER_TOKEN ?? generateToken();
+
+  const runners = new Map<string, AgentRunner>();
+  const scheduler = new CronScheduler();
+  const state: GatewayState = {
+    runners,
+    config,
+    startedAt: Date.now(),
+    authToken,
+    dataDir,
+    scheduler,
+    configWatcher: null,
+  };
+
+  // Build global skill registry once; each agent gets its own filtered slice
+  const globalSkillRegistry = buildRegistry(config, config.defaults.workspace ?? process.cwd());
+  logger.info('Global skill registry ready', { total: globalSkillRegistry.size() });
+
+  // Build a runner for each agent
+  for (const agentCfg of config.agents) {
+    try {
+      const agentSkills = filterSkillsForAgent(globalSkillRegistry.list(), agentCfg.skills ?? []);
+      const agentSkillsText = buildSkillsDirectory(agentSkills, config.skills.compact ?? true);
+      if (agentSkills.length > 0) {
+        logger.info('Skills loaded for agent', { agentId: agentCfg.id, skills: agentSkills.map((s) => s.id) });
+      }
+      // Build a per-agent registry so skill_read / skill_list are scoped to this agent's skills
+      const agentSkillRegistry = new (await import('../skills/registry.js')).SkillRegistry();
+      for (const s of agentSkills) agentSkillRegistry.register(s);
+      runners.set(agentCfg.id, buildRunner(agentCfg, state, agentSkillsText, agentSkillRegistry));
+      const modelKey = agentCfg.model ?? config.defaults.model;
+      logger.info('Agent registered', { agentId: agentCfg.id, model: modelKey });
+      await hooks.emit('agent:registered', { agentId: agentCfg.id, runners });
+    } catch (err) {
+      logger.error('Failed to build runner for agent', {
+        agentId: agentCfg.id,
+        error: String(err),
+      });
+      await hooks.emit('agent:error', {
+        agentId: agentCfg.id,
+        error: err instanceof Error ? err : new Error(String(err)),
+      });
+    }
+  }
+
+  // ── Manual reload helper (also used by hot-reload watcher) ────────────
+  /**
+   * Reload agent(s) by re-reading the config file from disk and rebuilding
+   * their runners in-place.  Specify agentId to reload a single agent;
+   * omit (or pass undefined) to reload all agents and sync additions/removals.
+   */
+  async function reloadAgents(agentId?: string): Promise<{ reloaded: string[] }> {
+    const newConfig = loadConfig(configFilePath);
+    await hooks.emit('before:reload', { runners });
+
+    let toReload: AgentConfig[];
+
+    if (agentId) {
+      // Single-agent reload: find in new config, keep everything else intact
+      const agentCfg = newConfig.agents.find((a) => a.id === agentId);
+      if (!agentCfg) throw new Error(`Agent "${agentId}" not found in config`);
+      toReload = [agentCfg];
+    } else {
+      // Full reload: diff old/new sets, remove deleted agents
+      const oldIds = new Set(runners.keys());
+      const newIds = new Set(newConfig.agents.map((a) => a.id));
+      for (const id of oldIds) {
+        if (!newIds.has(id)) {
+          runners.delete(id);
+          logger.info('Agent removed on reload', { agentId: id });
+        }
+      }
+      toReload = newConfig.agents;
+    }
+
+    state.config = newConfig;
+    const reloaded: string[] = [];
+    for (const agentCfg of toReload) {
+      try {
+        const reloadedRegistry = buildRegistry(newConfig, newConfig.defaults.workspace ?? process.cwd());
+        const agentSkills = filterSkillsForAgent(reloadedRegistry.list(), agentCfg.skills ?? []);
+        const agentSkillsText = buildSkillsDirectory(agentSkills, newConfig.skills.compact ?? true);
+        const agentSkillRegistry = new (await import('../skills/registry.js')).SkillRegistry();
+        for (const s of agentSkills) agentSkillRegistry.register(s);
+        runners.set(agentCfg.id, buildRunner(agentCfg, state, agentSkillsText, agentSkillRegistry));
+        reloaded.push(agentCfg.id);
+        logger.info('Agent reloaded', { agentId: agentCfg.id, skills: agentSkills.length });
+      } catch (err) {
+        logger.error('Failed to reload runner', { agentId: agentCfg.id, error: String(err) });
+      }
+    }
+
+    await hooks.emit('after:reload', { runners });
+    logger.info('Reload complete', { reloaded });
+    return { reloaded };
+  }
+
+  const configFilePath = configPath ?? getDefaultConfigPath();
+
+  async function saveAndReload(raw: unknown): Promise<{ reloaded: string[] }> {
+    const merged = raw;
+    const parsed = ConfigSchema.safeParse(merged);
+    if (!parsed.success) {
+      throw new Error(`Invalid config: ${parsed.error.message}`);
+    }
+    await saveConfig(parsed.data, configFilePath);
+    // Update live state and rebuild runners
+    return reloadAgents();
+  }
+
+  const rpcContext: RpcContext = {
+    runners,
+    gatewayVersion: GATEWAY_VERSION,
+    startedAt: state.startedAt,
+    dataDir,
+    getConfig: () => state.config,
+    saveAndReload,
+    scheduler,
+    shutdown: cleanup,
+    reload: reloadAgents,
+    listSkills: () => globalSkillRegistry.list(),
+    sessionStore: new SessionStore(join(dataDir, 'sessions')),
+    metaStore: new SessionMetaStore(join(dataDir, 'sessions')),
+    contentStore: new ContentStore(() => state.config),
+    channels: sharedChannels,
+    runningTasks: new Map(),
+  };
+
+  // ── Inbound channel handler ──────────────────────────────────────────────
+  // Routes a ChannelMessage to the appropriate AgentRunner and streams/sends
+  // the reply back via the originating channel.
+  const activeChannels: { stop(): Promise<void> }[] = [];
+  type WebhookHandler = (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => Promise<void>;
+  const webhookHandlers = new Map<string, WebhookHandler>();
+
+  async function startExternalChannels(): Promise<void> {
+    const channelsCfg = config.channels;
+    // Default agent: first configured agent, or 'main' as fallback
+    const firstAgentId = config.agents[0]?.id ?? 'main';
+
+    // ── Telegram ────────────────────────────────────────────────────────────
+    const tgCfg = channelsCfg.telegram;
+    if (tgCfg.enabled && tgCfg.botToken) {
+      try {
+        const tg = new TelegramChannel({
+          botToken: tgCfg.botToken,
+          defaultAgentId: (tgCfg.defaultAgentId || firstAgentId) as AgentId,
+          allowedChatIds: tgCfg.allowedChatIds,
+          pollIntervalMs: tgCfg.pollIntervalMs,
+        });
+        await tg.start(async (msg) => {
+          const runner = runners.get(msg.agentId);
+          if (!runner) {
+            logger.warn('Telegram: no runner for agent', { agentId: msg.agentId });
+            await tg.sendToChat(msg.meta?.chatId as number, `⚠️ Agent "${msg.agentId}" not found.`);
+            return;
+          }
+          try {
+            runner.setThread(msg.threadKey);
+            const stream = runner.turn(msg.text);
+            await tg.sendStream({ agentId: msg.agentId, threadKey: msg.threadKey }, stream);
+          } catch (err: unknown) {
+            logger.error('Telegram agent run error', { error: String(err) });
+            await tg.sendToChat(msg.meta?.chatId as number, `❌ Error: ${String(err)}`);
+          }
+        });
+        activeChannels.push(tg);
+        sharedChannels.set('telegram', tg as unknown as Channel);
+        logger.info('Telegram channel active', { agentId: tgCfg.defaultAgentId });
+      } catch (err: unknown) {
+        logger.error('Failed to start Telegram channel — gateway continues without it', { error: String(err) });
+      }
+    }
+
+    // ── Discord ─────────────────────────────────────────────────────────────
+    const dcCfg = channelsCfg.discord;
+    if (dcCfg.enabled && dcCfg.botToken) {
+      try {
+        const dc = new DiscordChannel({
+          botToken: dcCfg.botToken,
+          defaultAgentId: (dcCfg.defaultAgentId || firstAgentId) as AgentId,
+          allowedChannelIds: dcCfg.allowedChannelIds,
+          commandPrefix: dcCfg.commandPrefix,
+        });
+        await dc.start(async (msg) => {
+          const runner = runners.get(msg.agentId);
+          if (!runner) {
+            logger.warn('Discord: no runner for agent', { agentId: msg.agentId });
+            await dc.sendToChannel(
+              msg.meta?.discordChannelId as string,
+              `⚠️ Agent "${msg.agentId}" not found.`,
+            );
+            return;
+          }
+          try {
+            runner.setThread(msg.threadKey);
+            const stream = runner.turn(msg.text);
+            await dc.sendStream({ agentId: msg.agentId, threadKey: msg.threadKey }, stream);
+          } catch (err: unknown) {
+            logger.error('Discord agent run error', { error: String(err) });
+            await dc.sendToChannel(
+              msg.meta?.discordChannelId as string,
+              `❌ Error: ${String(err)}`,
+            );
+          }
+        });
+        activeChannels.push(dc);
+        sharedChannels.set('discord', dc as unknown as Channel);
+        logger.info('Discord channel active', { agentId: dcCfg.defaultAgentId });
+      } catch (err: unknown) {
+        logger.error('Failed to start Discord channel — gateway continues without it', { error: String(err) });
+      }
+    }
+
+    // ── Feishu ──────────────────────────────────────────────────────────────
+    const feishuCfg = channelsCfg.feishu;
+    if (feishuCfg.enabled && feishuCfg.appId) {
+      try {
+        const feishu = new FeishuChannel({
+          appId: feishuCfg.appId,
+          appSecret: feishuCfg.appSecret,
+          verificationToken: feishuCfg.verificationToken,
+          encryptKey: feishuCfg.encryptKey,
+          defaultAgentId: (feishuCfg.defaultAgentId || firstAgentId) as AgentId,
+          allowedChatIds: feishuCfg.allowedChatIds,
+          agentMappings: feishuCfg.agentMappings,
+          knownAgentIds: [...runners.keys()],
+        });
+        await feishu.start(async (msg) => {
+          const runner = runners.get(msg.agentId);
+          if (!runner) {
+            logger.warn('Feishu: no runner for agent', { agentId: msg.agentId });
+            await feishu.sendToChat(msg.threadKey, `⚠️ Agent "${msg.agentId}" not found.`);
+            return;
+          }
+          try {
+            runner.setThread(msg.threadKey);
+            const stream = runner.turn(msg.text);
+            await feishu.sendStream({ agentId: msg.agentId, threadKey: msg.threadKey }, stream);
+          } catch (err: unknown) {
+            logger.error('Feishu agent run error', { error: String(err) });
+            await feishu.sendToChat(msg.threadKey, `❌ Error: ${String(err)}`);
+          }
+        });
+        // WebSocket mode: no webhook handler needed — events arrive via WSClient
+        activeChannels.push(feishu);
+        sharedChannels.set('feishu', feishu as unknown as Channel);
+        logger.info('Feishu channel active (WebSocket mode)', { agentId: feishuCfg.defaultAgentId });
+      } catch (err: unknown) {
+        logger.error('Failed to start Feishu channel — gateway continues without it', { error: String(err) });
+      }
+    }
+
+    // ── QQ ──────────────────────────────────────────────────────────────────
+    const qqCfg = channelsCfg.qq;
+    if (qqCfg.enabled && qqCfg.appId) {
+      try {
+        const qq = new QQChannel({
+          appId: qqCfg.appId,
+          clientSecret: qqCfg.clientSecret,
+          defaultAgentId: (qqCfg.defaultAgentId || firstAgentId) as AgentId,
+          allowedGroupIds: qqCfg.allowedGroupIds,
+        });
+        await qq.start(async (msg) => {
+          const runner = runners.get(msg.agentId);
+          if (!runner) {
+            logger.warn('QQ: no runner for agent', { agentId: msg.agentId });
+            await qq.sendToThread(msg.threadKey, `⚠️ Agent "${msg.agentId}" not found.`);
+            return;
+          }
+          try {
+            runner.setThread(msg.threadKey);
+            const stream = runner.turn(msg.text);
+            await qq.sendStream({ agentId: msg.agentId, threadKey: msg.threadKey }, stream);
+          } catch (err: unknown) {
+            logger.error('QQ agent run error', { error: String(err) });
+            await qq.sendToThread(msg.threadKey, `❌ Error: ${String(err)}`);
+          }
+        });
+        webhookHandlers.set('/channels/qq/event', qq.getWebhookHandler());
+        activeChannels.push(qq);
+        sharedChannels.set('qq', qq as unknown as Channel);
+        logger.info('QQ channel active', { agentId: qqCfg.defaultAgentId });
+      } catch (err: unknown) {
+        logger.error('Failed to start QQ channel — gateway continues without it', { error: String(err) });
+      }
+    }
+  }
+
+  await startExternalChannels();
+
+  // ── Step 11: Federation node (optional) ─────────────────────────────────
+  let federationNode: FederationNode | null = null;
+  if (config.federation?.enabled) {
+    try {
+      federationNode = new FederationNode({
+        config: config.federation,
+        gatewayPort: config.gateway.port,
+        dataDir,
+        gatewayVersion: GATEWAY_VERSION,
+      });
+      await federationNode.start();
+      rpcContext.federationNode = federationNode;
+    } catch (err) {
+      logger.error('Federation node failed to start — gateway continues without it', { error: String(err) });
+    }
+  }
+
+  _server = createGatewayServer({
+    port: config.gateway.port,
+    bind: config.gateway.bind,
+    authToken,
+    rpcContext,
+    logBroadcaster,
+    webhookHandlers: webhookHandlers.size > 0 ? webhookHandlers : undefined,
+  });
+
+  const { port, address } = await _server.start();
+
+  await writePid(dataDir);
+  const consoleUrl = `http://127.0.0.1:${port}/console?token=${authToken}`;
+  logger.info('Gateway ready', {
+    address,
+    port,
+    authToken: `${authToken.slice(0, 8)}...`,
+    consoleUrl,
+  });
+  await hooks.emit('after:start', { runners });
+
+  // ── Hot-reload watcher (uses the same configFilePath declared above) ──
+  state.configWatcher = watchConfig(async (_newConfig, err) => {
+    if (err) {
+      logger.error('Hot-reload skipped due to config error', { error: err.message });
+      return;
+    }
+    // Delegate to the shared reload helper so RPC and watcher use the same path
+    logger.info('Config file changed — triggering hot-reload…');
+    await reloadAgents();
+  }, configFilePath);
+
+  process.on('SIGINT', () => void cleanup());
+  process.on('SIGTERM', () => void cleanup());
+
+  async function cleanup(): Promise<void> {
+    logger.info('Gateway shutting down...');
+    await hooks.emit('before:stop', { runners });
+    state.configWatcher?.stop();
+    state.scheduler.stopAll();
+    await federationNode?.stop().catch(() => undefined);
+    // Stop external channels gracefully
+    for (const ch of activeChannels) {
+      await ch.stop().catch(() => undefined);
+    }
+    await _server?.stop();
+    await removePid();
+    await hooks.emit('after:stop', {});
+    process.exit(0);
+  }
+
+  return {
+    state,
+    hooks,
+    stop: cleanup,
+  };
+}

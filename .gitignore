@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+Docs/
+# Build output
+dist/
+*.js.map
+
+# Runtime data
+~/.agentflyer/
+
+# Credentials (NEVER commit)
+*.enc
+*.key
+credentials/
+
+# Logs
+*.log
+gateway.pid
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Test coverage
+coverage/
+.vitest/
+
+# Console UI build
+src/gateway/console-ui/dist/
+src/gateway/console-ui/node_modules/
+
+# Temporary files
+tmp/
+.tmp/
+
+# OS
+Thumbs.db

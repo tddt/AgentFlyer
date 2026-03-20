@@ -1,0 +1,4 @@
+packages:
+  - "."
+  - "extensions/*"
+  - "src/gateway/console-ui"
