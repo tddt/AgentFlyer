@@ -21,6 +21,9 @@ gateway.pid
 # Editor
 .vscode/
 .idea/
+
+# Copilot / IDE skills (local only, not for version control)
+.github/
 *.swp
 *.swo
 .DS_Store
