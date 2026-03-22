@@ -3,8 +3,50 @@
   "version": "1.0.0",
   "description": "Decentralized, cross-platform, multi-host federated AI Agent framework",
   "type": "module",
+  "license": "MIT",
+  "author": "dteric",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tddt/AgentFlyer.git"
+  },
+  "homepage": "https://github.com/tddt/AgentFlyer#readme",
+  "bugs": {
+    "url": "https://github.com/tddt/AgentFlyer/issues"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "llm",
+    "framework",
+    "federation",
+    "multi-agent",
+    "claude",
+    "openai",
+    "chatbot",
+    "automation",
+    "bun",
+    "typescript"
+  ],
+  "files": [
+    "dist",
+    "README.md",
+    "README_CN.md",
+    "LICENSE"
+  ],
   "bin": {
     "agentflyer": "./dist/cli/main.js"
+  },
+  "exports": {
+    "./core/config": "./dist/core/config/index.js",
+    "./core/session": "./dist/core/session/index.js",
+    "./agent": "./dist/agent/runner.js",
+    "./memory": "./dist/memory/index.js",
+    "./skills": "./dist/skills/index.js",
+    "./scheduler": "./dist/scheduler/index.js",
+    "./mesh": "./dist/mesh/index.js",
+    "./federation": "./dist/federation/index.js",
+    "./gateway": "./dist/gateway/index.js",
+    "./channels": "./dist/channels/index.js"
   },
   "scripts": {
     "dev": "bun run src/cli/main.ts",
@@ -20,7 +62,8 @@
     "start": "node dist/cli/main.js start",
     "chat": "node dist/cli/main.js chat",
     "console:build": "cd src/gateway/console-ui && bun run build",
-    "console:dev": "cd src/gateway/console-ui && bun run dev"
+    "console:dev": "cd src/gateway/console-ui && bun run dev",
+    "prepublishOnly": "pnpm build && pnpm check && pnpm test"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
