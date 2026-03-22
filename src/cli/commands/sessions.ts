@@ -4,6 +4,8 @@ import chalk from 'chalk';
 import { getDefaultConfigDir, loadConfig } from '../../core/config/loader.js';
 import { isGatewayRunning } from '../../gateway/lifecycle.js';
 import { callRpc } from '../gateway-client.js';
+import { parseSessionKey } from '../../core/types.js';
+import type { SessionKey } from '../../core/types.js';
 
 function requireGateway(token: string, s: ReturnType<typeof spinner>): void {
   if (!token) {
@@ -37,13 +39,28 @@ const sessionsList = defineCommand({
 
     s.start('Fetching sessions');
     try {
-      const sessions = await callRpc(port, token, 'session.list', {}) as Array<{
-        sessionKey: string;
-        agentId: string;
-        channel: string;
-        messageCount: number;
-        lastActive: string;
-      }>;
+      const rpcResult = await callRpc(port, token, 'session.list', {}) as {
+        sessions: Array<{
+          sessionKey: string;
+          agentId: string;
+          threadKey?: string;
+          messageCount: number;
+          lastActivity: number;
+        }>;
+      };
+      const sessions = (rpcResult.sessions ?? []).map((raw) => {
+        // Fallback: parse agentId/threadKey from sessionKey when meta fields are empty
+        const parsed = (!raw.agentId || !raw.threadKey)
+          ? parseSessionKey(raw.sessionKey as SessionKey)
+          : null;
+        return {
+          sessionKey: raw.sessionKey,
+          agentId: raw.agentId || parsed?.agentId || '',
+          channel: raw.threadKey || parsed?.threadKey || '',
+          messageCount: raw.messageCount,
+          lastActive: raw.lastActivity ? new Date(raw.lastActivity).toLocaleString() : '—',
+        };
+      });
       s.stop(`${sessions.length} session(s)`);
 
       const filtered = (args.agent as string | undefined)
@@ -70,9 +87,7 @@ const sessionsList = defineCommand({
       process.stdout.write('  ' + '─'.repeat(colKey + colAgent + colChan + colMsgs) + '\n');
 
       for (const sess of filtered) {
-        const lastTime = sess.lastActive
-          ? new Date(sess.lastActive).toLocaleString()
-          : '—';
+        const lastTime = sess.lastActive ?? '—';
         process.stdout.write(
           '  ' +
           chalk.cyan(sess.sessionKey.padEnd(colKey)) +
@@ -84,6 +99,7 @@ const sessionsList = defineCommand({
         );
       }
       process.stdout.write('\n');
+      process.exit(0);
     } catch (err) {
       s.stop(chalk.red('Failed'));
       note(String(err), 'Error');
@@ -119,26 +135,40 @@ const sessionsShow = defineCommand({
     const limit = parseInt((args.limit as string | undefined) ?? '50', 10);
 
     try {
-      const messages = await callRpc(port, token, 'session.messages', { sessionKey, limit }) as Array<{
-        role: string;
-        content: string | Array<{ type: string; text?: string }>;
-        timestamp?: string;
-      }>;
+      const rpcResult = await callRpc(port, token, 'session.messages', { sessionKey, limit }) as {
+        messages: Array<{
+          role: string;
+          text: string;
+          tools?: Array<{ name: string; input: string }>;
+          timestamp?: number;
+        }>;
+      };
+      const messages = rpcResult.messages ?? [];
       s.stop(`${messages.length} message(s) in ${sessionKey}`);
+
+      if (messages.length === 0) {
+        note('No messages in this session.', 'Empty');
+        process.exit(0);
+      }
 
       process.stdout.write('\n');
       for (const msg of messages) {
         const roleColor = msg.role === 'user' ? chalk.blue : chalk.green;
         const roleLabel = roleColor(chalk.bold(`[${msg.role}]`));
-        const text = typeof msg.content === 'string'
-          ? msg.content
-          : (msg.content as Array<{ type: string; text?: string }>)
-              .filter((b) => b.type === 'text')
-              .map((b) => b.text ?? '')
-              .join('');
-        process.stdout.write(roleLabel + '  ' + chalk.dim(msg.timestamp ?? '') + '\n');
-        process.stdout.write(text + '\n\n');
+        const timeStr = msg.timestamp ? chalk.dim(new Date(msg.timestamp).toLocaleString()) : '';
+        process.stdout.write(roleLabel + '  ' + timeStr + '\n');
+        if (msg.text) {
+          process.stdout.write(msg.text + '\n');
+        }
+        if (msg.tools && msg.tools.length > 0) {
+          for (const t of msg.tools) {
+            process.stdout.write(chalk.yellow(`  [tool: ${t.name}]`) + '\n');
+            process.stdout.write(chalk.dim(t.input) + '\n');
+          }
+        }
+        process.stdout.write('\n');
       }
+      process.exit(0);
     } catch (err) {
       s.stop(chalk.red('Failed'));
       note(String(err), 'Error');

@@ -1,6 +1,7 @@
 import { defineCommand } from 'citty';
 import { note } from '@clack/prompts';
 import chalk from 'chalk';
+import { loadConfig } from '../../core/config/loader.js';
 
 /**
  * Federation commands — Phase 1 stub.
@@ -26,6 +27,7 @@ export const federationCommand = defineCommand({
           ].join('\n'),
           'Federation (Phase 2)',
         );
+        process.exit(0);
       },
     }),
 
@@ -35,18 +37,18 @@ export const federationCommand = defineCommand({
         config: { type: 'string', alias: 'c', description: 'Config file path' },
       },
       run({ args }) {
-        const { loadConfig } = require('../../core/config/loader.js') as typeof import('../../core/config/loader.js');
         const cfg = loadConfig(args.config as string | undefined);
         const peers = cfg.federation.peers;
         if (peers.length === 0) {
           note('No federation peers configured.', 'Peers');
-          return;
+          process.exit(0);
         }
         process.stdout.write(chalk.bold(`\n${peers.length} peer(s):\n\n`));
         for (const p of peers) {
           process.stdout.write(`  ${chalk.cyan(p.nodeId)} ${p.host}:${p.port}\n`);
         }
         process.stdout.write('\n');
+        process.exit(0);
       },
     }),
   },

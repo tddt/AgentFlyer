@@ -21,6 +21,7 @@ export const configCommand = defineCommand({
       run({ args }) {
         const cfg = loadConfig(args.config as string | undefined);
         process.stdout.write(JSON.stringify(cfg, null, 2) + '\n');
+        process.exit(0);
       },
     }),
 
@@ -28,6 +29,7 @@ export const configCommand = defineCommand({
       meta: { name: 'path', description: 'Print path to the config file' },
       run() {
         process.stdout.write(getDefaultConfigPath() + '\n');
+        process.exit(0);
       },
     }),
 
@@ -62,6 +64,7 @@ export const configCommand = defineCommand({
         }
         await saveConfig(parsed.data, configPath);
         note(`Set ${args.key} = ${args.value}`, 'Config updated');
+        process.exit(0);
       },
     }),
 
@@ -74,6 +77,7 @@ export const configCommand = defineCommand({
         try {
           loadConfig(args.config as string | undefined);
           outro(chalk.green('Config is valid'));
+          process.exit(0);
         } catch (err) {
           note(String(err), 'Validation failed');
           process.exit(1);
@@ -144,7 +148,19 @@ export const configCommand = defineCommand({
           // ── 5. Agents: model reference and workspace ─────────────────────
           for (const agent of cfg.agents) {
             const modelRef = agent.model ?? cfg.defaults.model;
-            if (!(modelRef in cfg.models)) {
+            // Support "group/modelKey" format (e.g. "deepseek/chat") as well as
+            // flat group-only references (e.g. "deepseek").
+            const slashIdx = modelRef.indexOf('/');
+            let modelValid: boolean;
+            if (slashIdx !== -1) {
+              const groupKey = modelRef.slice(0, slashIdx);
+              const modelKey = modelRef.slice(slashIdx + 1);
+              const group = cfg.models[groupKey];
+              modelValid = group !== undefined && modelKey in group.models;
+            } else {
+              modelValid = modelRef in cfg.models;
+            }
+            if (!modelValid) {
               fail(`Agent "${agent.id}": model "${modelRef}" not found in models`);
             } else {
               ok(`Agent "${agent.id}": model reference "${modelRef}" valid`);

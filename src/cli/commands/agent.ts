@@ -33,12 +33,10 @@ const agentList = defineCommand({
 
     s.start('Fetching agents');
     try {
-      const agents = await callRpc(port, token, 'agent.list', {}) as Array<{
-        id: string;
-        name: string;
-        model: string;
-        role?: string;
-      }>;
+      const rpcResult = await callRpc(port, token, 'agent.list', {}) as {
+        agents: Array<{ id: string; name: string; model: string; role?: string }>;
+      };
+      const agents = rpcResult.agents ?? [];
       s.stop(`${agents.length} agent(s)`);
 
       if (agents.length === 0) {
@@ -72,6 +70,7 @@ const agentList = defineCommand({
         );
       }
       process.stdout.write('\n');
+      process.exit(0);
     } catch (err) {
       s.stop(chalk.red('Failed'));
       note(String(err), 'Error');

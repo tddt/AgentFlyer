@@ -5,7 +5,6 @@ export {
   type Config,
   type AgentConfig,
   type GatewayConfig,
-  type ModelProvider,
   type ModelRegistry,
   type DefaultsConfig,
   type ContextConfig,

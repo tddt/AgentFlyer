@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { homedir } from 'node:os';
+import { createHash } from 'node:crypto';
 import matter from 'gray-matter';
 import type { Config } from '../core/config/schema.js';
 import type { SkillId } from '../core/types.js';
@@ -123,7 +124,6 @@ export function parseSkillFile(filePath: string, shortDescMaxLen = 60): SkillMet
     const tags: string[] = (data['tags'] as string[] | undefined) ?? [];
     const apiKeyRequired: boolean = (data['apiKeyRequired'] as boolean | undefined) ?? false;
 
-    const { createHash } = require('node:crypto') as typeof import('node:crypto');
     const contentHash = createHash('sha256').update(raw).digest('hex');
 
     return {

@@ -125,14 +125,24 @@ cd agentflyer
 pnpm install
 ```
 
+### Build
+
+```bash
+# Compile TypeScript + build Console UI
+pnpm build
+```
+
 ### Run
 
 ```bash
-# Start Gateway (includes Console UI)
+# Development mode (Bun, no build required)
 pnpm dev start
 
-# Or interactive CLI chat mode
-pnpm dev chat
+# Production mode (after pnpm build)
+agentflyer start
+
+# Interactive CLI chat
+agentflyer chat
 ```
 
 ### Initial Configuration
@@ -490,7 +500,7 @@ Built-in web dashboard at `http://localhost:19789` (Bearer Token authentication 
 
 ```bash
 # -- Gateway management -----------------------------------------------
-agentflyer gateway start [--port 19789] [--bind loopback]
+agentflyer start [--port 19789] [--bind loopback]
 agentflyer gateway stop
 agentflyer gateway status
 
@@ -528,7 +538,6 @@ agentflyer federation peers
 agentflyer federation trust <nodeId>
 
 # -- Shortcuts --------------------------------------------------------
-agentflyer start      # alias for gateway start
 agentflyer reload     # alias for agent reload
 agentflyer web        # open Console UI in browser
 ```

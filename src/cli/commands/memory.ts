@@ -23,16 +23,18 @@ export const memoryCommand = defineCommand({
         },
         config: { type: 'string', alias: 'c', description: 'Config file path' },
       },
-      run({ args }) {
+      async run({ args }) {
         const dataDir = getDefaultConfigDir();
         const store = new MemoryStore(dataDir);
+        await store.open();
         const entries = store.listRecent(
           args.partition as string,
           Math.max(1, parseInt(args.limit as string, 10) || 20),
         );
+        store.close();
         if (entries.length === 0) {
           note(`No memory entries in partition '${args.partition}'.`, 'Memory');
-          return;
+          process.exit(0);
         }
         process.stdout.write(chalk.bold(`\n${entries.length} memory entries (${args.partition}):\n\n`));
         for (const e of entries) {
@@ -40,7 +42,7 @@ export const memoryCommand = defineCommand({
           process.stdout.write(`  ${chalk.cyan(e.key.padEnd(30))} ${chalk.gray(date)}\n`);
           process.stdout.write(`  ${''.padEnd(30)} ${e.content.slice(0, 80)}${e.content.length > 80 ? '\u2026' : ''}\n\n`);
         }
-        store.close();
+        process.exit(0);
       },
     }),
 
@@ -56,23 +58,24 @@ export const memoryCommand = defineCommand({
         },
         limit: { type: 'string', description: 'Max results (default 10)', default: '10' },
       },
-      run({ args }) {
+      async run({ args }) {
         const dataDir = getDefaultConfigDir();
         const store = new MemoryStore(dataDir);
+        await store.open();
         const results = store.searchFts(
           args.query as string,
           args.partition as string,
           parseInt(args.limit as string, 10) || 10,
         );
+        store.close();
         if (results.length === 0) {
           note(`No results for '${args.query}'.`, 'Memory search');
-          store.close();
-          return;
+          process.exit(0);
         }
         for (const r of results) {
           process.stdout.write(`${chalk.cyan(r.key)}\n${r.content}\n\n`);
         }
-        store.close();
+        process.exit(0);
       },
     }),
 
@@ -87,13 +90,15 @@ export const memoryCommand = defineCommand({
           default: 'shared',
         },
       },
-      run({ args }) {
+      async run({ args }) {
         const dataDir = getDefaultConfigDir();
         const store = new MemoryStore(dataDir);
+        await store.open();
         const deleted = store.deleteByKey(args.key as string, args.partition as string);
         store.close();
         if (deleted) {
           note(`Deleted: ${args.key}`, 'Memory');
+          process.exit(0);
         } else {
           note(`Not found: ${args.key}`, 'Memory');
           process.exit(1);

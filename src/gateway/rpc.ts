@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { readFile, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { writeFile } from 'node:fs/promises';
 import { ulid } from 'ulid';
 import type { MeshRegistry } from '../mesh/registry.js';
@@ -21,6 +22,8 @@ import type { ContentStore } from './content-store.js';
 import type { Channel } from '../channels/types.js';
 
 const logger = createLogger('gateway:rpc');
+// Package root: src/gateway/rpc.ts → ../../  (or dist/gateway/rpc.js → ../../)
+const _pkgRoot = join(dirname(fileURLToPath(import.meta.url)), '../..');
 type OutputChannel = 'logs' | 'cli' | 'web';
 
 /** Supported RPC methods. */
@@ -402,10 +405,15 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         return {
           id,
           result: {
-            agents: Array.from(ctx.runners.keys()).map((agentId) => ({
-              agentId,
-              name: cfgAgents.find((a) => a.id === agentId)?.name,
-            })),
+            agents: Array.from(ctx.runners.keys()).map((agentId) => {
+              const cfg = cfgAgents.find((a) => a.id === agentId);
+              return {
+                agentId,
+                name: cfg?.name ?? agentId,
+                model: cfg?.model ?? (ctx.getConfig().defaults as Record<string, unknown>)?.model ?? '',
+                role: (cfg as unknown as Record<string, unknown>)?.role ?? 'worker',
+              };
+            }),
           },
         };
       }
@@ -765,7 +773,7 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         const results = await searchMemory(
           ctx.memoryStore,
           query,
-          ctx.embedConfig ?? {},
+          ctx.embedConfig ?? { model: 'Xenova/all-MiniLM-L6-v2', provider: 'local' as const },
           { partition, limit: memLimit ?? 10 },
         );
         const filtered = memAgentId
@@ -806,7 +814,7 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         const allowedDocs = ['README.md', 'README_CN.md'];
         if (!docName || !allowedDocs.includes(docName)) return buildErrorResponse(id, 403, 'Access denied');
         try {
-          const content = await readFile(join(process.cwd(), docName), 'utf-8');
+          const content = await readFile(join(_pkgRoot, docName), 'utf-8');
           return { id, result: { name: docName, content } };
         } catch {
           return buildErrorResponse(id, 404, `${docName} not found`);

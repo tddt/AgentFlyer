@@ -128,14 +128,24 @@ cd agentflyer
 pnpm install
 ```
 
+### 构建
+
+```bash
+# 编译 TypeScript + 构建 Console UI
+pnpm build
+```
+
 ### 运行
 
 ```bash
-# 启动 Gateway（含 Console UI）
+# 开发模式（Bun，无需构建）
 pnpm dev start
 
-# 或 CLI 对话模式
-pnpm dev chat
+# 生产模式（pnpm build 之后）
+agentflyer start
+
+# 交互式对话
+agentflyer chat
 ```
 
 ### 初始化配置
@@ -493,7 +503,7 @@ keywords: [搜索, 查询, 最新]
 
 ```bash
 # ── Gateway 管理 ───────────────────────────────────────────
-agentflyer gateway start [--port 19789] [--bind loopback]
+agentflyer start [--port 19789] [--bind loopback]
 agentflyer gateway stop
 agentflyer gateway status
 
@@ -531,7 +541,6 @@ agentflyer federation peers
 agentflyer federation trust <nodeId>
 
 # ── 快捷命令 ───────────────────────────────────────────────
-agentflyer start      # 等同于 gateway start
 agentflyer reload     # 等同于 agent reload
 agentflyer web        # 打开 Console UI 网页
 ```

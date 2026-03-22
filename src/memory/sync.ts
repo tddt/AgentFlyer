@@ -50,6 +50,8 @@ async function syncFile(
     content,
     tags: [],
     source: filePath,
+    importance: 0.5,
+    superseded: false,
     createdAt: Date.now(),
     updatedAt: Date.now(),
     accessedAt: Date.now(),

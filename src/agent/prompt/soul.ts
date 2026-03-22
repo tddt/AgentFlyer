@@ -16,15 +16,48 @@ import type { AgentConfig } from '../../core/config/schema.js';
 
 /**
  * Build the Layer 0 persona fragment.
- * Only injects the language instruction — all narrative identity/personality
- * content lives in SOUL.md (Layer 1) so config stays machine-readable.
+ * Injects the language instruction AND a runtime-authoritative tool access
+ * section that merges the configured allowlist with skill system tools.
+ *
+ * RATIONALE: SOUL.md (Layer 1) is user-editable and static — its Tool Access
+ * section reflects the first-launch snapshot. The runtime section here in
+ * Layer 0 is always accurate and takes precedence, so the LLM never
+ * self-restricts based on a stale SOUL.md when skills have been added.
  */
 export function buildPersonaContent(cfg: AgentConfig): string {
   const lang = cfg.persona.language;
   const langLine = lang.startsWith('zh')
     ? '默认使用中文（简体）回复。除非用户使用其他语言提问，否则不要切换语言。'
     : `Default response language: ${lang}. Mirror the user's language when they write in a different one.`;
-  return `## Language\n${langLine}`;
+
+  const hasSkills = Array.isArray(cfg.skills) && cfg.skills.length > 0;
+  const userAllow = cfg.tools.allow && cfg.tools.allow.length > 0 ? cfg.tools.allow : null;
+
+  // Build the effective allowlist: user-configured tools + skill system tools (when skills are assigned)
+  let toolAccessLine: string;
+  if (userAllow) {
+    const effective = hasSkills
+      ? [...new Set([...userAllow, 'skill_list', 'skill_read'])]
+      : userAllow;
+    toolAccessLine = `允许工具: ${effective.join(', ')}`;
+  } else {
+    toolAccessLine = '(全部工具可用，受 deny 列表约束)';
+  }
+
+  const skillNote = hasSkills
+    ? '\n> `skill_list` 和 `skill_read` 已作为系统工具自动授权，不受 allow 列表约束。'
+    : '';
+
+  const denyLine =
+    cfg.tools.deny.length > 0 ? `\nDeny list: ${cfg.tools.deny.join(', ')}` : '';
+
+  return [
+    '## Language',
+    langLine,
+    '',
+    '## Tool Access (runtime — authoritative, overrides SOUL.md)',
+    toolAccessLine + skillNote + denyLine,
+  ].join('\n');
 }
 
 // ── SOUL.md template generator ────────────────────────────────────────────────
@@ -48,8 +81,10 @@ export function generateSoulMd(cfg: AgentConfig): string {
       ? cfg.mesh.capabilities.map((c) => `- ${c}`).join('\n')
       : '<!-- 填写此 agent 擅长的能力标签，例如: - web_search\n- code -->';
 
-  const toolsAllowNote = cfg.tools.allow
-    ? `允许工具: ${cfg.tools.allow.join(', ')}`
+  const hasSkillsInCfg = Array.isArray(cfg.skills) && cfg.skills.length > 0;
+  const userAllow = cfg.tools.allow && cfg.tools.allow.length > 0 ? cfg.tools.allow : null;
+  const toolsAllowNote = userAllow
+    ? `允许工具: ${(hasSkillsInCfg ? [...new Set([...userAllow, 'skill_list', 'skill_read'])] : userAllow).join(', ')}`
     : '(全部工具可用，受 deny 列表约束)';
 
   return `# ${name} — Soul File

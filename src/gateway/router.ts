@@ -221,7 +221,7 @@ export async function routeRequest(
       },
       opts.rpcContext,
     );
-    json(res, response.error ? 400 : 200, response);
+    json(res, 200, response);
     return true;
   }
 

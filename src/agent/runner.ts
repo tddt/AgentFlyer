@@ -320,17 +320,33 @@ export class AgentRunner {
 
     const MAX_TOOL_ROUNDS = 20; // safety cap
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-      const allToolDefs = toolRegistry.getDefinitions();
+      const allToolsWithCategory = toolRegistry.list();
       // Pre-filter by policy so the LLM only sees tools it is allowed to call.
       // Without this, blocked tools appear in the schema and the model tries to
       // invoke them, which just returns a policy-error tool_result.
+      // RATIONALE: skill-category tools (skill_list, skill_read) are exempt from
+      // the allowlist — they're already scoped to this agent's assigned skills and
+      // must always be visible when skills are configured. They remain subject to
+      // the denylist.
       const agentPolicy: ToolPolicy = {
         allowlist: this.config.tools.allow,
         denylist: this.config.tools.deny,
         requireApproval: this.config.tools.approval,
       };
-      const permittedNames = new Set(filterAllowedTools(allToolDefs.map(t => t.name), agentPolicy));
-      const toolDefs = allToolDefs.filter(t => permittedNames.has(t.name));
+      const permittedNames = new Set(
+        allToolsWithCategory
+          .filter((t) => {
+            if (t.category === 'skill') {
+              // Skill tools: only subject to denylist, not allowlist
+              return !agentPolicy.denylist.includes(t.definition.name);
+            }
+            return filterAllowedTools([t.definition.name], agentPolicy).length > 0;
+          })
+          .map((t) => t.definition.name),
+      );
+      const toolDefs = allToolsWithCategory
+        .map((t) => t.definition)
+        .filter((d) => permittedNames.has(d.name));
 
       // Accumulate tool calls from streaming
       const toolCallMap = new Map<string, { name: string; inputJson: string }>();
@@ -420,8 +436,12 @@ export class AgentRunner {
         } catch { /* ignore */ }
 
         const tools = this.config.tools;
+        // Skill-category tools are exempt from the allowlist (they're scoped to
+        // the agent's own skills already); build an effective policy accordingly.
+        const isSkillTool = toolRegistry.get(tc.name)?.category === 'skill';
+        const effectiveAllowlist = isSkillTool ? undefined : tools.allow;
         const policyResult = checkPolicy(tc.name, {
-          allowlist: tools.allow,
+          allowlist: effectiveAllowlist,
           denylist: tools.deny,
           requireApproval: tools.approval,
         });
@@ -475,6 +495,8 @@ export class AgentRunner {
 
     // ── 4. Update session meta ──────────────────────────────────────────────
     await metaStore.update(this.sessionKey, {
+      agentId: this.agentId,
+      threadKey: this.threadKey,
       status: 'idle',
       lastActivity: Date.now(),
       contextTokensEstimate: totalInputTokens,

@@ -1,6 +1,6 @@
 {
   "name": "agentflyer",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Decentralized, cross-platform, multi-host federated AI Agent framework",
   "type": "module",
   "bin": {
@@ -10,7 +10,7 @@
     "dev": "bun run src/cli/main.ts",
     "dev:start": "bun run src/cli/main.ts start --force",
     "dev:chat": "bun run src/cli/main.ts chat",
-    "build": "tsc --project tsconfig.build.json",
+    "build": "tsc --project tsconfig.build.json && pnpm console:build && node scripts/copy-console.mjs",
     "typecheck": "tsc --noEmit",
     "check": "biome check src/ tests/",
     "check:fix": "biome check --write src/ tests/",

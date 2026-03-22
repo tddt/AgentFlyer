@@ -28,7 +28,7 @@ export const skillsCommand = defineCommand({
 
         if (skills.length === 0) {
           note('No skills found.\nAdd skill files to ~/.agentflyer/skills/ or a workspace skills/ dir.', 'Skills');
-          return;
+          process.exit(0);
         }
 
         process.stdout.write(chalk.bold(`\n${skills.length} skill(s) loaded:\n\n`));
@@ -41,6 +41,7 @@ export const skillsCommand = defineCommand({
           }
         }
         process.stdout.write('\n');
+        process.exit(0);
       },
     }),
 
@@ -59,6 +60,7 @@ export const skillsCommand = defineCommand({
           process.exit(1);
         }
         process.stdout.write(JSON.stringify(skill, null, 2) + '\n');
+        process.exit(0);
       },
     }),
   },

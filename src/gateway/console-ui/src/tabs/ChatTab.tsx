@@ -30,7 +30,6 @@ interface Message {
 
 interface AgentPanelProps {
   agent: AgentInfo
-  isActive: boolean
 }
 
 function timeAgo(ms: number): string {
@@ -41,7 +40,7 @@ function timeAgo(ms: number): string {
   return `${Math.floor(diff / 86_400_000)}d ago`
 }
 
-function AgentPanel({ agent, isActive }: AgentPanelProps) {
+function AgentPanel({ agent }: AgentPanelProps) {
   const [input, setInput] = useState('')
   const [messages, setMessages] = useState<Message[]>([])
   const [busy, setBusy] = useState(false)
@@ -256,10 +255,8 @@ function AgentPanel({ agent, isActive }: AgentPanelProps) {
     }
   }
 
-  if (!isActive) return null
-
   return (
-    <div className="flex flex-col h-full gap-0">
+    <div className="absolute inset-0 flex flex-col">
       {/* Panel header */}
       <div className="flex items-center justify-between pb-3 shrink-0 border-b border-slate-700/50 gap-2 flex-wrap">
         <div className="flex flex-col gap-0.5">
@@ -382,7 +379,11 @@ export function ChatTab() {
   )
   const agents: AgentInfo[] = Array.isArray(agentsResult?.agents) ? agentsResult.agents : []
 
-  // Auto-select first agent when list first loads
+  // Derive effective selected agent: fall back to first in list while state hasn't synced yet.
+  // This prevents the brief flash where agents are loaded but none appears selected.
+  const effectiveActiveId = activeAgentId || agents[0]?.agentId || ''
+
+  // Persist the selection so explicit clicks are remembered after refetch
   useEffect(() => {
     if (!activeAgentId && agents.length > 0) {
       setActiveAgentId(agents[0]!.agentId)
@@ -402,7 +403,7 @@ export function ChatTab() {
             <p className="text-xs text-slate-500 pt-2">No agents running.</p>
           )}
           {agents.map((a) => {
-            const active = a.agentId === activeAgentId
+            const active = a.agentId === effectiveActiveId
             return (
               <button
                 key={a.agentId}
@@ -421,16 +422,17 @@ export function ChatTab() {
         </div>
       </div>
 
-      {/* Right: per-agent chat panels */}
-      <div className="flex-1 min-w-0">
+      {/* Right: only the active agent panel is mounted */}
+      <div className="flex-1 min-w-0 relative overflow-hidden">
         {agents.length === 0 ? (
           <div className="flex items-center justify-center h-full text-slate-500 text-sm">
             No agents available. Start a gateway first.
           </div>
         ) : (
-          agents.map((a) => (
-            <AgentPanel key={a.agentId} agent={a} isActive={a.agentId === activeAgentId} />
-          ))
+          (() => {
+            const activeAgent = agents.find((a) => a.agentId === effectiveActiveId) ?? agents[0]
+            return activeAgent ? <AgentPanel key={activeAgent.agentId} agent={activeAgent} /> : null
+          })()
         )}
       </div>
     </div>

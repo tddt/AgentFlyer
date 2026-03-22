@@ -63,11 +63,15 @@ export class MemoryOrganizer {
 
     let summary = '';
     try {
-      const stream = this.llm.stream([{ role: 'user', content: prompt }], {
+      const stream = this.llm.run({
+        model: '',
+        systemPrompt: '',
+        messages: [{ role: 'user', content: prompt }],
+        tools: [],
         maxTokens: 400,
       });
       for await (const chunk of stream) {
-        if (chunk.type === 'text' && chunk.text) summary += chunk.text;
+        if (chunk.type === 'text_delta') summary += chunk.text;
       }
     } catch (err) {
       logger.warn('LLM call for memory organization failed', { error: String(err) });

@@ -98,6 +98,8 @@ export function createMemoryTools(store: MemoryStore, config: MemoryConfig): Reg
           partition,
           agentId: 'agent',
           source: 'agent',
+          importance: 0.5,
+          superseded: false,
           createdAt: Date.now(),
           updatedAt: Date.now(),
           accessedAt: Date.now(),

@@ -56,7 +56,7 @@ import { createChannelTools } from '../agent/tools/builtin/channel-tools.js';
 
 const logger = createLogger('gateway:lifecycle');
 
-export const GATEWAY_VERSION = '0.1.0';
+export const GATEWAY_VERSION = '1.0.0';
 
 export interface GatewayState {
   runners: Map<string, AgentRunner>;
@@ -87,10 +87,12 @@ function hasUsableApiKey(value: string | undefined): boolean {
 }
 
 /** Write PID file so CLI can check if gateway is running. */
-async function writePid(dataDir: string): Promise<void> {
+async function writePid(dataDir: string, port: number): Promise<void> {
   const pidPath = join(dataDir, 'gateway.pid');
   await mkdir(dataDir, { recursive: true });
-  await writeFile(pidPath, String(process.pid), 'utf-8');
+  // RATIONALE: store {pid,port} so CLI status/stop always connects to the
+  // port the gateway actually bound — not whatever the config says now.
+  await writeFile(pidPath, JSON.stringify({ pid: process.pid, port }), 'utf-8');
   _pidFile = pidPath;
 }
 
@@ -100,18 +102,43 @@ async function removePid(): Promise<void> {
   }
 }
 
+/** Parse pid file content — tolerates both JSON and legacy plain-number format. */
+function parsePidFile(raw: string): { pid: number; port?: number } {
+  try {
+    const obj = JSON.parse(raw) as { pid?: unknown; port?: unknown };
+    const pid = Number(obj.pid);
+    const port = typeof obj.port === 'number' ? obj.port : undefined;
+    return { pid, port };
+  } catch {
+    return { pid: Number.parseInt(raw.trim(), 10) };
+  }
+}
+
 /** Check if a gateway is already running (by pid file + process probe). */
 export async function isGatewayRunning(dataDir: string): Promise<boolean> {
   const pidPath = join(dataDir, 'gateway.pid');
   if (!existsSync(pidPath)) return false;
   try {
-    const pid = Number.parseInt(await readFile(pidPath, 'utf-8'), 10);
-    if (Number.isNaN(pid)) return false;
+    const { pid } = parsePidFile(await readFile(pidPath, 'utf-8'));
+    if (Number.isNaN(pid) || pid <= 0) return false;
     process.kill(pid, 0); // throws if process doesn't exist
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * Read the port the running gateway is actually bound to.
+ * Falls back to `fallback` when pid file is missing or doesn't contain a port.
+ */
+export async function readRunningPort(dataDir: string, fallback: number): Promise<number> {
+  const pidPath = join(dataDir, 'gateway.pid');
+  try {
+    const { port } = parsePidFile(await readFile(pidPath, 'utf-8'));
+    if (typeof port === 'number' && port > 0) return port;
+  } catch { /* no pid file */ }
+  return fallback;
 }
 
 // Shared channel map — populated after channels start; tools hold a live reference.
@@ -351,7 +378,8 @@ export async function startGateway(
   };
 
   // Build global skill registry once; each agent gets its own filtered slice
-  const globalSkillRegistry = buildRegistry(config, config.defaults.workspace ?? process.cwd());
+  // RATIONALE: let so it can be updated when config is reloaded with new skill dirs
+  let globalSkillRegistry = buildRegistry(config, config.defaults.workspace ?? process.cwd());
   logger.info('Global skill registry ready', { total: globalSkillRegistry.size() });
 
   // Build a runner for each agent
@@ -412,11 +440,13 @@ export async function startGateway(
     }
 
     state.config = newConfig;
+    // Rebuild the global registry once with new config (picks up new extraSkillDirs)
+    globalSkillRegistry = buildRegistry(newConfig, newConfig.defaults.workspace ?? process.cwd());
+    logger.info('Global skill registry rebuilt on reload', { total: globalSkillRegistry.size() });
     const reloaded: string[] = [];
     for (const agentCfg of toReload) {
       try {
-        const reloadedRegistry = buildRegistry(newConfig, newConfig.defaults.workspace ?? process.cwd());
-        const agentSkills = filterSkillsForAgent(reloadedRegistry.list(), agentCfg.skills ?? []);
+        const agentSkills = filterSkillsForAgent(globalSkillRegistry.list(), agentCfg.skills ?? []);
         const agentSkillsText = buildSkillsDirectory(agentSkills, newConfig.skills.compact ?? true);
         const agentSkillRegistry = new (await import('../skills/registry.js')).SkillRegistry();
         for (const s of agentSkills) agentSkillRegistry.register(s);
@@ -655,7 +685,7 @@ export async function startGateway(
 
   const { port, address } = await _server.start();
 
-  await writePid(dataDir);
+  await writePid(dataDir, port);
   const consoleUrl = `http://127.0.0.1:${port}/console?token=${authToken}`;
   logger.info('Gateway ready', {
     address,

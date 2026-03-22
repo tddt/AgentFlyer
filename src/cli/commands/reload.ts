@@ -73,6 +73,7 @@ export const reloadCommand = defineCommand({
           'The gateway picked up the latest workspace configuration.',
         ].join('\n'),
       );
+      process.exit(0);
     } catch (err) {
       s.stop(chalk.red('Reload failed'));
       note(String(err), 'Error');
