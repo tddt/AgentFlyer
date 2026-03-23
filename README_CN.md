@@ -115,43 +115,52 @@ config.load() → memory.init() → channels.start() → HTTP+WS.listen()
 
 ## 快速开始
 
-### 前置要求
-
-- **Bun ≥ 1.2**（推荐）或 **Node.js ≥ 22**
-- **pnpm ≥ 9**
-
-### 安装
+### 通过 npm 安装（推荐）
 
 ```bash
-git clone https://github.com/your-org/agentflyer.git
-cd agentflyer
-pnpm install
-```
+# 全局安装
+npm install -g agentflyer
 
-### 构建
-
-```bash
-# 编译 TypeScript + 构建 Console UI
-pnpm build
+# 或直接使用，无需安装
+npx agentflyer --help
 ```
 
 ### 运行
 
 ```bash
-# 开发模式（Bun，无需构建）
-pnpm dev start
-
-# 生产模式（pnpm build 之后）
+# 启动网关
 agentflyer start
 
 # 交互式对话
 agentflyer chat
 ```
 
-### 初始化配置
-
 首次运行会在 `~/.agentflyer/agentflyer.json` 生成默认配置。
 打开 `http://localhost:19789` 进入 Console UI 进行可视化配置。
+
+---
+
+### 从源码构建
+
+**源码构建前置要求：**
+
+- **Bun ≥ 1.2**（推荐）或 **Node.js ≥ 22**
+- **pnpm ≥ 9**
+
+```bash
+git clone https://github.com/tddt/AgentFlyer.git
+cd AgentFlyer
+pnpm install
+pnpm build
+```
+
+```bash
+# 开发模式（Bun，无需构建）
+pnpm dev start
+
+# 交互式对话
+agentflyer chat
+```
 
 ---
 

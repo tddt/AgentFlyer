@@ -112,43 +112,54 @@ config.load() -> memory.init() -> channels.start() -> HTTP+WS.listen()
 
 ## Quick Start
 
-### Prerequisites
-
-- **Bun >= 1.2** (recommended) or **Node.js >= 22**
-- **pnpm >= 9**
-
-### Install
+### Install via npm (Recommended)
 
 ```bash
-git clone https://github.com/your-org/agentflyer.git
-cd agentflyer
-pnpm install
-```
+# Install globally
+npm install -g agentflyer
 
-### Build
-
-```bash
-# Compile TypeScript + build Console UI
-pnpm build
+# Or use directly without installing
+npx agentflyer --help
 ```
 
 ### Run
 
 ```bash
-# Development mode (Bun, no build required)
-pnpm dev start
-
-# Production mode (after pnpm build)
+# Start the gateway
 agentflyer start
 
 # Interactive CLI chat
 agentflyer chat
 ```
 
-### Initial Configuration
-
 On first run, a minimal config is auto-generated at `~/.agentflyer/agentflyer.json`.
 Open `http://localhost:19789` to enter the Console UI for visual configuration.
+
+---
+
+### Build from Source
+
+**Prerequisites for source build:**
+
+- **Bun >= 1.2** (recommended) or **Node.js >= 22**
+- **pnpm >= 9**
+
+```bash
+git clone https://github.com/tddt/AgentFlyer.git
+cd AgentFlyer
+pnpm install
+pnpm build
+```
+
+```bash
+# Development mode (Bun, no build required)
+pnpm dev start
+
+# Interactive CLI chat
+agentflyer chat
+```
+
+
 
 ---
 
