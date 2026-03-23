@@ -63,7 +63,8 @@
     "chat": "node dist/cli/main.js chat",
     "console:build": "cd src/gateway/console-ui && bun run build",
     "console:dev": "cd src/gateway/console-ui && bun run dev",
-    "prepublishOnly": "pnpm build && pnpm check && pnpm test"
+    "prepublishOnly": "pnpm build && pnpm check && pnpm test",
+    "publish:npm": "node scripts/publish-npm.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
