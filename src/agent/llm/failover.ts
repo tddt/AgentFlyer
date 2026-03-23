@@ -1,6 +1,6 @@
 import { createLogger } from '../../core/logger.js';
-import type { LLMProvider, RunParams } from './provider.js';
 import type { StreamChunk } from '../../core/types.js';
+import type { LLMProvider, RunParams } from './provider.js';
 
 const logger = createLogger('llm:failover');
 
@@ -21,8 +21,7 @@ export interface FailoverOptions {
  */
 export class FailoverProvider implements LLMProvider {
   readonly id: string;
-  private opts: Required<Pick<FailoverOptions, 'maxRetries'>> &
-    Omit<FailoverOptions, 'maxRetries'>;
+  private opts: Required<Pick<FailoverOptions, 'maxRetries'>> & Omit<FailoverOptions, 'maxRetries'>;
 
   constructor(opts: FailoverOptions) {
     this.id = `failover:${opts.primary.id}`;

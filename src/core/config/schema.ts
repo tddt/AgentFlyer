@@ -53,19 +53,23 @@ const DefaultsConfigSchema = z.object({
 // ─── Context window management ────────────────────────────────────────────────
 
 const ContextConfigSchema = z.object({
-  compaction: z.object({
-    /** Fill fraction at which soft compaction begins (compress old messages). */
-    soft: z.number().min(0).max(1).default(0.40),
-    /** Fill fraction for medium compaction (keep recent N rounds). */
-    medium: z.number().min(0).max(1).default(0.60),
-    /** Fill fraction for hard compaction (summary + last 1-2 rounds only). */
-    hard: z.number().min(0).max(1).default(0.80),
-  }).default({}),
-  systemPrompt: z.object({
-    maxTokens: z.number().int().positive().default(1200),
-    /** Lazy-load Layer 2 files (AGENTS.md / SOUL.md) only on first relevant turn. */
-    lazy: z.boolean().default(true),
-  }).default({}),
+  compaction: z
+    .object({
+      /** Fill fraction at which soft compaction begins (compress old messages). */
+      soft: z.number().min(0).max(1).default(0.4),
+      /** Fill fraction for medium compaction (keep recent N rounds). */
+      medium: z.number().min(0).max(1).default(0.6),
+      /** Fill fraction for hard compaction (summary + last 1-2 rounds only). */
+      hard: z.number().min(0).max(1).default(0.8),
+    })
+    .default({}),
+  systemPrompt: z
+    .object({
+      maxTokens: z.number().int().positive().default(1200),
+      /** Lazy-load Layer 2 files (AGENTS.md / SOUL.md) only on first relevant turn. */
+      lazy: z.boolean().default(true),
+    })
+    .default({}),
 });
 
 // ─── Agent mesh ───────────────────────────────────────────────────────────────
@@ -212,21 +216,27 @@ const MemoryConfigSchema = z.object({
 const FederationEconomySchema = z.object({
   mode: z.enum(['isolated', 'invite-only', 'open-network']).default('invite-only'),
   /** Token earning limits (contributing compute to peers). */
-  earn: z.object({
-    maxDaily: z.number().positive().default(100),
-    maxPerTask: z.number().positive().default(20),
-  }).default({}),
+  earn: z
+    .object({
+      maxDaily: z.number().positive().default(100),
+      maxPerTask: z.number().positive().default(20),
+    })
+    .default({}),
   /** Token spending limits (using peer compute). */
-  spend: z.object({
-    maxDaily: z.number().positive().default(200),
-    minBalance: z.number().nonnegative().default(10),
-  }).default({}),
+  spend: z
+    .object({
+      maxDaily: z.number().positive().default(200),
+      minBalance: z.number().nonnegative().default(10),
+    })
+    .default({}),
   /** Tool access level granted to remote peers. */
   peerToolPolicy: z.enum(['none', 'read-only', 'safe', 'full']).default('read-only'),
-  notifications: z.object({
-    onContribution: z.boolean().default(true),
-    monthlyReport: z.boolean().default(true),
-  }).default({}),
+  notifications: z
+    .object({
+      onContribution: z.boolean().default(true),
+      monthlyReport: z.boolean().default(true),
+    })
+    .default({}),
 });
 
 const FederationPeerSchema = z.object({
@@ -261,76 +271,92 @@ const LogConfigSchema = z.object({
 const ChannelKindSchema = z.enum(['logs', 'cli', 'web', 'telegram', 'discord', 'feishu', 'qq']);
 
 const ChannelsConfigSchema = z.object({
-  defaults: z.object({
-    /** Global default output channel for system events. */
-    output: ChannelKindSchema.default('logs'),
-    /** Scheduler result output channel. Falls back to defaults.output when absent. */
-    schedulerOutput: ChannelKindSchema.default('logs'),
-  }).default({}),
-  cli: z.object({
-    enabled: z.boolean().default(true),
-  }).default({}),
-  web: z.object({
-    enabled: z.boolean().default(true),
-  }).default({}),
-  logs: z.object({
-    enabled: z.boolean().default(true),
-  }).default({}),
-  telegram: z.object({
-    enabled: z.boolean().default(false),
-    /** Telegram Bot API token from @BotFather */
-    botToken: z.string().default(''),
-    /** Default agent ID to route messages to when no routing rule matches */
-    defaultAgentId: z.string().default('main'),
-    /** Allowed Telegram chat IDs (empty = allow all) */
-    allowedChatIds: z.array(z.number()).default([]),
-    /** Polling interval in ms (default 2000) */
-    pollIntervalMs: z.number().int().positive().default(2000),
-  }).default({}),
-  discord: z.object({
-    enabled: z.boolean().default(false),
-    /** Discord Bot token */
-    botToken: z.string().default(''),
-    /** Default agent ID to route messages to */
-    defaultAgentId: z.string().default('main'),
-    /** Allowed Discord channel IDs (empty = allow all guilds) */
-    allowedChannelIds: z.array(z.string()).default([]),
-    /** Command prefix for bot trigger (default '!agent') */
-    commandPrefix: z.string().default('!agent'),
-  }).default({}),
-  feishu: z.object({
-    enabled: z.boolean().default(false),
-    /** Feishu Open Platform App ID */
-    appId: z.string().default(''),
-    /** Feishu App Secret */
-    appSecret: z.string().default(''),
-    /** Verification token from Feishu event subscription page (legacy validation) */
-    verificationToken: z.string().default(''),
-    /** Encrypt key for event payload decryption (optional) */
-    encryptKey: z.string().default(''),
-    /** Default agent ID to route messages to */
-    defaultAgentId: z.string().default('main'),
-    /** Allowed Feishu chat IDs (empty = allow all) */
-    allowedChatIds: z.array(z.string()).default([]),
-    /**
-     * Maps Feishu bot display name (or user-defined alias) to agentId.
-     * When a user @mentions a bot whose display name matches a key here,
-     * the message is routed to the corresponding agentId instead of defaultAgentId.
-     * Example: { "工人": "worker-1", "主控": "main" }
-     */
-    agentMappings: z.record(z.string()).optional().default({}),
-  }).default({}),
-  qq: z.object({
-    enabled: z.boolean().default(false),
-    /** QQ Open Platform App ID */
-    appId: z.string().default(''),
-    /** QQ App client secret */
-    clientSecret: z.string().default(''),
-    /** Default agent ID to route messages to */
-    defaultAgentId: z.string().default('main'),
-    /** Restrict to these group openids (empty = allow all) */
-    allowedGroupIds: z.array(z.string()).default([]),
-  }).default({}),
+  defaults: z
+    .object({
+      /** Global default output channel for system events. */
+      output: ChannelKindSchema.default('logs'),
+      /** Scheduler result output channel. Falls back to defaults.output when absent. */
+      schedulerOutput: ChannelKindSchema.default('logs'),
+    })
+    .default({}),
+  cli: z
+    .object({
+      enabled: z.boolean().default(true),
+    })
+    .default({}),
+  web: z
+    .object({
+      enabled: z.boolean().default(true),
+    })
+    .default({}),
+  logs: z
+    .object({
+      enabled: z.boolean().default(true),
+    })
+    .default({}),
+  telegram: z
+    .object({
+      enabled: z.boolean().default(false),
+      /** Telegram Bot API token from @BotFather */
+      botToken: z.string().default(''),
+      /** Default agent ID to route messages to when no routing rule matches */
+      defaultAgentId: z.string().default('main'),
+      /** Allowed Telegram chat IDs (empty = allow all) */
+      allowedChatIds: z.array(z.number()).default([]),
+      /** Polling interval in ms (default 2000) */
+      pollIntervalMs: z.number().int().positive().default(2000),
+    })
+    .default({}),
+  discord: z
+    .object({
+      enabled: z.boolean().default(false),
+      /** Discord Bot token */
+      botToken: z.string().default(''),
+      /** Default agent ID to route messages to */
+      defaultAgentId: z.string().default('main'),
+      /** Allowed Discord channel IDs (empty = allow all guilds) */
+      allowedChannelIds: z.array(z.string()).default([]),
+      /** Command prefix for bot trigger (default '!agent') */
+      commandPrefix: z.string().default('!agent'),
+    })
+    .default({}),
+  feishu: z
+    .object({
+      enabled: z.boolean().default(false),
+      /** Feishu Open Platform App ID */
+      appId: z.string().default(''),
+      /** Feishu App Secret */
+      appSecret: z.string().default(''),
+      /** Verification token from Feishu event subscription page (legacy validation) */
+      verificationToken: z.string().default(''),
+      /** Encrypt key for event payload decryption (optional) */
+      encryptKey: z.string().default(''),
+      /** Default agent ID to route messages to */
+      defaultAgentId: z.string().default('main'),
+      /** Allowed Feishu chat IDs (empty = allow all) */
+      allowedChatIds: z.array(z.string()).default([]),
+      /**
+       * Maps Feishu bot display name (or user-defined alias) to agentId.
+       * When a user @mentions a bot whose display name matches a key here,
+       * the message is routed to the corresponding agentId instead of defaultAgentId.
+       * Example: { "工人": "worker-1", "主控": "main" }
+       */
+      agentMappings: z.record(z.string()).optional().default({}),
+    })
+    .default({}),
+  qq: z
+    .object({
+      enabled: z.boolean().default(false),
+      /** QQ Open Platform App ID */
+      appId: z.string().default(''),
+      /** QQ App client secret */
+      clientSecret: z.string().default(''),
+      /** Default agent ID to route messages to */
+      defaultAgentId: z.string().default('main'),
+      /** Restrict to these group openids (empty = allow all) */
+      allowedGroupIds: z.array(z.string()).default([]),
+    })
+    .default({}),
 });
 
 // ─── Root config schema (v2) ──────────────────────────────────────────────────
@@ -346,7 +372,12 @@ export const ConfigSchema = z.object({
     {
       id: 'main',
       skills: [],
-      mesh: { role: 'coordinator', capabilities: [], accepts: ['task', 'query', 'notification'], visibility: 'public' },
+      mesh: {
+        role: 'coordinator',
+        capabilities: [],
+        accepts: ['task', 'query', 'notification'],
+        visibility: 'public',
+      },
       owners: [],
       tools: { deny: [], approval: ['bash'] },
     },

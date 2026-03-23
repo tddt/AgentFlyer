@@ -1,16 +1,13 @@
+import { createLogger } from '../../core/logger.js';
 import type { Message } from '../../core/types.js';
 import {
-  estimateMessagesTokens,
-  contextWindowFor,
-} from './token-count.js';
-import {
+  type CompactionResult,
   buildCompactionPrompt,
   parseSummaryJson,
-  summaryToMessage,
   splitForCompaction,
-  type CompactionResult,
+  summaryToMessage,
 } from './structured.js';
-import { createLogger } from '../../core/logger.js';
+import { contextWindowFor, estimateMessagesTokens } from './token-count.js';
 
 export * from './token-count.js';
 export * from './structured.js';
@@ -65,14 +62,18 @@ export async function runCompaction(
   const { toCompact, toKeep } = splitForCompaction(messages, KEEP_RECENT);
 
   if (toCompact.length === 0) {
-    return { summaryMessage: summaryToMessage({
-      from: new Date().toISOString(),
-      to: new Date().toISOString(),
-      messageCount: 0,
-      narrative: '',
-      facts: [],
-      pendingWork: [],
-    }), keptMessages: toKeep, compactedCount: 0 };
+    return {
+      summaryMessage: summaryToMessage({
+        from: new Date().toISOString(),
+        to: new Date().toISOString(),
+        messageCount: 0,
+        narrative: '',
+        facts: [],
+        pendingWork: [],
+      }),
+      keptMessages: toKeep,
+      compactedCount: 0,
+    };
   }
 
   const prompt = buildCompactionPrompt(toCompact);

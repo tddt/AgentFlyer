@@ -7,10 +7,10 @@
  */
 import { ulid } from 'ulid';
 import { createLogger } from '../core/logger.js';
-import type { FederationTransport } from './transport/interface.js';
 import type { PeerRegistry } from './peer.js';
-import type { FederationMessage, MemoryResultPayload, MemoryResultEntry } from './protocol.js';
+import type { FederationMessage, MemoryResultEntry, MemoryResultPayload } from './protocol.js';
 import { signPayload } from './protocol.js';
+import type { FederationTransport } from './transport/interface.js';
 
 const logger = createLogger('federation:memory-sync');
 
@@ -39,7 +39,7 @@ export interface FederatedQueryResult {
 export async function queryFederatedMemory(
   opts: FederatedQueryOptions,
   transport: FederationTransport,
-  peers: PeerRegistry,
+  _peers: PeerRegistry,
   selfNodeId: string,
   privateKeyPem: string,
 ): Promise<FederatedQueryResult> {
@@ -70,8 +70,8 @@ export async function queryFederatedMemory(
   };
 
   // Set up response listeners
-  const responsePromises: Promise<MemoryResultEntry[]>[] = connectedPeerIds.map(peerId => {
-    return new Promise<MemoryResultEntry[]>(resolve => {
+  const responsePromises: Promise<MemoryResultEntry[]>[] = connectedPeerIds.map((peerId) => {
+    return new Promise<MemoryResultEntry[]>((resolve) => {
       pending.set(peerId, resolve);
     });
   });
@@ -97,17 +97,18 @@ export async function queryFederatedMemory(
   await transport.broadcast(queryMsg);
 
   // Wait for all responses or timeout
-  const timeoutPromises = connectedPeerIds.map(peerId =>
-    new Promise<MemoryResultEntry[]>(resolve =>
-      setTimeout(() => {
-        if (pending.has(peerId)) {
-          pending.delete(peerId);
-          timedOutPeers.push(peerId);
-          logger.warn('Federation peer did not respond in time', { peerId, requestId });
-        }
-        resolve([]);
-      }, timeoutMs),
-    ),
+  const timeoutPromises = connectedPeerIds.map(
+    (peerId) =>
+      new Promise<MemoryResultEntry[]>((resolve) =>
+        setTimeout(() => {
+          if (pending.has(peerId)) {
+            pending.delete(peerId);
+            timedOutPeers.push(peerId);
+            logger.warn('Federation peer did not respond in time', { peerId, requestId });
+          }
+          resolve([]);
+        }, timeoutMs),
+      ),
   );
 
   const results = await Promise.all(
@@ -127,9 +128,7 @@ export async function queryFederatedMemory(
   }
 
   // Sort by score descending if available, otherwise by createdAt desc
-  merged.sort((a, b) =>
-    (b.score ?? 0) - (a.score ?? 0) || b.createdAt - a.createdAt,
-  );
+  merged.sort((a, b) => (b.score ?? 0) - (a.score ?? 0) || b.createdAt - a.createdAt);
 
   logger.debug('Federated query complete', {
     requestId,

@@ -6,10 +6,7 @@ import type { SkillMeta } from './registry.js';
  * Compact mode (default): `- <name>: <shortDesc>`
  * Full mode: multi-line with description, tags, api key note
  */
-export function formatSkillsForPrompt(
-  skills: SkillMeta[],
-  compact = true,
-): string {
+export function formatSkillsForPrompt(skills: SkillMeta[], compact = true): string {
   if (skills.length === 0) return '';
 
   if (compact) {
@@ -36,8 +33,27 @@ export function buildSkillsDirectory(skills: SkillMeta[], compact: boolean): str
 }
 
 const STOP_WORDS = new Set([
-  'the', 'a', 'an', 'is', 'it', 'to', 'and', 'or', 'in', 'of', 'for',
-  'with', 'that', 'this', 'can', 'you', 'how', 'do', 'i', 'me', 'my',
+  'the',
+  'a',
+  'an',
+  'is',
+  'it',
+  'to',
+  'and',
+  'or',
+  'in',
+  'of',
+  'for',
+  'with',
+  'that',
+  'this',
+  'can',
+  'you',
+  'how',
+  'do',
+  'i',
+  'me',
+  'my',
 ]);
 
 /**
@@ -45,26 +61,22 @@ const STOP_WORDS = new Set([
  * a given user message without calling the LLM. Falls back to the full list
  * when no keyword matches are found or when the list is already small.
  */
-export function preFilterSkills(
-  skills: SkillMeta[],
-  userMessage: string,
-  topN = 3,
-): SkillMeta[] {
+export function preFilterSkills(skills: SkillMeta[], userMessage: string, topN = 3): SkillMeta[] {
   if (skills.length <= topN) return skills;
   const words = userMessage
     .toLowerCase()
     .split(/\W+/)
-    .filter(w => w.length > 2 && !STOP_WORDS.has(w));
+    .filter((w) => w.length > 2 && !STOP_WORDS.has(w));
   if (words.length === 0) return skills;
-  const scored = skills.map(s => {
+  const scored = skills.map((s) => {
     const haystack = `${s.name} ${s.tags.join(' ')} ${s.shortDesc}`.toLowerCase();
-    const hits = words.filter(w => haystack.includes(w)).length;
+    const hits = words.filter((w) => haystack.includes(w)).length;
     return { skill: s, hits };
   });
   const top = scored
-    .filter(x => x.hits > 0)
+    .filter((x) => x.hits > 0)
     .sort((a, b) => b.hits - a.hits)
     .slice(0, topN)
-    .map(x => x.skill);
+    .map((x) => x.skill);
   return top.length > 0 ? top : skills;
 }

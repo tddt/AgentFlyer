@@ -1,6 +1,6 @@
 import { createLogger } from '../../../core/logger.js';
-import type { RegisteredTool } from '../registry.js';
 import type { ApprovalHandler } from '../policy.js';
+import type { RegisteredTool } from '../registry.js';
 
 const logger = createLogger('tools:bash');
 

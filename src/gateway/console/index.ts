@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { join, dirname } from 'node:path';
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const distDir = join(__dir, '../console-ui/dist');
@@ -11,10 +11,10 @@ let _css = '';
 function loadDist(): void {
   if (_js) return;
   try {
-    _js  = readFileSync(join(distDir, 'index.js'),  'utf-8');
+    _js = readFileSync(join(distDir, 'index.js'), 'utf-8');
     _css = readFileSync(join(distDir, 'index.css'), 'utf-8');
   } catch {
-    _js  = 'console.error("[AgentFlyer] Console UI not built — run: pnpm console:build")';
+    _js = 'console.error("[AgentFlyer] Console UI not built — run: pnpm console:build")';
     _css = '';
   }
 }

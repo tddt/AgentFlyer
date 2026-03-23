@@ -1,19 +1,19 @@
-import { useState } from 'react'
-import { rpc } from '../hooks/useRpc.js'
-import { useToast } from '../hooks/useToast.js'
-import { Button } from '../components/Button.js'
+import { useState } from 'react';
+import { Button } from '../components/Button.js';
+import { rpc } from '../hooks/useRpc.js';
+import { useToast } from '../hooks/useToast.js';
 
-type ModelProviderKind = 'anthropic' | 'openai' | 'google' | 'ollama' | 'openai-compat'
-type Step = 'model' | 'agent' | 'done'
+type ModelProviderKind = 'anthropic' | 'openai' | 'google' | 'ollama' | 'openai-compat';
+type Step = 'model' | 'agent' | 'done';
 
 interface ProviderHint {
-  label: string
-  needsKey: boolean
-  needsBase: boolean
-  keyHint: string
-  baseHint: string
-  modelHint: string
-  groupHint: string
+  label: string;
+  needsKey: boolean;
+  needsBase: boolean;
+  keyHint: string;
+  baseHint: string;
+  modelHint: string;
+  groupHint: string;
 }
 
 const PROVIDER_HINTS: Record<ModelProviderKind, ProviderHint> = {
@@ -62,21 +62,21 @@ const PROVIDER_HINTS: Record<ModelProviderKind, ProviderHint> = {
     modelHint: 'qwen2.5:7b',
     groupHint: 'local',
   },
-}
+};
 
 interface ModelFormState {
-  groupName: string
-  provider: ModelProviderKind
-  apiKey: string
-  apiBaseUrl: string
-  modelId: string
-  modelKey: string
+  groupName: string;
+  provider: ModelProviderKind;
+  apiKey: string;
+  apiBaseUrl: string;
+  modelId: string;
+  modelKey: string;
 }
 
 interface AgentFormState {
-  id: string
-  name: string
-  model: string
+  id: string;
+  name: string;
+  model: string;
 }
 
 // ── Tiny UI helpers ───────────────────────────────────────────────────────────
@@ -93,30 +93,45 @@ function StepDot({ n, active, done }: { n: number; active: boolean; done: boolea
       }`}
     >
       {done ? (
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="3"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
           <polyline points="20 6 9 17 4 12" />
         </svg>
       ) : (
         n
       )}
     </div>
-  )
+  );
 }
 
 function StepSeparator({ done }: { done: boolean }) {
   return (
-    <div className={`h-px flex-1 mx-1 transition-colors ${done ? 'bg-emerald-500/50' : 'bg-slate-700/60'}`} />
-  )
+    <div
+      className={`h-px flex-1 mx-1 transition-colors ${done ? 'bg-emerald-500/50' : 'bg-slate-700/60'}`}
+    />
+  );
 }
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+function Field({
+  label,
+  hint,
+  children,
+}: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1.5">
       <label className="text-xs font-medium text-slate-300">{label}</label>
       {children}
       {hint && <p className="text-[11px] text-slate-500 leading-relaxed">{hint}</p>}
     </div>
-  )
+  );
 }
 
 function TextInput({
@@ -125,10 +140,10 @@ function TextInput({
   placeholder,
   type = 'text',
 }: {
-  value: string
-  onChange: (v: string) => void
-  placeholder?: string
-  type?: string
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  type?: string;
 }) {
   return (
     <input
@@ -139,7 +154,7 @@ function TextInput({
       autoComplete="off"
       className="bg-slate-800/70 border border-slate-700/60 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500/80 focus:outline-none focus:ring-1 focus:ring-indigo-500/70 w-full transition-all"
     />
-  )
+  );
 }
 
 function SelectInput({
@@ -147,9 +162,9 @@ function SelectInput({
   onChange,
   options,
 }: {
-  value: string
-  onChange: (v: string) => void
-  options: { value: string; label: string }[]
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
 }) {
   return (
     <select
@@ -163,14 +178,14 @@ function SelectInput({
         </option>
       ))}
     </select>
-  )
+  );
 }
 
 // ── Step 1: Model ─────────────────────────────────────────────────────────────
 
 function ModelStep({ onNext, onSkip }: { onNext: (modelRef: string) => void; onSkip: () => void }) {
-  const { toast } = useToast()
-  const [saving, setSaving] = useState(false)
+  const { toast } = useToast();
+  const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<ModelFormState>({
     groupName: 'deepseek',
     provider: 'openai-compat',
@@ -178,10 +193,10 @@ function ModelStep({ onNext, onSkip }: { onNext: (modelRef: string) => void; onS
     apiBaseUrl: 'https://api.deepseek.com/v1',
     modelId: 'deepseek-chat',
     modelKey: 'chat',
-  })
+  });
 
   function applyProvider(p: ModelProviderKind) {
-    const h = PROVIDER_HINTS[p]
+    const h = PROVIDER_HINTS[p];
     setForm((prev) => ({
       ...prev,
       provider: p,
@@ -189,48 +204,64 @@ function ModelStep({ onNext, onSkip }: { onNext: (modelRef: string) => void; onS
       apiBaseUrl: h.baseHint,
       modelId: h.modelHint,
       modelKey: 'chat',
-    }))
+    }));
   }
 
-  const hint = PROVIDER_HINTS[form.provider]
-  const modelRef = form.groupName.trim() && form.modelKey.trim()
-    ? `${form.groupName.trim()}/${form.modelKey.trim()}`
-    : ''
+  const hint = PROVIDER_HINTS[form.provider];
+  const modelRef =
+    form.groupName.trim() && form.modelKey.trim()
+      ? `${form.groupName.trim()}/${form.modelKey.trim()}`
+      : '';
 
   async function save() {
-    if (!form.groupName.trim()) { toast('请填写分组名称（Group Name）', 'error'); return }
-    if (!form.modelId.trim()) { toast('请填写模型 ID', 'error'); return }
-    if (!form.modelKey.trim()) { toast('请填写模型 Key', 'error'); return }
-    if (hint.needsKey && !form.apiKey.trim()) { toast('此 Provider 需要填写 API Key', 'error'); return }
-    if (hint.needsBase && !form.apiBaseUrl.trim()) { toast('此 Provider 需要填写 API Base URL', 'error'); return }
+    if (!form.groupName.trim()) {
+      toast('请填写分组名称（Group Name）', 'error');
+      return;
+    }
+    if (!form.modelId.trim()) {
+      toast('请填写模型 ID', 'error');
+      return;
+    }
+    if (!form.modelKey.trim()) {
+      toast('请填写模型 Key', 'error');
+      return;
+    }
+    if (hint.needsKey && !form.apiKey.trim()) {
+      toast('此 Provider 需要填写 API Key', 'error');
+      return;
+    }
+    if (hint.needsBase && !form.apiBaseUrl.trim()) {
+      toast('此 Provider 需要填写 API Base URL', 'error');
+      return;
+    }
 
-    setSaving(true)
+    setSaving(true);
     try {
-      const cfg = await rpc<Record<string, unknown>>('config.get')
-      const models = (cfg.models ?? {}) as Record<string, unknown>
+      const cfg = await rpc<Record<string, unknown>>('config.get');
+      const models = (cfg.models ?? {}) as Record<string, unknown>;
       const newGroup: Record<string, unknown> = {
         provider: form.provider,
         models: {
           [form.modelKey.trim()]: { id: form.modelId.trim(), maxTokens: 8192 },
         },
-      }
-      if (form.apiKey.trim()) newGroup['apiKey'] = form.apiKey.trim()
-      if (form.apiBaseUrl.trim()) newGroup['apiBaseUrl'] = form.apiBaseUrl.trim()
+      };
+      if (form.apiKey.trim()) newGroup.apiKey = form.apiKey.trim();
+      if (form.apiBaseUrl.trim()) newGroup.apiBaseUrl = form.apiBaseUrl.trim();
 
       await rpc('config.save', {
         ...cfg,
         models: { ...models, [form.groupName.trim()]: newGroup },
         defaults: {
-          ...((cfg['defaults'] ?? {}) as Record<string, unknown>),
+          ...((cfg.defaults ?? {}) as Record<string, unknown>),
           model: modelRef,
         },
-      })
-      toast('模型分组已保存 ✓', 'success')
-      onNext(modelRef)
+      });
+      toast('模型分组已保存 ✓', 'success');
+      onNext(modelRef);
     } catch (e) {
-      toast(e instanceof Error ? e.message : '保存失败', 'error')
+      toast(e instanceof Error ? e.message : '保存失败', 'error');
     } finally {
-      setSaving(false)
+      setSaving(false);
     }
   }
 
@@ -324,7 +355,7 @@ function ModelStep({ onNext, onSkip }: { onNext: (modelRef: string) => void; onS
         </button>
       </div>
     </div>
-  )
+  );
 }
 
 // ── Step 2: Agent ─────────────────────────────────────────────────────────────
@@ -334,27 +365,28 @@ function AgentStep({
   onNext,
   onBack,
 }: {
-  modelRef: string
-  onNext: () => void
-  onBack: () => void
+  modelRef: string;
+  onNext: () => void;
+  onBack: () => void;
 }) {
-  const { toast } = useToast()
-  const [saving, setSaving] = useState(false)
+  const { toast } = useToast();
+  const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<AgentFormState>({
     id: 'main',
     name: 'Main Agent',
     model: modelRef,
-  })
+  });
 
   async function save() {
-    if (!form.id.trim()) { toast('请填写 Agent ID', 'error'); return }
+    if (!form.id.trim()) {
+      toast('请填写 Agent ID', 'error');
+      return;
+    }
 
-    setSaving(true)
+    setSaving(true);
     try {
-      const cfg = await rpc<Record<string, unknown>>('config.get')
-      const agents = Array.isArray(cfg['agents'])
-        ? (cfg['agents'] as Record<string, unknown>[])
-        : []
+      const cfg = await rpc<Record<string, unknown>>('config.get');
+      const agents = Array.isArray(cfg.agents) ? (cfg.agents as Record<string, unknown>[]) : [];
 
       const newAgent: Record<string, unknown> = {
         id: form.id.trim(),
@@ -370,19 +402,19 @@ function AgentStep({
         owners: [],
         tools: { deny: [], approval: ['bash'] },
         persona: { language: 'zh-CN', outputDir: 'output' },
-      }
+      };
 
-      const idx = agents.findIndex((a) => a['id'] === form.id.trim())
+      const idx = agents.findIndex((a) => a.id === form.id.trim());
       const newAgents =
-        idx >= 0 ? agents.map((a, i) => (i === idx ? newAgent : a)) : [...agents, newAgent]
+        idx >= 0 ? agents.map((a, i) => (i === idx ? newAgent : a)) : [...agents, newAgent];
 
-      await rpc('config.save', { ...cfg, agents: newAgents })
-      toast('Agent 已创建 ✓', 'success')
-      onNext()
+      await rpc('config.save', { ...cfg, agents: newAgents });
+      toast('Agent 已创建 ✓', 'success');
+      onNext();
     } catch (e) {
-      toast(e instanceof Error ? e.message : '保存失败', 'error')
+      toast(e instanceof Error ? e.message : '保存失败', 'error');
     } finally {
-      setSaving(false)
+      setSaving(false);
     }
   }
 
@@ -431,7 +463,7 @@ function AgentStep({
         </Button>
       </div>
     </div>
-  )
+  );
 }
 
 // ── Step 3: Done ──────────────────────────────────────────────────────────────
@@ -440,8 +472,8 @@ function DoneStep({
   onGoChat,
   onGoOverview,
 }: {
-  onGoChat: () => void
-  onGoOverview: () => void
+  onGoChat: () => void;
+  onGoOverview: () => void;
 }) {
   return (
     <div className="flex flex-col items-center gap-6 py-6 text-center">
@@ -470,7 +502,8 @@ function DoneStep({
       <div>
         <h2 className="text-[15px] font-semibold text-slate-100">基础配置完成！</h2>
         <p className="text-xs text-slate-500 mt-2 max-w-xs leading-relaxed">
-          模型和 Agent 已就绪。前往 <strong className="text-slate-400">Chat</strong> 模块发送一条测试消息，验证 LLM 连通性。
+          模型和 Agent 已就绪。前往 <strong className="text-slate-400">Chat</strong>{' '}
+          模块发送一条测试消息，验证 LLM 连通性。
         </p>
       </div>
 
@@ -483,18 +516,18 @@ function DoneStep({
         </Button>
       </div>
     </div>
-  )
+  );
 }
 
 // ── Main wizard ───────────────────────────────────────────────────────────────
 
 export function SetupWizard({ onDone }: { onDone: (goToChat?: boolean) => void }) {
-  const [step, setStep] = useState<Step>('model')
-  const [modelRef, setModelRef] = useState('')
+  const [step, setStep] = useState<Step>('model');
+  const [modelRef, setModelRef] = useState('');
 
-  const stepIndex = step === 'model' ? 0 : step === 'agent' ? 1 : 2
+  const stepIndex = step === 'model' ? 0 : step === 'agent' ? 1 : 2;
 
-  const STEP_LABELS = ['配置模型', '创建 Agent', '连通性验证']
+  const STEP_LABELS = ['配置模型', '创建 Agent', '连通性验证'];
 
   return (
     <div
@@ -543,7 +576,11 @@ export function SetupWizard({ onDone }: { onDone: (goToChat?: boolean) => void }
                 <StepDot n={i + 1} active={stepIndex === i} done={stepIndex > i} />
                 <span
                   className={`text-xs whitespace-nowrap transition-colors ${
-                    stepIndex === i ? 'text-slate-200' : stepIndex > i ? 'text-emerald-400/70' : 'text-slate-600'
+                    stepIndex === i
+                      ? 'text-slate-200'
+                      : stepIndex > i
+                        ? 'text-emerald-400/70'
+                        : 'text-slate-600'
                   }`}
                 >
                   {label}
@@ -567,8 +604,8 @@ export function SetupWizard({ onDone }: { onDone: (goToChat?: boolean) => void }
           {step === 'model' && (
             <ModelStep
               onNext={(ref) => {
-                setModelRef(ref)
-                setStep('agent')
+                setModelRef(ref);
+                setStep('agent');
               }}
               onSkip={() => onDone(false)}
             />
@@ -581,10 +618,7 @@ export function SetupWizard({ onDone }: { onDone: (goToChat?: boolean) => void }
             />
           )}
           {step === 'done' && (
-            <DoneStep
-              onGoChat={() => onDone(true)}
-              onGoOverview={() => onDone(false)}
-            />
+            <DoneStep onGoChat={() => onDone(true)} onGoOverview={() => onDone(false)} />
           )}
         </div>
 
@@ -593,5 +627,5 @@ export function SetupWizard({ onDone }: { onDone: (goToChat?: boolean) => void }
         </p>
       </div>
     </div>
-  )
+  );
 }

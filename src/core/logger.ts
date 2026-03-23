@@ -25,9 +25,9 @@ const LEVELS: Readonly<Record<LogLevel, number>> = {
   error: 3,
 } as const;
 
-let _minLevel: LogLevel = (process.env['LOG_LEVEL'] as LogLevel | undefined) ?? 'info';
+let _minLevel: LogLevel = (process.env.LOG_LEVEL as LogLevel | undefined) ?? 'info';
 let _outputFn: (entry: LogEntry) => void = (entry) => {
-  process.stdout.write(JSON.stringify(entry) + '\n');
+  process.stdout.write(`${JSON.stringify(entry)}\n`);
 };
 
 export function setLogLevel(level: LogLevel): void {

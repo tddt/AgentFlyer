@@ -1,21 +1,30 @@
-import { createPortal } from 'react-dom'
-import { Button } from './Button.js'
+import { createPortal } from 'react-dom';
+import { Button } from './Button.js';
 
 interface Props {
-  title: string
-  message: string
-  confirmLabel?: string
-  cancelLabel?: string
-  onConfirm: () => void
-  onCancel: () => void
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  onConfirm: () => void;
+  onCancel: () => void;
 }
 
-export function Modal({ title, message, confirmLabel = 'Confirm', cancelLabel = 'Cancel', onConfirm, onCancel }: Props) {
+export function Modal({
+  title,
+  message,
+  confirmLabel = 'Confirm',
+  cancelLabel = 'Cancel',
+  onConfirm,
+  onCancel,
+}: Props) {
   return createPortal(
     <div
       className="fixed inset-0 z-[200] flex items-center justify-center"
       style={{ background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(8px)' }}
-      onClick={(e) => { if (e.target === e.currentTarget) onCancel() }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onCancel();
+      }}
     >
       <div
         className="w-full max-w-sm mx-4 p-6 flex flex-col gap-5 af-scale-in"
@@ -31,11 +40,15 @@ export function Modal({ title, message, confirmLabel = 'Confirm', cancelLabel = 
           <p className="text-sm text-slate-400 leading-relaxed">{message}</p>
         </div>
         <div className="flex justify-end gap-2">
-          <Button variant="ghost" size="sm" onClick={onCancel}>{cancelLabel}</Button>
-          <Button variant="danger" size="sm" onClick={onConfirm}>{confirmLabel}</Button>
+          <Button variant="ghost" size="sm" onClick={onCancel}>
+            {cancelLabel}
+          </Button>
+          <Button variant="danger" size="sm" onClick={onConfirm}>
+            {confirmLabel}
+          </Button>
         </div>
       </div>
     </div>,
     document.body,
-  )
+  );
 }

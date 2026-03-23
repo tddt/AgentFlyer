@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { SessionKey } from '../types.js';
 
@@ -20,7 +20,7 @@ export interface SessionMeta {
 }
 
 function sessionKeyToMetaFilename(sessionKey: SessionKey): string {
-  return sessionKey.replace(/:/g, '-') + '.meta.json';
+  return `${sessionKey.replace(/:/g, '-')}.meta.json`;
 }
 
 /** Read/write `.meta.json` files alongside session JSONL files. */

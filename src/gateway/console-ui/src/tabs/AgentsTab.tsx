@@ -1,15 +1,15 @@
-import { useState, useCallback } from 'react'
-import { rpc, useQuery } from '../hooks/useRpc.js'
-import { useToast } from '../hooks/useToast.js'
-import { Badge } from '../components/Badge.js'
-import { Button } from '../components/Button.js'
-import type { AgentInfo, AgentConfig, AgentListResult, SessionListResult } from '../types.js'
+import { useCallback, useState } from 'react';
+import { Badge } from '../components/Badge.js';
+import { Button } from '../components/Button.js';
+import { rpc, useQuery } from '../hooks/useRpc.js';
+import { useToast } from '../hooks/useToast.js';
+import type { AgentConfig, AgentInfo, AgentListResult, SessionListResult } from '../types.js';
 
 interface EditForm {
-  name: string
-  model: string
-  persona: string
-  workspace: string
+  name: string;
+  model: string;
+  persona: string;
+  workspace: string;
 }
 
 function EditModal({
@@ -18,30 +18,30 @@ function EditModal({
   onClose,
   onSaved,
 }: {
-  agentId: string
-  current: AgentConfig
-  onClose: () => void
-  onSaved: () => void
+  agentId: string;
+  current: AgentConfig;
+  onClose: () => void;
+  onSaved: () => void;
 }) {
-  const { toast } = useToast()
+  const { toast } = useToast();
   const [form, setForm] = useState<EditForm>({
     name: current.name ?? '',
     model: current.model ?? '',
     persona: current.persona ?? '',
     workspace: current.workspace ?? '',
-  })
-  const [saving, setSaving] = useState(false)
+  });
+  const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
-    setSaving(true)
+    setSaving(true);
     try {
-      const fullConfig = await rpc<Record<string, unknown>>('config.get')
-      const agents = fullConfig.agents as Record<string, AgentConfig> | AgentConfig[] | undefined
-      let updated: Record<string, AgentConfig> = {}
+      const fullConfig = await rpc<Record<string, unknown>>('config.get');
+      const agents = fullConfig.agents as Record<string, AgentConfig> | AgentConfig[] | undefined;
+      let updated: Record<string, AgentConfig> = {};
       if (Array.isArray(agents)) {
-        for (const a of agents) updated[a.id] = a
+        for (const a of agents) updated[a.id] = a;
       } else if (agents) {
-        updated = { ...agents }
+        updated = { ...agents };
       }
       updated[agentId] = {
         ...updated[agentId],
@@ -50,17 +50,17 @@ function EditModal({
         model: form.model || undefined,
         persona: form.persona || undefined,
         workspace: form.workspace || undefined,
-      }
-      await rpc('config.save', { ...fullConfig, agents: updated })
-      toast(`Agent ${agentId} saved`, 'success')
-      onSaved()
-      onClose()
+      };
+      await rpc('config.save', { ...fullConfig, agents: updated });
+      toast(`Agent ${agentId} saved`, 'success');
+      onSaved();
+      onClose();
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'Save failed', 'error')
+      toast(e instanceof Error ? e.message : 'Save failed', 'error');
     } finally {
-      setSaving(false)
+      setSaving(false);
     }
-  }
+  };
 
   const field = (label: string, key: keyof EditForm, placeholder?: string) => (
     <div className="flex flex-col gap-1">
@@ -72,7 +72,7 @@ function EditModal({
         onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
       />
     </div>
-  )
+  );
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -97,86 +97,95 @@ function EditModal({
           </div>
         </div>
         <div className="flex items-center justify-end gap-2 pt-1">
-          <Button size="sm" variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button size="sm" variant="primary" onClick={() => void handleSave()} >
+          <Button size="sm" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button size="sm" variant="primary" onClick={() => void handleSave()}>
             {saving ? 'Saving…' : 'Save'}
           </Button>
         </div>
       </div>
     </div>
-  )
+  );
 }
 
 export function AgentsTab() {
-  const { toast } = useToast()
-  const [selected, setSelected] = useState<string | null>(null)
-  const [editing, setEditing] = useState<string | null>(null)
+  const { toast } = useToast();
+  const [selected, setSelected] = useState<string | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
 
-  const { data: agentsResult, loading, error, refetch } = useQuery<AgentListResult>(
-    () => rpc<AgentListResult>('agent.list'),
-    [],
-  )
+  const {
+    data: agentsResult,
+    loading,
+    error,
+    refetch,
+  } = useQuery<AgentListResult>(() => rpc<AgentListResult>('agent.list'), []);
 
-  const { data: config, refetch: refetchConfig } = useQuery<{ agents?: AgentConfig[] | Record<string, AgentConfig> }>(
-    () => rpc<{ agents?: AgentConfig[] | Record<string, AgentConfig> }>('config.get'),
-    [],
-  )
+  const { data: config, refetch: refetchConfig } = useQuery<{
+    agents?: AgentConfig[] | Record<string, AgentConfig>;
+  }>(() => rpc<{ agents?: AgentConfig[] | Record<string, AgentConfig> }>('config.get'), []);
 
   const { data: sessionsData } = useQuery<SessionListResult>(
     () => rpc<SessionListResult>('session.list'),
     [],
-  )
+  );
 
   // Build agent config map
-  const agentConfigs: Record<string, AgentConfig> = {}
+  const agentConfigs: Record<string, AgentConfig> = {};
   if (Array.isArray(config?.agents)) {
-    for (const a of config.agents) agentConfigs[a.id] = a
+    for (const a of config.agents) agentConfigs[a.id] = a;
   } else if (config?.agents && typeof config.agents === 'object') {
-    for (const [id, cfg] of Object.entries(config.agents)) agentConfigs[id] = { id, ...cfg }
+    for (const [id, cfg] of Object.entries(config.agents)) agentConfigs[id] = { id, ...cfg };
   }
 
   // Session counts per agent
-  const sessionCounts: Record<string, number> = {}
+  const sessionCounts: Record<string, number> = {};
   for (const s of sessionsData?.sessions ?? []) {
-    sessionCounts[s.agentId] = (sessionCounts[s.agentId] ?? 0) + 1
+    sessionCounts[s.agentId] = (sessionCounts[s.agentId] ?? 0) + 1;
   }
 
-  const handleReload = useCallback(async (agentId: string) => {
-    try {
-      await rpc('agent.reload', { agentId })
-      toast(`Agent ${agentId} reloaded`, 'success')
-      refetch()
-      refetchConfig()
-    } catch (e) {
-      toast(e instanceof Error ? e.message : 'Reload failed', 'error')
-    }
-  }, [toast, refetch, refetchConfig])
+  const handleReload = useCallback(
+    async (agentId: string) => {
+      try {
+        await rpc('agent.reload', { agentId });
+        toast(`Agent ${agentId} reloaded`, 'success');
+        refetch();
+        refetchConfig();
+      } catch (e) {
+        toast(e instanceof Error ? e.message : 'Reload failed', 'error');
+      }
+    },
+    [toast, refetch, refetchConfig],
+  );
 
-  const handleClear = useCallback(async (agentId: string) => {
-    try {
-      await rpc('session.clear', { agentId })
-      toast(`Sessions cleared for ${agentId}`, 'success')
-    } catch (e) {
-      toast(e instanceof Error ? e.message : 'Clear failed', 'error')
-    }
-  }, [toast])
+  const handleClear = useCallback(
+    async (agentId: string) => {
+      try {
+        await rpc('session.clear', { agentId });
+        toast(`Sessions cleared for ${agentId}`, 'success');
+      } catch (e) {
+        toast(e instanceof Error ? e.message : 'Clear failed', 'error');
+      }
+    },
+    [toast],
+  );
 
-  if (loading && !agentsResult) return <div className="text-slate-400 text-sm p-8">Loading…</div>
-  if (error) return <div className="text-red-400 text-sm p-8">Error: {error}</div>
+  if (loading && !agentsResult) return <div className="text-slate-400 text-sm p-8">Loading…</div>;
+  if (error) return <div className="text-red-400 text-sm p-8">Error: {error}</div>;
 
-  const list: AgentInfo[] = Array.isArray(agentsResult?.agents) ? agentsResult.agents : []
+  const list: AgentInfo[] = Array.isArray(agentsResult?.agents) ? agentsResult.agents : [];
 
   // Group by workspace
-  const groups: Record<string, AgentInfo[]> = {}
+  const groups: Record<string, AgentInfo[]> = {};
   for (const a of list) {
-    const grp = agentConfigs[a.agentId]?.workspace ?? 'Default'
-    ;(groups[grp] ??= []).push(a)
+    const grp = agentConfigs[a.agentId]?.workspace ?? 'Default';
+    (groups[grp] ??= []).push(a);
   }
   const groupEntries = Object.entries(groups).sort(([a], [b]) =>
-    a === 'Default' ? 1 : b === 'Default' ? -1 : a.localeCompare(b)
-  )
+    a === 'Default' ? 1 : b === 'Default' ? -1 : a.localeCompare(b),
+  );
 
-  const editingCfg = editing ? agentConfigs[editing] : null
+  const editingCfg = editing ? agentConfigs[editing] : null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -185,7 +194,10 @@ export function AgentsTab() {
           agentId={editing}
           current={editingCfg}
           onClose={() => setEditing(null)}
-          onSaved={() => { refetch(); refetchConfig() }}
+          onSaved={() => {
+            refetch();
+            refetchConfig();
+          }}
         />
       )}
 
@@ -194,33 +206,50 @@ export function AgentsTab() {
           <h1 className="text-lg font-semibold text-slate-100">Agents</h1>
           <p className="text-xs text-slate-500 mt-0.5">{list.length} running</p>
         </div>
-        <Button size="sm" variant="ghost" onClick={() => { refetch(); refetchConfig() }}>Refresh</Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            refetch();
+            refetchConfig();
+          }}
+        >
+          Refresh
+        </Button>
       </div>
 
       {groupEntries.map(([workspace, agents]) => (
         <div key={workspace} className="flex flex-col gap-3">
           <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">{workspace}</span>
+            <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">
+              {workspace}
+            </span>
             <div className="flex-1 h-px bg-slate-700/50" />
             <span className="text-xs text-slate-600">{agents.length}</span>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {agents.map((a) => {
-              const cfg = agentConfigs[a.agentId]
-              const isSelected = selected === a.agentId
-              const sessCount = sessionCounts[a.agentId] ?? 0
+              const cfg = agentConfigs[a.agentId];
+              const isSelected = selected === a.agentId;
+              const sessCount = sessionCounts[a.agentId] ?? 0;
               return (
                 <div key={a.agentId} className="flex flex-col">
                   <div
                     className={`rounded-xl bg-slate-800/60 ring-1 transition-all p-4 flex flex-col gap-3 cursor-pointer ${
-                      isSelected ? 'ring-indigo-500/60 bg-slate-800' : 'ring-slate-700/50 hover:ring-indigo-500/30'
+                      isSelected
+                        ? 'ring-indigo-500/60 bg-slate-800'
+                        : 'ring-slate-700/50 hover:ring-indigo-500/30'
                     }`}
                     onClick={() => setSelected(isSelected ? null : a.agentId)}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex flex-col gap-0.5 min-w-0">
-                        <span className="text-sm font-semibold text-slate-100 truncate">{a.name ?? a.agentId}</span>
-                        <span className="text-xs font-mono text-slate-500 truncate">{a.agentId}</span>
+                        <span className="text-sm font-semibold text-slate-100 truncate">
+                          {a.name ?? a.agentId}
+                        </span>
+                        <span className="text-xs font-mono text-slate-500 truncate">
+                          {a.agentId}
+                        </span>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
                         <Badge variant="green">running</Badge>
@@ -237,21 +266,30 @@ export function AgentsTab() {
                       <Button
                         size="sm"
                         variant="ghost"
-                        onClick={(e) => { e.stopPropagation(); setEditing(a.agentId) }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditing(a.agentId);
+                        }}
                       >
                         Edit
                       </Button>
                       <Button
                         size="sm"
                         variant="ghost"
-                        onClick={(e) => { e.stopPropagation(); void handleReload(a.agentId) }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleReload(a.agentId);
+                        }}
                       >
                         Reload
                       </Button>
                       <Button
                         size="sm"
                         variant="ghost"
-                        onClick={(e) => { e.stopPropagation(); void handleClear(a.agentId) }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleClear(a.agentId);
+                        }}
                       >
                         Clear Sessions
                       </Button>
@@ -267,15 +305,13 @@ export function AgentsTab() {
                     </div>
                   )}
                 </div>
-              )
+              );
             })}
           </div>
         </div>
       ))}
 
-      {list.length === 0 && (
-        <p className="text-slate-500 text-sm py-4">No agents running.</p>
-      )}
+      {list.length === 0 && <p className="text-slate-500 text-sm py-4">No agents running.</p>}
     </div>
-  )
+  );
 }

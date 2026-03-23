@@ -1,4 +1,4 @@
-import { readFile, access } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createLogger } from '../../core/logger.js';
 

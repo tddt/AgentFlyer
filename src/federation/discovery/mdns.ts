@@ -65,7 +65,12 @@ export interface MdnsDiscovery {
 export function createMdnsDiscovery(): MdnsDiscovery {
   const peers = new Map<string, MdnsPeerEntry>();
   // RATIONALE: closed-over variable avoids `this`-cast on the returned object literal
-  let mdnsInstance: { query(q: unknown[]): void; respond(a: unknown[]): void; on(e: string, h: unknown): void; destroy(): void } | null = null;
+  let mdnsInstance: {
+    query(q: unknown[]): void;
+    respond(a: unknown[]): void;
+    on(e: string, h: unknown): void;
+    destroy(): void;
+  } | null = null;
 
   return {
     async start(selfNodeId: string, federationPort: number): Promise<void> {
@@ -98,7 +103,7 @@ export function createMdnsDiscovery(): MdnsDiscovery {
         for (const answer of res.answers) {
           if (answer.name !== MDNS_SERVICE_TYPE) continue;
           if (answer.type === 'TXT' && answer.data?.txt) {
-            const entry = answer.data.txt.find(t => t.startsWith('nodeId='));
+            const entry = answer.data.txt.find((t) => t.startsWith('nodeId='));
             if (entry) nodeId = entry.slice('nodeId='.length);
           }
           if (answer.type === 'SRV' && answer.data) {

@@ -44,7 +44,13 @@ export interface ForgettingContext {
  * All component scores are in [0,1]; combined is a weighted average.
  */
 export function computeForgettingScore(
-  entry: { updatedAt: number; accessedAt: number; importance: number; superseded: boolean; content: string },
+  entry: {
+    updatedAt: number;
+    accessedAt: number;
+    importance: number;
+    superseded: boolean;
+    content: string;
+  },
   now = Date.now(),
   context?: ForgettingContext,
 ): ForgettingScore {
@@ -52,10 +58,10 @@ export function computeForgettingScore(
   const halfLife90 = 90;
 
   const ageRaw = ageInDays(entry.updatedAt, now);
-  const age = 1 - Math.exp(-Math.LN2 * ageRaw / halfLife30);
+  const age = 1 - Math.exp((-Math.LN2 * ageRaw) / halfLife30);
 
   const accessGapDays = (now - entry.accessedAt) / (1000 * 60 * 60 * 24);
-  const accessGap = 1 - Math.exp(-Math.LN2 * accessGapDays / halfLife90);
+  const accessGap = 1 - Math.exp((-Math.LN2 * accessGapDays) / halfLife90);
 
   const supersededScore = entry.superseded ? 1 : 0;
   const userImportanceScore = 1 - Math.max(0, Math.min(1, entry.importance));
@@ -72,10 +78,10 @@ export function computeForgettingScore(
   const combined = Math.max(
     0,
     0.25 * age +
-    0.20 * accessGap +
-    0.35 * supersededScore +
-    0.20 * userImportanceScore -
-    relevanceBoost,
+      0.2 * accessGap +
+      0.35 * supersededScore +
+      0.2 * userImportanceScore -
+      relevanceBoost,
   );
 
   return {

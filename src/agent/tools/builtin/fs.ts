@@ -1,23 +1,12 @@
-import {
-  readFile,
-  writeFile,
-  mkdir,
-  readdir,
-  stat,
-  access,
-} from 'node:fs/promises';
-import { join, resolve, dirname } from 'node:path';
+import { access, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 import { createLogger } from '../../../core/logger.js';
 import type { RegisteredTool } from '../registry.js';
 
 const logger = createLogger('tools:fs');
 
 /** Recursively list directory up to `maxDepth`. */
-async function listRecursive(
-  dir: string,
-  maxDepth: number,
-  depth = 0,
-): Promise<string[]> {
+async function listRecursive(dir: string, maxDepth: number, depth = 0): Promise<string[]> {
   if (depth > maxDepth) return [];
   const entries = await readdir(dir, { withFileTypes: true });
   const lines: string[] = [];
@@ -113,7 +102,10 @@ export function createFsTools(workspaceDir: string, allowedDirs: string[] = []):
       inputSchema: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Directory path (relative to workspace, default ".")' },
+          path: {
+            type: 'string',
+            description: 'Directory path (relative to workspace, default ".")',
+          },
           depth: { type: 'number', description: 'Max recursion depth (default 2, max 5)' },
         },
       },

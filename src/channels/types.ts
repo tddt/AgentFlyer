@@ -1,4 +1,4 @@
-import type { AgentId, ThreadKey, StreamChunk } from '../core/types.js';
+import type { AgentId, StreamChunk, ThreadKey } from '../core/types.js';
 
 /** A single inbound message from a channel. */
 export interface ChannelMessage {
@@ -70,4 +70,3 @@ export interface Channel {
     attachment: ContentAttachment,
   ): Promise<void>;
 }
-

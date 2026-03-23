@@ -47,7 +47,10 @@ async function loadWs(): Promise<WsLib | null> {
 export class WsFederationTransport implements FederationTransport {
   private handlers: MessageHandler[] = [];
   private connections = new Map<string, WsSocket>(); // peerId → socket
-  private server: { on(e: string, h: (...a: unknown[]) => void): void; close(cb?: () => void): void } | null = null;
+  private server: {
+    on(e: string, h: (...a: unknown[]) => void): void;
+    close(cb?: () => void): void;
+  } | null = null;
   private ws: WsLib | null = null;
 
   constructor(private readonly selfNodeId: string) {}
@@ -73,7 +76,7 @@ export class WsFederationTransport implements FederationTransport {
       this.connections.delete(peerId);
       logger.info('Federation peer disconnected', { peerId });
     });
-    socket.on('error', err => {
+    socket.on('error', (err) => {
       logger.warn('Federation socket error', { peerId, error: String(err) });
     });
   }
@@ -107,7 +110,7 @@ export class WsFederationTransport implements FederationTransport {
     const id = peerNodeId ?? `${host}:${port}`;
     if (this.connections.has(id)) return true;
 
-    return new Promise<boolean>(resolve => {
+    return new Promise<boolean>((resolve) => {
       const socket = new this.ws!.WebSocket(`ws://${host}:${port}`);
       const timeout = setTimeout(() => {
         socket.close();
@@ -151,7 +154,7 @@ export class WsFederationTransport implements FederationTransport {
 
   connectedPeers(): string[] {
     return Array.from(this.connections.keys()).filter(
-      id => this.connections.get(id)?.readyState === WS_OPEN,
+      (id) => this.connections.get(id)?.readyState === WS_OPEN,
     );
   }
 
@@ -160,7 +163,7 @@ export class WsFederationTransport implements FederationTransport {
       socket.close();
     }
     this.connections.clear();
-    await new Promise<void>(resolve => {
+    await new Promise<void>((resolve) => {
       if (this.server) {
         this.server.close(() => resolve());
       } else {

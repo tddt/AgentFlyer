@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
-import type { Message, StreamChunk, ToolDefinition, MessageContent } from '../../core/types.js';
 import { createLogger } from '../../core/logger.js';
+import type { Message, MessageContent, StreamChunk, ToolDefinition } from '../../core/types.js';
 import type { LLMProvider, RunParams } from './provider.js';
 
 const logger = createLogger('llm:openai');
@@ -13,7 +13,10 @@ const COMPAT_PREFIXES = ['gemini-', 'llama', 'mistral', 'mixtral', 'qwen'];
 function toOpenAIMessages(messages: Message[]): OpenAI.ChatCompletionMessageParam[] {
   return messages.map((m): OpenAI.ChatCompletionMessageParam => {
     if (m.role === 'system') {
-      return { role: 'system', content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) };
+      return {
+        role: 'system',
+        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+      };
     }
     if (typeof m.content === 'string') {
       return { role: m.role as 'user' | 'assistant', content: m.content };
@@ -27,14 +30,19 @@ function toOpenAIMessages(messages: Message[]): OpenAI.ChatCompletionMessagePara
         // We'll handle this at the top level by splitting
         return {
           role: 'tool',
-          tool_call_id: (toolResults[0] as { type: 'tool_result'; tool_use_id: string }).tool_use_id,
-          content: typeof (toolResults[0] as { content: unknown }).content === 'string'
-            ? (toolResults[0] as { content: string }).content
-            : JSON.stringify((toolResults[0] as { content: unknown }).content),
+          tool_call_id: (toolResults[0] as { type: 'tool_result'; tool_use_id: string })
+            .tool_use_id,
+          content:
+            typeof (toolResults[0] as { content: unknown }).content === 'string'
+              ? (toolResults[0] as { content: string }).content
+              : JSON.stringify((toolResults[0] as { content: unknown }).content),
         };
       }
       const textParts = parts.filter((p) => p.type === 'text');
-      return { role: 'user', content: textParts.map((p) => (p as { text: string }).text).join('\n') };
+      return {
+        role: 'user',
+        content: textParts.map((p) => (p as { text: string }).text).join('\n'),
+      };
     }
     if (m.role === 'assistant') {
       const textParts = parts.filter((p) => p.type === 'text');
@@ -42,16 +50,17 @@ function toOpenAIMessages(messages: Message[]): OpenAI.ChatCompletionMessagePara
       const result: OpenAI.ChatCompletionAssistantMessageParam = {
         role: 'assistant',
         content: textParts.map((p) => (p as { text: string }).text).join('\n') || null,
-        tool_calls: toolUseParts.length > 0
-          ? toolUseParts.map((p) => ({
-              id: (p as { id: string }).id,
-              type: 'function' as const,
-              function: {
-                name: (p as { name: string }).name,
-                arguments: JSON.stringify((p as { input: unknown }).input),
-              },
-            }))
-          : undefined,
+        tool_calls:
+          toolUseParts.length > 0
+            ? toolUseParts.map((p) => ({
+                id: (p as { id: string }).id,
+                type: 'function' as const,
+                function: {
+                  name: (p as { name: string }).name,
+                  arguments: JSON.stringify((p as { input: unknown }).input),
+                },
+              }))
+            : undefined,
       };
       return result;
     }
@@ -79,7 +88,7 @@ export class OpenAIProvider implements LLMProvider {
     // Use a placeholder key to defer validation until actual API call.
     // The real key is resolved from env when needed.
     this.client = new OpenAI({
-      apiKey: options?.apiKey ?? process.env['OPENAI_API_KEY'] ?? 'not-set',
+      apiKey: options?.apiKey ?? process.env.OPENAI_API_KEY ?? 'not-set',
       baseURL: options?.baseURL,
     });
   }
@@ -87,8 +96,7 @@ export class OpenAIProvider implements LLMProvider {
   supports(model: string): boolean {
     const m = model.toLowerCase();
     return (
-      OPENAI_PREFIXES.some((p) => m.startsWith(p)) ||
-      COMPAT_PREFIXES.some((p) => m.startsWith(p))
+      OPENAI_PREFIXES.some((p) => m.startsWith(p)) || COMPAT_PREFIXES.some((p) => m.startsWith(p))
     );
   }
 

@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  type LogLevel,
   createLogger,
   setLogLevel,
   setLogOutput,
-  type LogLevel,
 } from '../../../src/core/logger.js';
 
 describe('logger', () => {
@@ -20,7 +20,7 @@ describe('logger', () => {
   afterEach(() => {
     // restore defaults
     setLogLevel('info');
-    setLogOutput((entry) => process.stdout.write(JSON.stringify(entry) + '\n'));
+    setLogOutput((entry) => process.stdout.write(`${JSON.stringify(entry)}\n`));
   });
 
   it('emits messages with correct level and name', () => {

@@ -38,11 +38,15 @@ export async function* streamChatFromGateway(
 
   // One-shot notification: resolved when new data/end arrives.
   let notify!: () => void;
-  let waitForData = new Promise<void>((r) => { notify = r; });
+  let waitForData = new Promise<void>((r) => {
+    notify = r;
+  });
 
   const ping = (): void => {
     notify();
-    waitForData = new Promise<void>((r) => { notify = r; });
+    waitForData = new Promise<void>((r) => {
+      notify = r;
+    });
   };
 
   const req = http.request(
@@ -54,7 +58,7 @@ export async function* streamChatFromGateway(
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(body),
-        'Authorization': `Bearer ${opts.token}`,
+        Authorization: `Bearer ${opts.token}`,
       },
     },
     (res) => {
@@ -81,18 +85,37 @@ export async function* streamChatFromGateway(
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           const raw = line.slice(6).trim();
-          if (raw === '[DONE]') { closed = true; ping(); return; }
-          try { queue.push(JSON.parse(raw) as StreamChunk); ping(); }
-          catch { /* skip malformed */ }
+          if (raw === '[DONE]') {
+            closed = true;
+            ping();
+            return;
+          }
+          try {
+            queue.push(JSON.parse(raw) as StreamChunk);
+            ping();
+          } catch {
+            /* skip malformed */
+          }
         }
       });
 
-      res.on('end', () => { closed = true; ping(); });
-      res.on('error', (err: Error) => { error = err; closed = true; ping(); });
+      res.on('end', () => {
+        closed = true;
+        ping();
+      });
+      res.on('error', (err: Error) => {
+        error = err;
+        closed = true;
+        ping();
+      });
     },
   );
 
-  req.on('error', (err: Error) => { error = err; closed = true; ping(); });
+  req.on('error', (err: Error) => {
+    error = err;
+    closed = true;
+    ping();
+  });
   req.end(body);
 
   // Generator loop: drain queue, wait for more, repeat until closed.
@@ -125,7 +148,7 @@ export async function callRpc(
         headers: {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(body),
-          'Authorization': `Bearer ${token}`,
+          Authorization: `Bearer ${token}`,
         },
       },
       (res) => {
@@ -153,4 +176,3 @@ export async function callRpc(
     req.end(body);
   });
 }
-

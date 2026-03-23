@@ -18,7 +18,9 @@ export interface PeerInfo {
 export class PeerRegistry {
   private peers = new Map<string, PeerInfo>();
 
-  upsert(info: Omit<PeerInfo, 'status' | 'lastSeen'> & Partial<Pick<PeerInfo, 'status' | 'lastSeen'>>): void {
+  upsert(
+    info: Omit<PeerInfo, 'status' | 'lastSeen'> & Partial<Pick<PeerInfo, 'status' | 'lastSeen'>>,
+  ): void {
     const existing = this.peers.get(info.nodeId);
     this.peers.set(info.nodeId, {
       status: 'discovered',
@@ -37,7 +39,7 @@ export class PeerRegistry {
   }
 
   listConnected(): PeerInfo[] {
-    return this.list().filter(p => p.status === 'connected');
+    return this.list().filter((p) => p.status === 'connected');
   }
 
   remove(nodeId: string): void {

@@ -1,8 +1,8 @@
 import { EventEmitter } from 'node:events';
 import { createLogger } from '../core/logger.js';
 import type { AgentId } from '../core/types.js';
-import { buildEnvelope, parseEnvelope, type MeshEnvelope, type MeshMessageType } from './protocol.js';
-import { MeshRegistry, type MeshAgent } from './registry.js';
+import { type MeshEnvelope, type MeshMessageType, buildEnvelope } from './protocol.js';
+import { type MeshAgent, MeshRegistry } from './registry.js';
 
 const logger = createLogger('mesh:bus');
 
@@ -39,7 +39,9 @@ export class MeshBus extends EventEmitter {
 
     // Notify broadcast handlers
     for (const h of this.broadcastHandlers) {
-      try { h(envelope); } catch (err) {
+      try {
+        h(envelope);
+      } catch (err) {
         logger.error('Broadcast handler error', { error: String(err) });
       }
     }
@@ -48,14 +50,18 @@ export class MeshBus extends EventEmitter {
     if (envelope.to !== '*') {
       const handler = this.handlers.get(envelope.to as AgentId);
       if (handler) {
-        try { handler(envelope); } catch (err) {
+        try {
+          handler(envelope);
+        } catch (err) {
           logger.error('Handler error', { agentId: envelope.to, error: String(err) });
         }
       }
     } else {
       // Fanout to all
       for (const [, h] of this.handlers) {
-        try { h(envelope); } catch (err) {
+        try {
+          h(envelope);
+        } catch (err) {
           logger.error('Fanout handler error', { error: String(err) });
         }
       }

@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AnyDatabase } from '../../../src/core/runtime-compat.js';
 
 // ─── sql.js mock for openDatabase (works in pure Node.js without native bindings) ────
@@ -16,17 +16,14 @@ vi.mock('../../../src/core/runtime-compat.js', async (importOriginal) => {
         // sql.js 1.x ships with FTS4 but not FTS5. Rewrite FTS5 virtual table
         // declarations to FTS4 by stripping key=value options and changing the
         // module name. Basic MATCH queries behave identically for our use case.
-        const processed = sql.replace(
-          /USING fts5\(([^)]*)\)/gi,
-          (_match, args: string) => {
-            const cols = args
-              .split(',')
-              .map((s) => s.trim())
-              .filter((s) => !s.includes('='))
-              .join(', ');
-            return `USING fts4(${cols || 'content'})`;
-          },
-        );
+        const processed = sql.replace(/USING fts5\(([^)]*)\)/gi, (_match, args: string) => {
+          const cols = args
+            .split(',')
+            .map((s) => s.trim())
+            .filter((s) => !s.includes('='))
+            .join(', ');
+          return `USING fts4(${cols || 'content'})`;
+        });
         db.run(processed);
       },
       prepare(sql: string) {
@@ -65,21 +62,23 @@ vi.mock('../../../src/core/runtime-compat.js', async (importOriginal) => {
       close() {
         db.close();
       },
-      loadExtension() { /* no-op in sql.js */ },
+      loadExtension() {
+        /* no-op in sql.js */
+      },
     };
   }
 
   return {
     ...original,
     openDatabase: async (_filePath: string): Promise<AnyDatabase> => {
-      const db = new SQL.Database();  // in-memory
+      const db = new SQL.Database(); // in-memory
       return wrapSqlJsDb(db);
     },
   };
 });
 
-import { MemoryStore } from '../../../src/memory/store.js';
 import type { MemoryEntryId } from '../../../src/core/types.js';
+import { MemoryStore } from '../../../src/memory/store.js';
 
 function makeTestStore(): { store: MemoryStore; dir: string } {
   const dir = mkdtempSync(join(tmpdir(), 'agentflyer-memory-test-'));
@@ -212,7 +211,7 @@ describe('MemoryStore', () => {
       });
       const found = store.getById(e.id);
       expect(found).not.toBeNull();
-      expect(found!.content).toBe('findme');
+      expect(found?.content).toBe('findme');
     });
   });
 

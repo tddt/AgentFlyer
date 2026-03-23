@@ -25,14 +25,15 @@ export interface PolicyEnforcedResult {
  * Returns a decision object — caller is responsible for actually running
  * the approval flow and blocking the call.
  */
-export function checkPolicy(
-  toolName: string,
-  policy: ToolPolicy,
-): PolicyEnforcedResult {
+export function checkPolicy(toolName: string, policy: ToolPolicy): PolicyEnforcedResult {
   // Hard deny
   if (policy.denylist.includes(toolName)) {
     logger.warn('Tool denied by denylist', { toolName });
-    return { allowed: false, reason: `Tool '${toolName}' is blocked by policy`, requiresApproval: false };
+    return {
+      allowed: false,
+      reason: `Tool '${toolName}' is blocked by policy`,
+      requiresApproval: false,
+    };
   }
 
   // Allowlist gate

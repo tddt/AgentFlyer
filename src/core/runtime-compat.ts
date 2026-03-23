@@ -6,7 +6,7 @@ import { readFile as fsReadFile, writeFile as fsWriteFile } from 'node:fs/promis
 
 /** True when running inside Bun runtime (main thread or worker threads) */
 export const isBun: boolean =
-  typeof (globalThis as Record<string, unknown>)['Bun'] !== 'undefined' ||
+  typeof (globalThis as Record<string, unknown>).Bun !== 'undefined' ||
   typeof (process as { versions?: { bun?: string } }).versions?.bun !== 'undefined';
 
 // ─── SHA-256 hasher ───────────────────────────────────────────────────────────
@@ -28,7 +28,7 @@ export async function readFileText(path: string): Promise<string> {
   if (isBun) {
     // Bun.file() is faster but falls back gracefully
     try {
-      const f = (globalThis as Record<string, unknown>)['Bun'] as {
+      const f = (globalThis as Record<string, unknown>).Bun as {
         file: (p: string) => { text: () => Promise<string> };
       };
       return await f.file(path).text();

@@ -1,4 +1,4 @@
-export { type Channel, type ChannelMessage, type ChannelResponse, type InboundHandler } from './types.js';
+export type { Channel, ChannelMessage, ChannelResponse, InboundHandler } from './types.js';
 export { ChannelRegistry } from './registry.js';
 export { CliChannel, type CliChannelOptions } from './cli/index.js';
 export { WebChannel } from './web/index.js';

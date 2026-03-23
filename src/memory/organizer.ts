@@ -1,3 +1,4 @@
+import type { LLMProvider } from '../agent/llm/provider.js';
 /**
  * MemoryOrganizer — periodically summarizes episodic memories into semantic ones.
  *
@@ -6,9 +7,8 @@
  * as a new semantic-partition entry.  The original entries are marked superseded.
  */
 import { createLogger } from '../core/logger.js';
-import type { MemoryStore } from './store.js';
-import type { LLMProvider } from '../agent/llm/provider.js';
 import type { AgentId } from '../core/types.js';
+import type { MemoryStore } from './store.js';
 
 const logger = createLogger('memory:organizer');
 
@@ -43,7 +43,8 @@ export class MemoryOrganizer {
     logger.debug('Running memory organization pass', { agentId: this.agentId });
 
     // Collect recent episodic entries for this agent
-    const episodic = this.store.listRecent(EPISODIC_PARTITION_PREFIX, MAX_ENTRIES_TO_SUMMARIZE * 3)
+    const episodic = this.store
+      .listRecent(EPISODIC_PARTITION_PREFIX, MAX_ENTRIES_TO_SUMMARIZE * 3)
       .filter((e) => e.agentId === this.agentId && !e.superseded)
       .sort((a, b) => b.importance - a.importance)
       .slice(0, MAX_ENTRIES_TO_SUMMARIZE);

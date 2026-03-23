@@ -1,12 +1,12 @@
 // Ed25519 signing + AES-256-GCM encryption
 // Uses @noble/ed25519 (pure JS, no native deps) and @noble/ciphers
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { pbkdf2 as _pbkdf2, createHash, randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createHash, pbkdf2 as _pbkdf2, randomBytes } from 'node:crypto';
 import { promisify } from 'node:util';
-import * as ed from '@noble/ed25519';
 import { gcm } from '@noble/ciphers/aes';
+import * as ed from '@noble/ed25519';
 import { sha512 } from '@noble/hashes/sha512';
 import type { NodeId } from './types.js';
 

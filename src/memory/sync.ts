@@ -1,10 +1,10 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join, extname } from 'node:path';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { extname, join } from 'node:path';
 import chokidar from 'chokidar';
-import type { MemoryStore } from './store.js';
-import { embed, type EmbedConfig } from './embed.js';
-import type { MemoryEntryId } from '../core/types.js';
 import { createLogger } from '../core/logger.js';
+import type { MemoryEntryId } from '../core/types.js';
+import { type EmbedConfig, embed } from './embed.js';
+import type { MemoryStore } from './store.js';
 
 const logger = createLogger('memory:sync');
 

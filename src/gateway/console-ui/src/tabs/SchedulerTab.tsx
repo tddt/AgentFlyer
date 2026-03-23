@@ -1,44 +1,53 @@
-import { createPortal } from 'react-dom'
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Badge } from '../components/Badge.js'
-import { Button } from '../components/Button.js'
-import { rpc, useQuery } from '../hooks/useRpc.js'
-import { useToast } from '../hooks/useToast.js'
-import type { AgentInfo, AgentListResult, TaskInfo, SchedulerListResult, WorkflowDef, RunningTaskInfo, TaskRunRecord, TaskHistoryResult } from '../types.js'
+import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { Badge } from '../components/Badge.js';
+import { Button } from '../components/Button.js';
+import { rpc, useQuery } from '../hooks/useRpc.js';
+import { useToast } from '../hooks/useToast.js';
+import type {
+  AgentInfo,
+  AgentListResult,
+  RunningTaskInfo,
+  SchedulerListResult,
+  TaskHistoryResult,
+  TaskInfo,
+  TaskRunRecord,
+  WorkflowDef,
+} from '../types.js';
 
-type ScheduleMode = 'cron' | 'interval'
+type ScheduleMode = 'cron' | 'interval';
 
 interface TaskForm {
-  name: string
-  targetType: 'agent' | 'workflow'
-  agentId: string
-  workflowId: string
-  message: string
-  scheduleMode: ScheduleMode
-  cronExpr: string
-  intervalMinutes: number
-  reportTo: string
-  outputChannel: 'logs' | 'cli' | 'web'
-  enabled: boolean
+  name: string;
+  targetType: 'agent' | 'workflow';
+  agentId: string;
+  workflowId: string;
+  message: string;
+  scheduleMode: ScheduleMode;
+  cronExpr: string;
+  intervalMinutes: number;
+  reportTo: string;
+  outputChannel: 'logs' | 'cli' | 'web';
+  enabled: boolean;
 }
 
 interface TaskModalState {
-  mode: 'add' | 'edit'
-  taskId?: string
-  form: TaskForm
+  mode: 'add' | 'edit';
+  taskId?: string;
+  form: TaskForm;
 }
 
 interface SchedulePreview {
-  valid: boolean
-  cronExpr: string
-  nextRunAt?: number | null
-  error?: string
+  valid: boolean;
+  cronExpr: string;
+  nextRunAt?: number | null;
+  error?: string;
 }
 
 interface ConfirmState {
-  title: string
-  message: string
-  onConfirm: () => Promise<void>
+  title: string;
+  message: string;
+  onConfirm: () => Promise<void>;
 }
 
 function defaultTaskForm(agentId: string): TaskForm {
@@ -54,20 +63,20 @@ function defaultTaskForm(agentId: string): TaskForm {
     reportTo: '',
     outputChannel: 'logs',
     enabled: true,
-  }
+  };
 }
 
 interface ChannelsConfigResult {
   channels?: {
     defaults?: {
-      output?: 'logs' | 'cli' | 'web'
-      schedulerOutput?: 'logs' | 'cli' | 'web'
-    }
-  }
+      output?: 'logs' | 'cli' | 'web';
+      schedulerOutput?: 'logs' | 'cli' | 'web';
+    };
+  };
 }
 
 function guessScheduleMode(task: TaskInfo): ScheduleMode {
-  return task.cronExpr.startsWith('*/') ? 'interval' : 'cron'
+  return task.cronExpr.startsWith('*/') ? 'interval' : 'cron';
 }
 
 function FormModal({
@@ -77,14 +86,19 @@ function FormModal({
   onSubmit,
   children,
 }: {
-  title: string
-  description: string
-  onClose: () => void
-  onSubmit: () => void
-  children: ReactNode
+  title: string;
+  description: string;
+  onClose: () => void;
+  onSubmit: () => void;
+  children: ReactNode;
 }) {
   return createPortal(
-    <div className="fixed inset-0 z-[220] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
+    <div
+      className="fixed inset-0 z-[220] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div className="w-full max-w-3xl mx-4 max-h-[85vh] overflow-auto rounded-2xl bg-slate-900 ring-1 ring-slate-700 p-5 flex flex-col gap-4">
         <div>
           <h3 className="text-base font-semibold text-slate-100">{title}</h3>
@@ -92,29 +106,42 @@ function FormModal({
         </div>
         <div className="flex flex-col gap-3">{children}</div>
         <div className="flex justify-end gap-2 pt-2 border-t border-slate-700/50">
-          <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" size="sm" onClick={onSubmit}>Save</Button>
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" size="sm" onClick={onSubmit}>
+            Save
+          </Button>
         </div>
       </div>
     </div>,
     document.body,
-  )
+  );
 }
 
 function ConfirmModal({ state, onClose }: { state: ConfirmState; onClose: () => void }) {
   return createPortal(
-    <div className="fixed inset-0 z-[220] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
+    <div
+      className="fixed inset-0 z-[220] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div className="w-full max-w-md mx-4 rounded-2xl bg-slate-900 ring-1 ring-slate-700 p-5 flex flex-col gap-4">
         <h3 className="text-base font-semibold text-slate-100">{state.title}</h3>
         <p className="text-sm text-slate-400">{state.message}</p>
         <div className="flex justify-end gap-2">
-          <Button size="sm" variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button size="sm" variant="danger" onClick={() => void state.onConfirm()}>Confirm</Button>
+          <Button size="sm" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button size="sm" variant="danger" onClick={() => void state.onConfirm()}>
+            Confirm
+          </Button>
         </div>
       </div>
     </div>,
     document.body,
-  )
+  );
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
@@ -123,23 +150,34 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
       <span className="text-xs text-slate-400">{label}</span>
       {children}
     </label>
-  )
+  );
 }
 
 // ── History record card (collapsible result) ────────────────────────────────
-function HistoryRecordCard({ r, durStr, index, total }: {
-  r: TaskRunRecord
-  durStr: string
-  index: number
-  total: number
+function HistoryRecordCard({
+  r,
+  durStr,
+  index,
+  total,
+}: {
+  r: TaskRunRecord;
+  durStr: string;
+  index: number;
+  total: number;
 }) {
-  const [expanded, setExpanded] = useState(false)
-  const isLong = (r.result ?? '').length > 300
+  const [expanded, setExpanded] = useState(false);
+  const isLong = (r.result ?? '').length > 300;
 
   return (
-    <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)', background: 'rgba(255,255,255,0.02)' }}>
+    <div
+      className="rounded-xl overflow-hidden"
+      style={{ border: '1px solid rgba(255,255,255,0.07)', background: 'rgba(255,255,255,0.02)' }}
+    >
       {/* meta row */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3" style={{ borderBottom: r.result ? '1px solid rgba(255,255,255,0.06)' : undefined }}>
+      <div
+        className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3"
+        style={{ borderBottom: r.result ? '1px solid rgba(255,255,255,0.06)' : undefined }}
+      >
         <span className="text-xs text-slate-500 font-medium">#{total - index}</span>
         <Badge variant={r.ok ? 'green' : 'red'}>{r.ok ? 'OK' : 'Error'}</Badge>
         <span className="text-xs text-slate-400">{new Date(r.startedAt).toLocaleString()}</span>
@@ -180,7 +218,10 @@ function HistoryRecordCard({ r, durStr, index, total }: {
             </div>
           )}
           {isLong && expanded && (
-            <div className="flex justify-center py-1.5" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+            <div
+              className="flex justify-center py-1.5"
+              style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}
+            >
               <button
                 className="text-[11px] text-slate-500 hover:text-slate-300 font-medium transition-colors"
                 onClick={() => setExpanded(false)}
@@ -194,90 +235,113 @@ function HistoryRecordCard({ r, durStr, index, total }: {
         <div className="px-4 py-3 text-xs text-slate-600 italic">No output recorded.</div>
       )}
     </div>
-  )
+  );
 }
 
 export function SchedulerTab() {
-  const { toast } = useToast()
-  const [taskModal, setTaskModal] = useState<TaskModalState | null>(null)
-  const [preview, setPreview] = useState<SchedulePreview | null>(null)
-  const [previewLoading, setPreviewLoading] = useState(false)
-  const [confirmState, setConfirmState] = useState<ConfirmState | null>(null)
-  const [historyModal, setHistoryModal] = useState<{ task: TaskInfo; records: TaskRunRecord[]; loading: boolean } | null>(null)
-  const [runningTasks, setRunningTasks] = useState<RunningTaskInfo[]>([])
-  const [nowTs, setNowTs] = useState(Date.now())
+  const { toast } = useToast();
+  const [taskModal, setTaskModal] = useState<TaskModalState | null>(null);
+  const [preview, setPreview] = useState<SchedulePreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
+  const [historyModal, setHistoryModal] = useState<{
+    task: TaskInfo;
+    records: TaskRunRecord[];
+    loading: boolean;
+  } | null>(null);
+  const [runningTasks, setRunningTasks] = useState<RunningTaskInfo[]>([]);
+  const [nowTs, setNowTs] = useState(Date.now());
 
-  const { data: schedulerResult, loading, error, refetch } = useQuery<SchedulerListResult>(
-    () => rpc<SchedulerListResult>('scheduler.list'),
+  const {
+    data: schedulerResult,
+    loading,
+    error,
+    refetch,
+  } = useQuery<SchedulerListResult>(() => rpc<SchedulerListResult>('scheduler.list'), []);
+  const { data: agentResult } = useQuery<AgentListResult>(
+    () => rpc<AgentListResult>('agent.list'),
     [],
-  )
-  const { data: agentResult } = useQuery<AgentListResult>(() => rpc<AgentListResult>('agent.list'), [])
+  );
   const { data: workflowResult } = useQuery<{ workflows: WorkflowDef[] }>(
     () => rpc<{ workflows: WorkflowDef[] }>('workflow.list'),
     [],
-  )
-  const { data: configResult } = useQuery<ChannelsConfigResult>(() => rpc<ChannelsConfigResult>('config.get'), [])
+  );
+  const { data: configResult } = useQuery<ChannelsConfigResult>(
+    () => rpc<ChannelsConfigResult>('config.get'),
+    [],
+  );
 
   // Poll running tasks every 3 s
   useEffect(() => {
-    let cancelled = false
+    let cancelled = false;
     const poll = async () => {
       try {
-        const res = await rpc<{ running: RunningTaskInfo[] }>('scheduler.running')
-        if (!cancelled) setRunningTasks(res.running ?? [])
-      } catch { /* ignore */ }
-    }
-    void poll()
-    const timer = setInterval(() => { void poll() }, 3000)
-    return () => { cancelled = true; clearInterval(timer) }
-  }, [])
+        const res = await rpc<{ running: RunningTaskInfo[] }>('scheduler.running');
+        if (!cancelled) setRunningTasks(res.running ?? []);
+      } catch {
+        /* ignore */
+      }
+    };
+    void poll();
+    const timer = setInterval(() => {
+      void poll();
+    }, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
 
   // Live elapsed-time ticker
   useEffect(() => {
-    const ticker = setInterval(() => setNowTs(Date.now()), 1000)
-    return () => clearInterval(ticker)
-  }, [])
+    const ticker = setInterval(() => setNowTs(Date.now()), 1000);
+    return () => clearInterval(ticker);
+  }, []);
 
-  const tasks: TaskInfo[] = Array.isArray(schedulerResult?.tasks) ? schedulerResult.tasks : []
-  const agents: AgentInfo[] = Array.isArray(agentResult?.agents) ? agentResult.agents : []
-  const workflows: WorkflowDef[] = workflowResult?.workflows ?? []
-  const defaultAgentId = agents[0]?.agentId ?? ''
+  const tasks: TaskInfo[] = Array.isArray(schedulerResult?.tasks) ? schedulerResult.tasks : [];
+  const agents: AgentInfo[] = Array.isArray(agentResult?.agents) ? agentResult.agents : [];
+  const workflows: WorkflowDef[] = workflowResult?.workflows ?? [];
+  const defaultAgentId = agents[0]?.agentId ?? '';
   const defaultOutputChannel =
     configResult?.channels?.defaults?.schedulerOutput ??
     configResult?.channels?.defaults?.output ??
-    'logs'
+    'logs';
 
   const sortedTasks = useMemo(
-    () => [...tasks].sort((a, b) => (a.nextRunAt ?? Number.MAX_SAFE_INTEGER) - (b.nextRunAt ?? Number.MAX_SAFE_INTEGER)),
+    () =>
+      [...tasks].sort(
+        (a, b) =>
+          (a.nextRunAt ?? Number.MAX_SAFE_INTEGER) - (b.nextRunAt ?? Number.MAX_SAFE_INTEGER),
+      ),
     [tasks],
-  )
+  );
 
   const openHistory = async (task: TaskInfo) => {
-    setHistoryModal({ task, records: [], loading: true })
+    setHistoryModal({ task, records: [], loading: true });
     try {
-      const res = await rpc<TaskHistoryResult>('scheduler.history', { taskId: task.id })
-      setHistoryModal({ task, records: res.records, loading: false })
+      const res = await rpc<TaskHistoryResult>('scheduler.history', { taskId: task.id });
+      setHistoryModal({ task, records: res.records, loading: false });
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'Failed to load history', 'error')
-      setHistoryModal(null)
+      toast(e instanceof Error ? e.message : 'Failed to load history', 'error');
+      setHistoryModal(null);
     }
-  }
+  };
 
   const openCreate = () => {
-    const hasTargets = defaultAgentId || workflows.length > 0
+    const hasTargets = defaultAgentId || workflows.length > 0;
     if (!hasTargets) {
-      toast('No available agent or workflow. Please create one first.', 'error')
-      return
+      toast('No available agent or workflow. Please create one first.', 'error');
+      return;
     }
-    const form = defaultTaskForm(defaultAgentId)
-    form.outputChannel = defaultOutputChannel
+    const form = defaultTaskForm(defaultAgentId);
+    form.outputChannel = defaultOutputChannel;
     if (!defaultAgentId && workflows.length > 0) {
-      form.targetType = 'workflow'
-      form.workflowId = workflows[0]?.id ?? ''
+      form.targetType = 'workflow';
+      form.workflowId = workflows[0]?.id ?? '';
     }
-    setTaskModal({ mode: 'add', form })
-    setPreview(null)
-  }
+    setTaskModal({ mode: 'add', form });
+    setPreview(null);
+  };
 
   const openEdit = (task: TaskInfo) => {
     setTaskModal({
@@ -296,18 +360,18 @@ export function SchedulerTab() {
         outputChannel: task.outputChannel ?? defaultOutputChannel,
         enabled: task.enabled !== false,
       },
-    })
-    setPreview(null)
-  }
+    });
+    setPreview(null);
+  };
 
   useEffect(() => {
     if (!taskModal) {
-      setPreview(null)
-      return
+      setPreview(null);
+      return;
     }
 
     const timeout = setTimeout(() => {
-      setPreviewLoading(true)
+      setPreviewLoading(true);
       void rpc<SchedulePreview>('scheduler.preview', {
         cronExpr: taskModal.form.scheduleMode === 'cron' ? taskModal.form.cronExpr : undefined,
         intervalMinutes:
@@ -324,35 +388,36 @@ export function SchedulerTab() {
             error: e instanceof Error ? e.message : String(e),
           }),
         )
-        .finally(() => setPreviewLoading(false))
-    }, 250)
+        .finally(() => setPreviewLoading(false));
+    }, 250);
 
-    return () => clearTimeout(timeout)
-  }, [taskModal])
+    return () => clearTimeout(timeout);
+  }, [taskModal]);
 
   const submitTask = async () => {
-    if (!taskModal) return
-    const f = taskModal.form
+    if (!taskModal) return;
+    const f = taskModal.form;
     if (!f.name.trim() || !f.message.trim()) {
-      toast('name and message are required', 'error')
-      return
+      toast('name and message are required', 'error');
+      return;
     }
     if (f.targetType === 'agent' && !f.agentId) {
-      toast('Please select an agent', 'error')
-      return
+      toast('Please select an agent', 'error');
+      return;
     }
     if (f.targetType === 'workflow' && !f.workflowId) {
-      toast('Please select a workflow', 'error')
-      return
+      toast('Please select a workflow', 'error');
+      return;
     }
     if (!preview || !preview.valid) {
-      toast('Schedule is invalid. Please fix cron/interval first.', 'error')
-      return
+      toast('Schedule is invalid. Please fix cron/interval first.', 'error');
+      return;
     }
 
-    const targetParams = f.targetType === 'workflow'
-      ? { workflowId: f.workflowId, agentId: undefined }
-      : { agentId: f.agentId, workflowId: undefined }
+    const targetParams =
+      f.targetType === 'workflow'
+        ? { workflowId: f.workflowId, agentId: undefined }
+        : { agentId: f.agentId, workflowId: undefined };
 
     try {
       if (taskModal.mode === 'add') {
@@ -365,8 +430,8 @@ export function SchedulerTab() {
           reportTo: f.reportTo || undefined,
           outputChannel: f.outputChannel,
           enabled: f.enabled,
-        })
-        toast('Task created', 'success')
+        });
+        toast('Task created', 'success');
       } else {
         await rpc('scheduler.update', {
           taskId: taskModal.taskId,
@@ -378,83 +443,112 @@ export function SchedulerTab() {
           reportTo: f.reportTo || undefined,
           outputChannel: f.outputChannel,
           enabled: f.enabled,
-        })
-        toast('Task updated', 'success')
+        });
+        toast('Task updated', 'success');
       }
-      setTaskModal(null)
-      refetch()
+      setTaskModal(null);
+      refetch();
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'Save failed', 'error')
+      toast(e instanceof Error ? e.message : 'Save failed', 'error');
     }
-  }
+  };
 
   const runNow = async (taskId: string) => {
     try {
-      await rpc('scheduler.runNow', { taskId })
-      toast('Task executed', 'success')
-      refetch()
+      await rpc('scheduler.runNow', { taskId });
+      toast('Task executed', 'success');
+      refetch();
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'Run failed', 'error')
+      toast(e instanceof Error ? e.message : 'Run failed', 'error');
     }
-  }
+  };
 
   const removeTask = async (taskId: string) => {
     try {
-      await rpc('scheduler.cancel', { taskId })
-      toast('Task deleted', 'success')
-      refetch()
+      await rpc('scheduler.cancel', { taskId });
+      toast('Task deleted', 'success');
+      refetch();
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'Delete failed', 'error')
+      toast(e instanceof Error ? e.message : 'Delete failed', 'error');
     } finally {
-      setConfirmState(null)
+      setConfirmState(null);
     }
-  }
+  };
 
   const toggleEnabled = async (task: TaskInfo) => {
     try {
       await rpc('scheduler.update', {
         taskId: task.id,
         enabled: task.enabled === false,
-      })
-      toast(task.enabled === false ? 'Task enabled' : 'Task disabled', 'success')
-      refetch()
+      });
+      toast(task.enabled === false ? 'Task enabled' : 'Task disabled', 'success');
+      refetch();
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'Update failed', 'error')
+      toast(e instanceof Error ? e.message : 'Update failed', 'error');
     }
-  }
+  };
 
-  if (loading && !schedulerResult) return <div className="text-slate-400 text-sm p-8">Loading…</div>
-  if (error) return <div className="text-red-400 text-sm p-8">Error: {error}</div>
+  if (loading && !schedulerResult)
+    return <div className="text-slate-400 text-sm p-8">Loading…</div>;
+  if (error) return <div className="text-red-400 text-sm p-8">Error: {error}</div>;
 
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-lg font-semibold text-slate-100">Scheduler</h1>
-          <p className="text-xs text-slate-500 mt-0.5">Full visual definition for recurring tasks</p>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Full visual definition for recurring tasks
+          </p>
         </div>
         <div className="flex gap-2 items-center">
-          <Badge variant="blue">{tasks.length} task{tasks.length !== 1 ? 's' : ''}</Badge>
-          <Button size="sm" variant="ghost" onClick={refetch}>Refresh</Button>
-          <Button size="sm" variant="primary" onClick={openCreate}>+ New Task</Button>
+          <Badge variant="blue">
+            {tasks.length} task{tasks.length !== 1 ? 's' : ''}
+          </Badge>
+          <Button size="sm" variant="ghost" onClick={refetch}>
+            Refresh
+          </Button>
+          <Button size="sm" variant="primary" onClick={openCreate}>
+            + New Task
+          </Button>
         </div>
       </div>
 
       {/* ── Running Now ─────────────────────────────────────────────────── */}
       {runningTasks.length > 0 && (
-        <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(99,102,241,0.3)', background: 'rgba(99,102,241,0.05)' }}>
-          <div className="px-4 py-2.5 flex items-center gap-2" style={{ borderBottom: '1px solid rgba(99,102,241,0.15)' }}>
+        <div
+          className="rounded-xl overflow-hidden"
+          style={{ border: '1px solid rgba(99,102,241,0.3)', background: 'rgba(99,102,241,0.05)' }}
+        >
+          <div
+            className="px-4 py-2.5 flex items-center gap-2"
+            style={{ borderBottom: '1px solid rgba(99,102,241,0.15)' }}
+          >
             <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-            <span className="text-[11px] font-semibold text-indigo-300 uppercase tracking-wider">Running Now</span>
+            <span className="text-[11px] font-semibold text-indigo-300 uppercase tracking-wider">
+              Running Now
+            </span>
             <span className="ml-auto text-xs text-indigo-400">{runningTasks.length} active</span>
           </div>
-          <div className="divide-y" style={{ '--tw-divide-opacity': 1, borderColor: 'rgba(99,102,241,0.1)' } as React.CSSProperties}>
+          <div
+            className="divide-y"
+            style={
+              {
+                '--tw-divide-opacity': 1,
+                borderColor: 'rgba(99,102,241,0.1)',
+              } as React.CSSProperties
+            }
+          >
             {runningTasks.map((rt) => {
-              const elapsedSec = Math.floor((nowTs - rt.startedAt) / 1000)
-              const mins = Math.floor(elapsedSec / 60)
-              const secs = elapsedSec % 60
+              const elapsedSec = Math.floor((nowTs - rt.startedAt) / 1000);
+              const mins = Math.floor(elapsedSec / 60);
+              const secs = elapsedSec % 60;
               return (
-                <div key={rt.taskId} className="px-4 py-3 flex items-center gap-4" style={{ borderTop: '1px solid rgba(99,102,241,0.1)' }}>
+                <div
+                  key={rt.taskId}
+                  className="px-4 py-3 flex items-center gap-4"
+                  style={{ borderTop: '1px solid rgba(99,102,241,0.1)' }}
+                >
                   <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse shrink-0" />
                   <div className="flex-1 min-w-0">
                     <span className="text-sm font-medium text-slate-200">{rt.taskName}</span>
@@ -463,13 +557,14 @@ export function SchedulerTab() {
                     </span>
                   </div>
                   <span className="text-xs text-emerald-400 font-mono shrink-0">
-                    {mins > 0 ? `${mins}m ` : ''}{String(secs).padStart(2, '0')}s
+                    {mins > 0 ? `${mins}m ` : ''}
+                    {String(secs).padStart(2, '0')}s
                   </span>
                   <span className="text-xs text-slate-500 shrink-0">
                     started {new Date(rt.startedAt).toLocaleTimeString()}
                   </span>
                 </div>
-              )
+              );
             })}
           </div>
         </div>
@@ -482,14 +577,30 @@ export function SchedulerTab() {
           <table className="w-full text-sm">
             <thead className="border-b border-slate-700/50">
               <tr className="text-left">
-                <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">Task</th>
-                <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">Target</th>
-                <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">Schedule</th>
-                <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">Output</th>
-                <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">Status</th>
-                <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">Next</th>
-                <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">Last Result</th>
-                <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">Actions</th>
+                <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">
+                  Task
+                </th>
+                <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">
+                  Target
+                </th>
+                <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">
+                  Schedule
+                </th>
+                <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">
+                  Output
+                </th>
+                <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">
+                  Status
+                </th>
+                <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">
+                  Next
+                </th>
+                <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">
+                  Last Result
+                </th>
+                <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-700/50">
@@ -498,33 +609,57 @@ export function SchedulerTab() {
                   <td className="px-4 py-3 text-slate-200">
                     <div className="font-medium">{task.name}</div>
                     <div className="text-xs text-slate-500 mt-1 line-clamp-2">{task.message}</div>
-                    {task.reportTo && <div className="text-xs text-slate-500 mt-1">report to: {task.reportTo}</div>}
+                    {task.reportTo && (
+                      <div className="text-xs text-slate-500 mt-1">report to: {task.reportTo}</div>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-slate-400 font-mono text-xs">
-                    {task.workflowId
-                      ? <span className="text-purple-400">⚡ {workflows.find((w) => w.id === task.workflowId)?.name ?? task.workflowId}</span>
-                      : (task.agentId ?? '—')
-                    }
+                    {task.workflowId ? (
+                      <span className="text-purple-400">
+                        ⚡{' '}
+                        {workflows.find((w) => w.id === task.workflowId)?.name ?? task.workflowId}
+                      </span>
+                    ) : (
+                      (task.agentId ?? '—')
+                    )}
                   </td>
                   <td className="px-4 py-3">
-                    <code className="text-xs bg-slate-700/60 px-1.5 py-0.5 rounded text-slate-300 font-mono">{task.cronExpr}</code>
+                    <code className="text-xs bg-slate-700/60 px-1.5 py-0.5 rounded text-slate-300 font-mono">
+                      {task.cronExpr}
+                    </code>
                     <div className="text-xs text-slate-500 mt-1">runs: {task.runCount}</div>
                   </td>
-                  <td className="px-4 py-3 text-xs text-slate-300">{task.outputChannel ?? defaultOutputChannel}</td>
-                  <td className="px-4 py-3">
-                    <Badge variant={task.enabled === false ? 'yellow' : 'green'}>{task.enabled === false ? 'disabled' : 'enabled'}</Badge>
+                  <td className="px-4 py-3 text-xs text-slate-300">
+                    {task.outputChannel ?? defaultOutputChannel}
                   </td>
-                  <td className="px-4 py-3 text-slate-400 text-xs">{task.nextRunAt ? new Date(task.nextRunAt).toLocaleString() : '—'}</td>
+                  <td className="px-4 py-3">
+                    <Badge variant={task.enabled === false ? 'yellow' : 'green'}>
+                      {task.enabled === false ? 'disabled' : 'enabled'}
+                    </Badge>
+                  </td>
+                  <td className="px-4 py-3 text-slate-400 text-xs">
+                    {task.nextRunAt ? new Date(task.nextRunAt).toLocaleString() : '—'}
+                  </td>
                   <td className="px-4 py-3 text-xs text-slate-400 max-w-[360px]">
                     <div className="line-clamp-3">{task.lastResult ?? '—'}</div>
-                    <div className="text-slate-500 mt-1">{task.lastRunAt ? new Date(task.lastRunAt).toLocaleString() : ''}</div>
+                    <div className="text-slate-500 mt-1">
+                      {task.lastRunAt ? new Date(task.lastRunAt).toLocaleString() : ''}
+                    </div>
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap gap-2">
-                      <Button size="sm" variant="ghost" onClick={() => openEdit(task)}>Edit</Button>
-                      <Button size="sm" variant="ghost" onClick={() => void runNow(task.id)}>Run Now</Button>
-                      <Button size="sm" variant="ghost" onClick={() => void openHistory(task)}>History</Button>
-                      <Button size="sm" variant="ghost" onClick={() => void toggleEnabled(task)}>{task.enabled === false ? 'Enable' : 'Disable'}</Button>
+                      <Button size="sm" variant="ghost" onClick={() => openEdit(task)}>
+                        Edit
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => void runNow(task.id)}>
+                        Run Now
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => void openHistory(task)}>
+                        History
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => void toggleEnabled(task)}>
+                        {task.enabled === false ? 'Enable' : 'Disable'}
+                      </Button>
                       <Button
                         size="sm"
                         variant="danger"
@@ -557,7 +692,9 @@ export function SchedulerTab() {
           <Field label="Task Name">
             <input
               value={taskModal.form.name}
-              onChange={(e) => setTaskModal({ ...taskModal, form: { ...taskModal.form, name: e.target.value } })}
+              onChange={(e) =>
+                setTaskModal({ ...taskModal, form: { ...taskModal.form, name: e.target.value } })
+              }
               className="bg-slate-800 border border-slate-600 text-slate-200 text-xs rounded-lg px-2.5 py-2"
             />
           </Field>
@@ -568,7 +705,9 @@ export function SchedulerTab() {
                 <input
                   type="radio"
                   checked={taskModal.form.targetType === 'agent'}
-                  onChange={() => setTaskModal({ ...taskModal, form: { ...taskModal.form, targetType: 'agent' } })}
+                  onChange={() =>
+                    setTaskModal({ ...taskModal, form: { ...taskModal.form, targetType: 'agent' } })
+                  }
                   className="accent-indigo-500"
                 />
                 Agent
@@ -577,7 +716,12 @@ export function SchedulerTab() {
                 <input
                   type="radio"
                   checked={taskModal.form.targetType === 'workflow'}
-                  onChange={() => setTaskModal({ ...taskModal, form: { ...taskModal.form, targetType: 'workflow' } })}
+                  onChange={() =>
+                    setTaskModal({
+                      ...taskModal,
+                      form: { ...taskModal.form, targetType: 'workflow' },
+                    })
+                  }
                   className="accent-indigo-500"
                 />
                 Workflow
@@ -589,11 +733,18 @@ export function SchedulerTab() {
             <Field label="Agent">
               <select
                 value={taskModal.form.agentId}
-                onChange={(e) => setTaskModal({ ...taskModal, form: { ...taskModal.form, agentId: e.target.value } })}
+                onChange={(e) =>
+                  setTaskModal({
+                    ...taskModal,
+                    form: { ...taskModal.form, agentId: e.target.value },
+                  })
+                }
                 className="bg-slate-800 border border-slate-600 text-slate-200 text-xs rounded-lg px-2.5 py-2"
               >
                 {agents.map((a) => (
-                  <option key={a.agentId} value={a.agentId}>{a.name ?? a.agentId}</option>
+                  <option key={a.agentId} value={a.agentId}>
+                    {a.name ?? a.agentId}
+                  </option>
                 ))}
               </select>
             </Field>
@@ -603,12 +754,19 @@ export function SchedulerTab() {
             <Field label="Workflow">
               <select
                 value={taskModal.form.workflowId}
-                onChange={(e) => setTaskModal({ ...taskModal, form: { ...taskModal.form, workflowId: e.target.value } })}
+                onChange={(e) =>
+                  setTaskModal({
+                    ...taskModal,
+                    form: { ...taskModal.form, workflowId: e.target.value },
+                  })
+                }
                 className="bg-slate-800 border border-slate-600 text-slate-200 text-xs rounded-lg px-2.5 py-2"
               >
                 <option value="">— 选择工作流 —</option>
                 {workflows.map((w) => (
-                  <option key={w.id} value={w.id}>{w.name}</option>
+                  <option key={w.id} value={w.id}>
+                    {w.name}
+                  </option>
                 ))}
               </select>
             </Field>
@@ -620,7 +778,12 @@ export function SchedulerTab() {
                 <input
                   type="radio"
                   checked={taskModal.form.scheduleMode === 'cron'}
-                  onChange={() => setTaskModal({ ...taskModal, form: { ...taskModal.form, scheduleMode: 'cron' } })}
+                  onChange={() =>
+                    setTaskModal({
+                      ...taskModal,
+                      form: { ...taskModal.form, scheduleMode: 'cron' },
+                    })
+                  }
                   className="accent-indigo-500"
                 />
                 Cron
@@ -629,7 +792,12 @@ export function SchedulerTab() {
                 <input
                   type="radio"
                   checked={taskModal.form.scheduleMode === 'interval'}
-                  onChange={() => setTaskModal({ ...taskModal, form: { ...taskModal.form, scheduleMode: 'interval' } })}
+                  onChange={() =>
+                    setTaskModal({
+                      ...taskModal,
+                      form: { ...taskModal.form, scheduleMode: 'interval' },
+                    })
+                  }
                   className="accent-indigo-500"
                 />
                 Interval Minutes
@@ -641,7 +809,12 @@ export function SchedulerTab() {
             <Field label="Cron Expression">
               <input
                 value={taskModal.form.cronExpr}
-                onChange={(e) => setTaskModal({ ...taskModal, form: { ...taskModal.form, cronExpr: e.target.value } })}
+                onChange={(e) =>
+                  setTaskModal({
+                    ...taskModal,
+                    form: { ...taskModal.form, cronExpr: e.target.value },
+                  })
+                }
                 className="bg-slate-800 border border-slate-600 text-slate-200 text-xs rounded-lg px-2.5 py-2 font-mono"
               />
             </Field>
@@ -651,7 +824,12 @@ export function SchedulerTab() {
                 type="number"
                 min={1}
                 value={taskModal.form.intervalMinutes}
-                onChange={(e) => setTaskModal({ ...taskModal, form: { ...taskModal.form, intervalMinutes: Number(e.target.value) } })}
+                onChange={(e) =>
+                  setTaskModal({
+                    ...taskModal,
+                    form: { ...taskModal.form, intervalMinutes: Number(e.target.value) },
+                  })
+                }
                 className="bg-slate-800 border border-slate-600 text-slate-200 text-xs rounded-lg px-2.5 py-2"
               />
             </Field>
@@ -664,7 +842,8 @@ export function SchedulerTab() {
                 <div className="text-emerald-300">
                   Valid schedule: <span className="font-mono">{preview.cronExpr}</span>
                   <div className="text-slate-400 mt-1">
-                    Next run: {preview.nextRunAt ? new Date(preview.nextRunAt).toLocaleString() : 'n/a'}
+                    Next run:{' '}
+                    {preview.nextRunAt ? new Date(preview.nextRunAt).toLocaleString() : 'n/a'}
                   </div>
                 </div>
               )}
@@ -680,12 +859,19 @@ export function SchedulerTab() {
           <Field label="Report To (Optional)">
             <select
               value={taskModal.form.reportTo}
-              onChange={(e) => setTaskModal({ ...taskModal, form: { ...taskModal.form, reportTo: e.target.value } })}
+              onChange={(e) =>
+                setTaskModal({
+                  ...taskModal,
+                  form: { ...taskModal.form, reportTo: e.target.value },
+                })
+              }
               className="bg-slate-800 border border-slate-600 text-slate-200 text-xs rounded-lg px-2.5 py-2"
             >
               <option value="">(none)</option>
               {agents.map((a) => (
-                <option key={a.agentId} value={a.agentId}>{a.name ?? a.agentId}</option>
+                <option key={a.agentId} value={a.agentId}>
+                  {a.name ?? a.agentId}
+                </option>
               ))}
             </select>
           </Field>
@@ -693,7 +879,15 @@ export function SchedulerTab() {
           <Field label="Output Channel">
             <select
               value={taskModal.form.outputChannel}
-              onChange={(e) => setTaskModal({ ...taskModal, form: { ...taskModal.form, outputChannel: e.target.value as 'logs' | 'cli' | 'web' } })}
+              onChange={(e) =>
+                setTaskModal({
+                  ...taskModal,
+                  form: {
+                    ...taskModal.form,
+                    outputChannel: e.target.value as 'logs' | 'cli' | 'web',
+                  },
+                })
+              }
               className="bg-slate-800 border border-slate-600 text-slate-200 text-xs rounded-lg px-2.5 py-2"
             >
               <option value="logs">logs (default)</option>
@@ -707,7 +901,12 @@ export function SchedulerTab() {
               <input
                 type="checkbox"
                 checked={taskModal.form.enabled}
-                onChange={(e) => setTaskModal({ ...taskModal, form: { ...taskModal.form, enabled: e.target.checked } })}
+                onChange={(e) =>
+                  setTaskModal({
+                    ...taskModal,
+                    form: { ...taskModal.form, enabled: e.target.checked },
+                  })
+                }
                 className="accent-indigo-500"
               />
               Active after save
@@ -717,7 +916,9 @@ export function SchedulerTab() {
           <Field label="Task Message">
             <textarea
               value={taskModal.form.message}
-              onChange={(e) => setTaskModal({ ...taskModal, form: { ...taskModal.form, message: e.target.value } })}
+              onChange={(e) =>
+                setTaskModal({ ...taskModal, form: { ...taskModal.form, message: e.target.value } })
+              }
               rows={6}
               className="bg-slate-800 border border-slate-600 text-slate-200 text-xs rounded-lg px-2.5 py-2 font-mono"
             />
@@ -728,48 +929,66 @@ export function SchedulerTab() {
       {confirmState && <ConfirmModal state={confirmState} onClose={() => setConfirmState(null)} />}
 
       {/* ── History Modal ──────────────────────────────────────────── */}
-      {historyModal && createPortal(
-        <div
-          className="fixed inset-0 z-[220] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
-          onClick={(e) => { if (e.target === e.currentTarget) setHistoryModal(null) }}
-        >
-          <div className="w-full max-w-4xl max-h-[88vh] flex flex-col rounded-2xl bg-slate-900 ring-1 ring-slate-700">
-            {/* header — fixed */}
-            <div className="flex items-start justify-between shrink-0 px-5 pt-5 pb-4" style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
-              <div>
-                <h3 className="text-base font-semibold text-slate-100">Run History</h3>
-                <p className="text-xs text-slate-400 mt-0.5">{historyModal.task.name}</p>
-              </div>
-              <Button size="sm" variant="ghost" onClick={() => setHistoryModal(null)}>Close</Button>
-            </div>
-
-            {/* scrollable body */}
-            <div className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-3">
-              {historyModal.loading && (
-                <div className="flex items-center gap-2 text-sm text-slate-400 py-6">
-                  <div className="w-3.5 h-3.5 rounded-full border-2 border-indigo-500/30 border-t-indigo-400 animate-spin" />
-                  Loading history…
+      {historyModal &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[220] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setHistoryModal(null);
+            }}
+          >
+            <div className="w-full max-w-4xl max-h-[88vh] flex flex-col rounded-2xl bg-slate-900 ring-1 ring-slate-700">
+              {/* header — fixed */}
+              <div
+                className="flex items-start justify-between shrink-0 px-5 pt-5 pb-4"
+                style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}
+              >
+                <div>
+                  <h3 className="text-base font-semibold text-slate-100">Run History</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">{historyModal.task.name}</p>
                 </div>
-              )}
+                <Button size="sm" variant="ghost" onClick={() => setHistoryModal(null)}>
+                  Close
+                </Button>
+              </div>
 
-              {!historyModal.loading && historyModal.records.length === 0 && (
-                <div className="text-slate-500 text-sm py-6">No run records yet. Run the task at least once to see history.</div>
-              )}
+              {/* scrollable body */}
+              <div className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-3">
+                {historyModal.loading && (
+                  <div className="flex items-center gap-2 text-sm text-slate-400 py-6">
+                    <div className="w-3.5 h-3.5 rounded-full border-2 border-indigo-500/30 border-t-indigo-400 animate-spin" />
+                    Loading history…
+                  </div>
+                )}
 
-              {!historyModal.loading && historyModal.records.map((r, i) => {
-                const durMs = r.finishedAt - r.startedAt
-                const durStr = durMs >= 60000
-                  ? `${Math.floor(durMs / 60000)}m ${Math.floor((durMs % 60000) / 1000)}s`
-                  : `${Math.floor(durMs / 1000)}s`
-                return (
-                  <HistoryRecordCard key={i} r={r} durStr={durStr} index={i} total={historyModal.records.length} />
-                )
-              })}
+                {!historyModal.loading && historyModal.records.length === 0 && (
+                  <div className="text-slate-500 text-sm py-6">
+                    No run records yet. Run the task at least once to see history.
+                  </div>
+                )}
+
+                {!historyModal.loading &&
+                  historyModal.records.map((r, i) => {
+                    const durMs = r.finishedAt - r.startedAt;
+                    const durStr =
+                      durMs >= 60000
+                        ? `${Math.floor(durMs / 60000)}m ${Math.floor((durMs % 60000) / 1000)}s`
+                        : `${Math.floor(durMs / 1000)}s`;
+                    return (
+                      <HistoryRecordCard
+                        key={i}
+                        r={r}
+                        durStr={durStr}
+                        index={i}
+                        total={historyModal.records.length}
+                      />
+                    );
+                  })}
+              </div>
             </div>
-          </div>
-        </div>,
-        document.body,
-      )}
+          </div>,
+          document.body,
+        )}
     </div>
-  )
+  );
 }

@@ -1,9 +1,9 @@
-import type { Message } from '../../core/types.js';
-import { createLogger } from '../../core/logger.js';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { ulid } from 'ulid';
-import { fileURLToPath } from 'node:url';
-import { join, dirname } from 'node:path';
+import { createLogger } from '../../core/logger.js';
+import type { Message } from '../../core/types.js';
 
 const logger = createLogger('compactor:structured');
 
@@ -69,7 +69,10 @@ export function buildCompactionPrompt(messages: Message[]): string {
  */
 export function parseSummaryJson(raw: string): CompactionSummary {
   // Strip optional ```json ... ``` fences
-  const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+  const cleaned = raw
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```\s*$/, '')
+    .trim();
   try {
     return JSON.parse(cleaned) as CompactionSummary;
   } catch (err) {
@@ -89,17 +92,13 @@ export function parseSummaryJson(raw: string): CompactionSummary {
 /** Convert a CompactionSummary into a system-role stub message. */
 export function summaryToMessage(summary: CompactionSummary): Message {
   const facts = summary.facts.length
-    ? '\n\nKey facts:\n' + summary.facts.map((f) => `- ${f}`).join('\n')
+    ? `\n\nKey facts:\n${summary.facts.map((f) => `- ${f}`).join('\n')}`
     : '';
   const pending = summary.pendingWork.length
-    ? '\n\nPending work:\n' + summary.pendingWork.map((p) => `- ${p}`).join('\n')
+    ? `\n\nPending work:\n${summary.pendingWork.map((p) => `- ${p}`).join('\n')}`
     : '';
 
-  const text =
-    `[COMPACTED HISTORY — ${summary.messageCount} messages from ${summary.from} to ${summary.to}]\n\n` +
-    summary.narrative +
-    facts +
-    pending;
+  const text = `[COMPACTED HISTORY — ${summary.messageCount} messages from ${summary.from} to ${summary.to}]\n\n${summary.narrative}${facts}${pending}`;
 
   return { role: 'user', content: text };
 }
@@ -181,7 +180,7 @@ export function createCompactionWorker(): Worker {
       pending.resolve(msg.text ?? '');
     }
   });
-  _worker.on('error', err => {
+  _worker.on('error', (err) => {
     logger2.error('Compaction worker error', { error: String(err) });
     for (const [id, p] of _pending) {
       p.reject(err);
@@ -205,6 +204,16 @@ export async function runCompactionViaWorker(
   const id = ulid();
   return new Promise<string>((resolve, reject) => {
     _pending.set(id, { resolve, reject });
-    worker.postMessage({ id, prompt, api: { url: cfg.apiUrl, apiKey: cfg.apiKey, model: cfg.model, maxTokens: cfg.maxTokens, provider: cfg.provider } });
+    worker.postMessage({
+      id,
+      prompt,
+      api: {
+        url: cfg.apiUrl,
+        apiKey: cfg.apiKey,
+        model: cfg.model,
+        maxTokens: cfg.maxTokens,
+        provider: cfg.provider,
+      },
+    });
   });
 }

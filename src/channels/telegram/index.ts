@@ -67,7 +67,10 @@ export class TelegramChannel implements Channel {
     return `https://api.telegram.org/bot${this.opts.botToken}/${method}`;
   }
 
-  private async apiGet<T>(method: string, params: Record<string, string | number> = {}): Promise<T> {
+  private async apiGet<T>(
+    method: string,
+    params: Record<string, string | number> = {},
+  ): Promise<T> {
     const url = new URL(this.apiUrl(method));
     for (const [k, v] of Object.entries(params)) {
       url.searchParams.set(k, String(v));
@@ -124,10 +127,7 @@ export class TelegramChannel implements Channel {
 
           const chatId = msg.chat.id;
           // Allowlist check
-          if (
-            this.opts.allowedChatIds.length > 0 &&
-            !this.opts.allowedChatIds.includes(chatId)
-          ) {
+          if (this.opts.allowedChatIds.length > 0 && !this.opts.allowedChatIds.includes(chatId)) {
             logger.debug('Telegram message from non-allowed chat ignored', { chatId });
             continue;
           }

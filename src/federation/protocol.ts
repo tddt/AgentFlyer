@@ -93,30 +93,19 @@ export function canonicalize(payload: FederationPayload): string {
 }
 
 /** Sign a payload using an Ed25519 private key (PEM or KeyObject). Returns base64. */
-export function signPayload(
-  payload: FederationPayload,
-  privateKeyPem: string,
-): string {
+export function signPayload(payload: FederationPayload, privateKeyPem: string): string {
   const signer = createSign('SHA512');
   signer.update(canonicalize(payload));
   return signer.sign({ key: privateKeyPem, dsaEncoding: 'ieee-p1363' }, 'base64');
 }
 
 /** Verify the signature of a federation message against the sender's public key (base64). */
-export function verifyMessage(
-  msg: FederationMessage,
-  publicKeyBase64: string,
-): boolean {
+export function verifyMessage(msg: FederationMessage, publicKeyBase64: string): boolean {
   try {
-    const pubKeyPem =
-      `-----BEGIN PUBLIC KEY-----\n${publicKeyBase64}\n-----END PUBLIC KEY-----`;
+    const pubKeyPem = `-----BEGIN PUBLIC KEY-----\n${publicKeyBase64}\n-----END PUBLIC KEY-----`;
     const verifier = createVerify('SHA512');
     verifier.update(canonicalize(msg.payload));
-    return verifier.verify(
-      { key: pubKeyPem, dsaEncoding: 'ieee-p1363' },
-      msg.signature,
-      'base64',
-    );
+    return verifier.verify({ key: pubKeyPem, dsaEncoding: 'ieee-p1363' }, msg.signature, 'base64');
   } catch {
     return false;
   }

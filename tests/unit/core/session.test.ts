@@ -1,20 +1,25 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SessionStore } from '../../../src/core/session/store.js';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { SessionMetaStore } from '../../../src/core/session/meta.js';
-import { makeSessionKey, asAgentId, asThreadKey } from '../../../src/core/types.js';
-import type { SessionKey } from '../../../src/core/types.js';
+import { SessionStore } from '../../../src/core/session/store.js';
 import type { StoredMessage } from '../../../src/core/session/store.js';
+import { asAgentId, asThreadKey, makeSessionKey } from '../../../src/core/types.js';
+import type { SessionKey } from '../../../src/core/types.js';
 
-let tmpDir: string;
+let _tmpDir: string;
 
 function makeTestDir(): string {
   return mkdtempSync(join(tmpdir(), 'agentflyer-session-test-'));
 }
 
-function makeMsg(id: string, role: 'user' | 'assistant', content: string, sessionKey: SessionKey): StoredMessage {
+function makeMsg(
+  id: string,
+  role: 'user' | 'assistant',
+  content: string,
+  sessionKey: SessionKey,
+): StoredMessage {
   return {
     id,
     sessionKey,
@@ -129,8 +134,8 @@ describe('SessionMetaStore', () => {
     await metaStore.set(meta);
     const loaded = await metaStore.get(key);
     expect(loaded).not.toBeNull();
-    expect(loaded!.messageCount).toBe(3);
-    expect(loaded!.agentId).toBe('agent1');
+    expect(loaded?.messageCount).toBe(3);
+    expect(loaded?.agentId).toBe('agent1');
   });
 
   it('update merges fields with defaults', async () => {
@@ -143,6 +148,6 @@ describe('SessionMetaStore', () => {
   it('update persists changes', async () => {
     await metaStore.update(key, { messageCount: 7 });
     const loaded = await metaStore.get(key);
-    expect(loaded!.messageCount).toBe(7);
+    expect(loaded?.messageCount).toBe(7);
   });
 });

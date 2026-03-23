@@ -100,7 +100,7 @@ export interface AgentFlyerPlugin {
  * Throws a descriptive error if the export is missing required fields.
  */
 export async function loadPlugin(entryPath: string): Promise<AgentFlyerPlugin> {
-  const mod = await import(entryPath) as { default?: AgentFlyerPlugin };
+  const mod = (await import(entryPath)) as { default?: AgentFlyerPlugin };
   const plugin = mod.default;
   if (!plugin || typeof plugin !== 'object') {
     throw new Error(`Plugin at ${entryPath} has no default export.`);

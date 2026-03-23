@@ -14,10 +14,7 @@ const LAYER_SEPARATOR = '\n\n---\n\n';
  * Trimmable layers are dropped (tallest id first) if the prompt would
  * exceed `maxSystemTokens`.
  */
-export function buildSystemPrompt(
-  layers: PromptLayer[],
-  maxSystemTokens = 8_000,
-): BuiltPrompt {
+export function buildSystemPrompt(layers: PromptLayer[], maxSystemTokens = 8_000): BuiltPrompt {
   // Tag each layer with its token estimate
   const tagged = layers
     .filter((l) => l.content.trim().length > 0)

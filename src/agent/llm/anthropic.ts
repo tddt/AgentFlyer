@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
-import type { Message, StreamChunk, ToolDefinition, MessageContent } from '../../core/types.js';
 import { createLogger } from '../../core/logger.js';
+import type { Message, MessageContent, StreamChunk, ToolDefinition } from '../../core/types.js';
 import type { LLMProvider, RunParams } from './provider.js';
 
 const logger = createLogger('llm:anthropic');
@@ -8,9 +8,7 @@ const logger = createLogger('llm:anthropic');
 /** Models handled by this provider. */
 const ANTHROPIC_PREFIXES = ['claude-'];
 
-function toAnthropicMessages(
-  messages: Message[],
-): Anthropic.MessageParam[] {
+function toAnthropicMessages(messages: Message[]): Anthropic.MessageParam[] {
   return messages
     .filter((m) => m.role !== 'system')
     .map((m) => {
@@ -62,7 +60,7 @@ export class AnthropicProvider implements LLMProvider {
   private client: Anthropic;
 
   constructor(apiKey?: string) {
-    this.client = new Anthropic({ apiKey: apiKey ?? process.env['ANTHROPIC_API_KEY'] });
+    this.client = new Anthropic({ apiKey: apiKey ?? process.env.ANTHROPIC_API_KEY });
   }
 
   supports(model: string): boolean {
@@ -126,7 +124,10 @@ export class AnthropicProvider implements LLMProvider {
             cacheReadTokens: usage.cache_read_input_tokens,
             cacheWriteTokens: usage.cache_creation_input_tokens,
             stopReason: (event.delta.stop_reason ?? 'end_turn') as
-              'end_turn' | 'tool_use' | 'max_tokens' | 'stop_sequence',
+              | 'end_turn'
+              | 'tool_use'
+              | 'max_tokens'
+              | 'stop_sequence',
           };
         }
       }
@@ -147,7 +148,10 @@ export class AnthropicProvider implements LLMProvider {
           cacheReadTokens: usage.cache_read_input_tokens,
           cacheWriteTokens: usage.cache_creation_input_tokens,
           stopReason: (final.stop_reason ?? 'end_turn') as
-            'end_turn' | 'tool_use' | 'max_tokens' | 'stop_sequence',
+            | 'end_turn'
+            | 'tool_use'
+            | 'max_tokens'
+            | 'stop_sequence',
         };
       }
     } catch (err) {

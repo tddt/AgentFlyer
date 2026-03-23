@@ -1,5 +1,5 @@
 import { createLogger } from '../../../../core/logger.js';
-import type { SearchProvider, SearchResponse, SearchOptions } from './provider.js';
+import type { SearchOptions, SearchProvider, SearchResponse } from './provider.js';
 
 const logger = createLogger('search:serpapi');
 
@@ -34,8 +34,8 @@ export class SerpApiProvider implements SearchProvider {
   }
 
   async search(query: string, options?: SearchOptions): Promise<SearchResponse> {
-    const numResults = Math.min((options?.maxResults ?? this.opts.maxResults), 100);
-    const engine = (options?.['engine'] as string | undefined) ?? this.opts.engine;
+    const numResults = Math.min(options?.maxResults ?? this.opts.maxResults, 100);
+    const engine = (options?.engine as string | undefined) ?? this.opts.engine;
 
     logger.debug('SerpApi search', { query, numResults, engine });
 

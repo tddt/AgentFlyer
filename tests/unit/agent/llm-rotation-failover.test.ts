@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { ApiKeyRotator, buildRotator } from '../../../src/agent/llm/auth-rotation.js';
 import { FailoverProvider } from '../../../src/agent/llm/failover.js';
 import type { LLMProvider } from '../../../src/agent/llm/provider.js';
@@ -49,25 +49,25 @@ describe('buildRotator', () => {
   it('returns rotator from explicit keys', () => {
     const r = buildRotator({ keys: ['k1', 'k2'] });
     expect(r).not.toBeNull();
-    expect(r!.count).toBe(2);
+    expect(r?.count).toBe(2);
   });
 
   it('returns rotator from env var', () => {
-    process.env['TEST_ROTATOR_KEYS'] = 'env1,env2';
+    process.env.TEST_ROTATOR_KEYS = 'env1,env2';
     const r = buildRotator({ envVar: 'TEST_ROTATOR_KEYS' });
-    delete process.env['TEST_ROTATOR_KEYS'];
+    process.env.TEST_ROTATOR_KEYS = undefined;
     expect(r).not.toBeNull();
-    expect(r!.count).toBe(2);
-    expect(r!.next()).toBe('env1');
+    expect(r?.count).toBe(2);
+    expect(r?.next()).toBe('env1');
   });
 
   it('falls back to fallbackEnv', () => {
-    process.env['TEST_FALLBACK_KEY'] = 'fallback-value';
+    process.env.TEST_FALLBACK_KEY = 'fallback-value';
     const r = buildRotator({ fallbackEnv: 'TEST_FALLBACK_KEY' });
-    delete process.env['TEST_FALLBACK_KEY'];
+    process.env.TEST_FALLBACK_KEY = undefined;
     expect(r).not.toBeNull();
-    expect(r!.count).toBe(1);
-    expect(r!.next()).toBe('fallback-value');
+    expect(r?.count).toBe(1);
+    expect(r?.next()).toBe('fallback-value');
   });
 
   it('returns null when no source available', () => {
@@ -76,10 +76,10 @@ describe('buildRotator', () => {
   });
 
   it('explicit keys take priority over env var', () => {
-    process.env['TEST_ROTATOR_KEYS'] = 'from-env';
+    process.env.TEST_ROTATOR_KEYS = 'from-env';
     const r = buildRotator({ keys: ['from-keys'], envVar: 'TEST_ROTATOR_KEYS' });
-    delete process.env['TEST_ROTATOR_KEYS'];
-    expect(r!.next()).toBe('from-keys');
+    process.env.TEST_ROTATOR_KEYS = undefined;
+    expect(r?.next()).toBe('from-keys');
   });
 });
 
@@ -96,7 +96,9 @@ function makeProvider(
       if (opts.throws) throw new Error(opts.throws);
       for (const c of chunks) yield c;
     },
-    async countTokens() { return 10; },
+    async countTokens() {
+      return 10;
+    },
   };
 }
 describe('FailoverProvider', () => {
@@ -120,7 +122,13 @@ describe('FailoverProvider', () => {
     ];
     const fp = new FailoverProvider({ primary: makeProvider('p', chunks) });
     const results: StreamChunk[] = [];
-    for await (const c of fp.run({ model: 'm', systemPrompt: '', messages: [], tools: [], maxTokens: 100 })) {
+    for await (const c of fp.run({
+      model: 'm',
+      systemPrompt: '',
+      messages: [],
+      tools: [],
+      maxTokens: 100,
+    })) {
       results.push(c);
     }
     expect(results).toHaveLength(3);
@@ -136,11 +144,19 @@ describe('FailoverProvider', () => {
         calls++;
         yield { type: 'error' as const, message: 'transient' };
       },
-      async countTokens() { return 10; },
+      async countTokens() {
+        return 10;
+      },
     };
     const fp = new FailoverProvider({ primary: retryProvider, maxRetries: 2 });
     const results: StreamChunk[] = [];
-    for await (const c of fp.run({ model: 'm', systemPrompt: '', messages: [], tools: [], maxTokens: 100 })) {
+    for await (const c of fp.run({
+      model: 'm',
+      systemPrompt: '',
+      messages: [],
+      tools: [],
+      maxTokens: 100,
+    })) {
       results.push(c);
     }
     // Should have tried maxRetries+1 times then emitted final error
@@ -154,9 +170,19 @@ describe('FailoverProvider', () => {
       { type: 'text', text: 'from fallback' },
       { type: 'done', stopReason: 'end_turn', inputTokens: 0, outputTokens: 0 },
     ]);
-    const fp = new FailoverProvider({ primary: alwaysError, fallbackProvider: fallback, maxRetries: 0 });
+    const fp = new FailoverProvider({
+      primary: alwaysError,
+      fallbackProvider: fallback,
+      maxRetries: 0,
+    });
     const results: StreamChunk[] = [];
-    for await (const c of fp.run({ model: 'm', systemPrompt: '', messages: [], tools: [], maxTokens: 100 })) {
+    for await (const c of fp.run({
+      model: 'm',
+      systemPrompt: '',
+      messages: [],
+      tools: [],
+      maxTokens: 100,
+    })) {
       results.push(c);
     }
     const textChunk = results.find((c) => c.type === 'text') as { text: string } | undefined;
@@ -174,7 +200,13 @@ describe('FailoverProvider', () => {
     const alwaysFail = makeProvider('p', [{ type: 'error', message: 'fail' }]);
     const fp = new FailoverProvider({ primary: alwaysFail, maxRetries: 0 });
     const results: StreamChunk[] = [];
-    for await (const c of fp.run({ model: 'm', systemPrompt: '', messages: [], tools: [], maxTokens: 100 })) {
+    for await (const c of fp.run({
+      model: 'm',
+      systemPrompt: '',
+      messages: [],
+      tools: [],
+      maxTokens: 100,
+    })) {
       results.push(c);
     }
     expect(results.at(-1)?.type).toBe('error');

@@ -6,9 +6,9 @@
  *   send_file_to_channel   — send a file/image from the agent's workspace to a channel thread
  */
 import { existsSync } from 'node:fs';
-import { resolve, basename, extname } from 'node:path';
-import { createLogger } from '../../../core/logger.js';
+import { basename, extname, resolve } from 'node:path';
 import type { Channel } from '../../../channels/types.js';
+import { createLogger } from '../../../core/logger.js';
 import type { AgentId, ThreadKey } from '../../../core/types.js';
 import type { RegisteredTool } from '../registry.js';
 
@@ -17,12 +17,21 @@ const logger = createLogger('tools:channel');
 // ── MIME helper (no external dep) ─────────────────────────────────────────────
 
 const EXT_MIME: Record<string, string> = {
-  '.png': 'image/png',  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',  '.webp': 'image/webp', '.svg': 'image/svg+xml',
-  '.mp4': 'video/mp4',  '.webm': 'video/webm', '.mov': 'video/quicktime',
-  '.mp3': 'audio/mpeg', '.wav': 'audio/wav',   '.ogg': 'audio/ogg',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
   '.pdf': 'application/pdf',
-  '.txt': 'text/plain', '.md': 'text/markdown',
+  '.txt': 'text/plain',
+  '.md': 'text/markdown',
   '.json': 'application/json',
   '.csv': 'text/csv',
   '.zip': 'application/zip',
@@ -83,10 +92,7 @@ export function createChannelTools(deps: ChannelToolDeps): RegisteredTool[] {
         text: string;
       };
 
-      const targets =
-        channel_id === 'all'
-          ? Array.from(channels.keys())
-          : [channel_id];
+      const targets = channel_id === 'all' ? Array.from(channels.keys()) : [channel_id];
 
       const results: string[] = [];
       for (const id of targets) {
@@ -165,10 +171,7 @@ export function createChannelTools(deps: ChannelToolDeps): RegisteredTool[] {
       const mimeType = mimeForFile(absPath);
       const name = display_name ?? basename(absPath);
 
-      const targets =
-        channel_id === 'all'
-          ? Array.from(channels.keys())
-          : [channel_id];
+      const targets = channel_id === 'all' ? Array.from(channels.keys()) : [channel_id];
 
       const results: string[] = [];
       for (const id of targets) {

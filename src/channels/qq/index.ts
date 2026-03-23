@@ -46,10 +46,14 @@ export class QQChannel implements Channel {
   private tokenExpireAt = 0;
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
   private handler: InboundHandler | null = null;
-  private _webhookHandler: ((req: IncomingMessage, res: ServerResponse) => Promise<void>) | null = null;
+  private _webhookHandler: ((req: IncomingMessage, res: ServerResponse) => Promise<void>) | null =
+    null;
 
   // Maps threadKey → { groupOpenid, msgId } for replies
-  private threadMeta = new Map<ThreadKey, { groupOpenid: string; msgId: string; isC2C: boolean; openid: string }>();
+  private threadMeta = new Map<
+    ThreadKey,
+    { groupOpenid: string; msgId: string; isC2C: boolean; openid: string }
+  >();
 
   constructor(opts: QQChannelOptions) {
     this.opts = {
@@ -140,11 +144,14 @@ export class QQChannel implements Channel {
     await this.refreshToken();
 
     // Auto-refresh token every 100 minutes
-    this.refreshTimer = setInterval(() => {
-      this.refreshToken().catch((e: unknown) => {
-        logger.error('QQ token refresh failed', { error: String(e) });
-      });
-    }, 100 * 60 * 1000);
+    this.refreshTimer = setInterval(
+      () => {
+        this.refreshToken().catch((e: unknown) => {
+          logger.error('QQ token refresh failed', { error: String(e) });
+        });
+      },
+      100 * 60 * 1000,
+    );
 
     this._webhookHandler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
       const chunks: Buffer[] = [];
@@ -164,11 +171,11 @@ export class QQChannel implements Channel {
         return;
       }
 
-      const op = payload['op'] as number | undefined;
+      const op = payload.op as number | undefined;
 
       // ── OP 13: Webhook validation challenge ──────────────────────────────
       if (op === 13) {
-        const d = payload['d'] as Record<string, string> | undefined;
+        const d = payload.d as Record<string, string> | undefined;
         if (!d) {
           res.writeHead(400);
           res.end('{}');
@@ -193,8 +200,8 @@ export class QQChannel implements Channel {
       // ── OP 0: Event dispatch ──────────────────────────────────────────────
       if (op !== 0) return;
 
-      const eventType = payload['t'] as string | undefined;
-      const d = payload['d'] as Record<string, unknown> | undefined;
+      const eventType = payload.t as string | undefined;
+      const d = payload.d as Record<string, unknown> | undefined;
       if (!d) return;
 
       let text = '';
@@ -206,22 +213,25 @@ export class QQChannel implements Channel {
 
       if (eventType === 'GROUP_AT_MESSAGE_CREATE') {
         // Group @mention message
-        groupOpenid = (d['group_openid'] as string) ?? '';
-        openid = (d['author'] as Record<string, string> | undefined)?.member_openid ?? '';
-        msgId = (d['id'] as string) ?? '';
-        const rawContent = (d['content'] as string) ?? '';
+        groupOpenid = (d.group_openid as string) ?? '';
+        openid = (d.author as Record<string, string> | undefined)?.member_openid ?? '';
+        msgId = (d.id as string) ?? '';
+        const rawContent = (d.content as string) ?? '';
         text = rawContent.replace(/<@!\d+>/g, '').trim(); // strip @bot mention
 
-        if (this.opts.allowedGroupIds.length > 0 && !this.opts.allowedGroupIds.includes(groupOpenid)) {
+        if (
+          this.opts.allowedGroupIds.length > 0 &&
+          !this.opts.allowedGroupIds.includes(groupOpenid)
+        ) {
           logger.debug('QQ group message from non-allowed group skipped', { groupOpenid });
           return;
         }
         threadKey = `qq:group:${groupOpenid}` as ThreadKey;
       } else if (eventType === 'C2C_MESSAGE_CREATE') {
         // Direct message to bot
-        openid = (d['author'] as Record<string, string> | undefined)?.user_openid ?? '';
-        msgId = (d['id'] as string) ?? '';
-        text = ((d['content'] as string) ?? '').trim();
+        openid = (d.author as Record<string, string> | undefined)?.user_openid ?? '';
+        msgId = (d.id as string) ?? '';
+        text = ((d.content as string) ?? '').trim();
         isC2C = true;
         threadKey = `qq:c2c:${openid}` as ThreadKey;
       } else {

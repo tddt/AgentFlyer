@@ -28,7 +28,7 @@ export class LogBroadcaster {
   /** Hook into the global logger, keeping stdout output intact. */
   install(): void {
     setLogOutput((entry) => {
-      process.stdout.write(JSON.stringify(entry) + '\n');
+      process.stdout.write(`${JSON.stringify(entry)}\n`);
       this.push(entry as LogEntry);
     });
   }

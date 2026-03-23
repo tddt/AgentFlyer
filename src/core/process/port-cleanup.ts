@@ -52,7 +52,13 @@ export function parseWindowsListeningPids(
     const localAddress = parts[1];
     const stateValue = parts[3];
     const pidValue = parts[4];
-    if (!protocol || !localAddress || !stateValue || !pidValue || protocol.toUpperCase() !== 'TCP') {
+    if (
+      !protocol ||
+      !localAddress ||
+      !stateValue ||
+      !pidValue ||
+      protocol.toUpperCase() !== 'TCP'
+    ) {
       continue;
     }
 

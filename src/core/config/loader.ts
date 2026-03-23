@@ -1,12 +1,12 @@
-import { readFileSync, existsSync, mkdirSync } from 'node:fs';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import JSON5 from 'json5';
+import { dirname, join } from 'node:path';
 import chokidar from 'chokidar';
-import { ConfigSchema, type Config } from './schema.js';
-import { migrateV1toV2 } from './migrate.js';
+import JSON5 from 'json5';
 import { createLogger } from '../logger.js';
+import { migrateV1toV2 } from './migrate.js';
+import { type Config, ConfigSchema } from './schema.js';
 
 const logger = createLogger('config');
 
@@ -37,7 +37,9 @@ export function loadConfig(configPath?: string): Config {
     const skeleton = JSON.stringify({ version: 2, models: {}, agents: [] }, null, 2);
     mkdir(dirname(path), { recursive: true })
       .then(() => writeFile(path, skeleton, 'utf-8'))
-      .catch((err: unknown) => logger.warn('Failed to write initial config', { error: String(err) }));
+      .catch((err: unknown) =>
+        logger.warn('Failed to write initial config', { error: String(err) }),
+      );
     return result.data;
   }
 
@@ -60,7 +62,7 @@ export function loadConfig(configPath?: string): Config {
   if (
     typeof maybeV1 === 'object' &&
     maybeV1 !== null &&
-    (maybeV1['version'] === 1 || maybeV1['version'] === undefined)
+    (maybeV1.version === 1 || maybeV1.version === undefined)
   ) {
     logger.info('Detected v1 config, migrating to v2…', { path });
     parsed = migrateV1toV2(parsed);
@@ -73,9 +75,7 @@ export function loadConfig(configPath?: string): Config {
 
   const result = ConfigSchema.safeParse(parsed);
   if (!result.success) {
-    const errors = result.error.errors
-      .map((e) => `  ${e.path.join('.')}: ${e.message}`)
-      .join('\n');
+    const errors = result.error.errors.map((e) => `  ${e.path.join('.')}: ${e.message}`).join('\n');
     throw new Error(`Config validation failed in ${path}:\n${errors}`);
   }
 
@@ -92,7 +92,7 @@ export async function saveConfig(config: Config, configPath?: string): Promise<v
 
   if (existsSync(path)) {
     const existing = await readFile(path, 'utf-8');
-    await writeFile(path + '.bak', existing, 'utf-8');
+    await writeFile(`${path}.bak`, existing, 'utf-8');
   }
 
   await writeFile(path, JSON.stringify(config, null, 2), 'utf-8');

@@ -1,11 +1,11 @@
-import { defineCommand } from 'citty';
-import { spinner, note, outro } from '@clack/prompts';
+import { note, outro, spinner } from '@clack/prompts';
 import chalk from 'chalk';
+import { defineCommand } from 'citty';
 import { getDefaultConfigDir, loadConfig } from '../../core/config/loader.js';
-import { isGatewayRunning } from '../../gateway/lifecycle.js';
-import { callRpc } from '../gateway-client.js';
 import { parseSessionKey } from '../../core/types.js';
 import type { SessionKey } from '../../core/types.js';
+import { isGatewayRunning } from '../../gateway/lifecycle.js';
+import { callRpc } from '../gateway-client.js';
 
 function requireGateway(token: string, s: ReturnType<typeof spinner>): void {
   if (!token) {
@@ -34,12 +34,12 @@ const sessionsList = defineCommand({
 
     const cfg = loadConfig(args.config as string | undefined);
     const port = cfg.gateway.port;
-    const token = cfg.gateway.auth.token ?? process.env['AGENTFLYER_TOKEN'] ?? '';
+    const token = cfg.gateway.auth.token ?? process.env.AGENTFLYER_TOKEN ?? '';
     requireGateway(token, s);
 
     s.start('Fetching sessions');
     try {
-      const rpcResult = await callRpc(port, token, 'session.list', {}) as {
+      const rpcResult = (await callRpc(port, token, 'session.list', {})) as {
         sessions: Array<{
           sessionKey: string;
           agentId: string;
@@ -50,9 +50,8 @@ const sessionsList = defineCommand({
       };
       const sessions = (rpcResult.sessions ?? []).map((raw) => {
         // Fallback: parse agentId/threadKey from sessionKey when meta fields are empty
-        const parsed = (!raw.agentId || !raw.threadKey)
-          ? parseSessionKey(raw.sessionKey as SessionKey)
-          : null;
+        const parsed =
+          !raw.agentId || !raw.threadKey ? parseSessionKey(raw.sessionKey as SessionKey) : null;
         return {
           sessionKey: raw.sessionKey,
           agentId: raw.agentId || parsed?.agentId || '',
@@ -72,30 +71,19 @@ const sessionsList = defineCommand({
         return;
       }
 
-      const colKey   = 40;
+      const colKey = 40;
       const colAgent = 16;
-      const colChan  = 12;
-      const colMsgs  = 6;
+      const colChan = 12;
+      const colMsgs = 6;
       process.stdout.write(
-        '\n  ' +
-        chalk.bold('Session Key'.padEnd(colKey)) +
-        chalk.bold('Agent'.padEnd(colAgent)) +
-        chalk.bold('Channel'.padEnd(colChan)) +
-        chalk.bold('Msgs'.padEnd(colMsgs)) +
-        '\n',
+        `\n  ${chalk.bold('Session Key'.padEnd(colKey))}${chalk.bold('Agent'.padEnd(colAgent))}${chalk.bold('Channel'.padEnd(colChan))}${chalk.bold('Msgs'.padEnd(colMsgs))}\n`,
       );
-      process.stdout.write('  ' + '─'.repeat(colKey + colAgent + colChan + colMsgs) + '\n');
+      process.stdout.write(`  ${'─'.repeat(colKey + colAgent + colChan + colMsgs)}\n`);
 
       for (const sess of filtered) {
         const lastTime = sess.lastActive ?? '—';
         process.stdout.write(
-          '  ' +
-          chalk.cyan(sess.sessionKey.padEnd(colKey)) +
-          (sess.agentId ?? '').padEnd(colAgent) +
-          chalk.gray((sess.channel ?? '').padEnd(colChan)) +
-          String(sess.messageCount ?? 0).padEnd(colMsgs) +
-          chalk.dim('  ' + lastTime) +
-          '\n',
+          `  ${chalk.cyan(sess.sessionKey.padEnd(colKey))}${(sess.agentId ?? '').padEnd(colAgent)}${chalk.gray((sess.channel ?? '').padEnd(colChan))}${String(sess.messageCount ?? 0).padEnd(colMsgs)}${chalk.dim(`  ${lastTime}`)}\n`,
         );
       }
       process.stdout.write('\n');
@@ -128,14 +116,14 @@ const sessionsShow = defineCommand({
 
     const cfg = loadConfig(args.config as string | undefined);
     const port = cfg.gateway.port;
-    const token = cfg.gateway.auth.token ?? process.env['AGENTFLYER_TOKEN'] ?? '';
+    const token = cfg.gateway.auth.token ?? process.env.AGENTFLYER_TOKEN ?? '';
     requireGateway(token, s);
 
     const sessionKey = args.key as string;
-    const limit = parseInt((args.limit as string | undefined) ?? '50', 10);
+    const limit = Number.parseInt((args.limit as string | undefined) ?? '50', 10);
 
     try {
-      const rpcResult = await callRpc(port, token, 'session.messages', { sessionKey, limit }) as {
+      const rpcResult = (await callRpc(port, token, 'session.messages', { sessionKey, limit })) as {
         messages: Array<{
           role: string;
           text: string;
@@ -156,14 +144,14 @@ const sessionsShow = defineCommand({
         const roleColor = msg.role === 'user' ? chalk.blue : chalk.green;
         const roleLabel = roleColor(chalk.bold(`[${msg.role}]`));
         const timeStr = msg.timestamp ? chalk.dim(new Date(msg.timestamp).toLocaleString()) : '';
-        process.stdout.write(roleLabel + '  ' + timeStr + '\n');
+        process.stdout.write(`${roleLabel}  ${timeStr}\n`);
         if (msg.text) {
-          process.stdout.write(msg.text + '\n');
+          process.stdout.write(`${msg.text}\n`);
         }
         if (msg.tools && msg.tools.length > 0) {
           for (const t of msg.tools) {
-            process.stdout.write(chalk.yellow(`  [tool: ${t.name}]`) + '\n');
-            process.stdout.write(chalk.dim(t.input) + '\n');
+            process.stdout.write(`${chalk.yellow(`  [tool: ${t.name}]`)}\n`);
+            process.stdout.write(`${chalk.dim(t.input)}\n`);
           }
         }
         process.stdout.write('\n');
@@ -196,7 +184,7 @@ const sessionsClear = defineCommand({
 
     const cfg = loadConfig(args.config as string | undefined);
     const port = cfg.gateway.port;
-    const token = cfg.gateway.auth.token ?? process.env['AGENTFLYER_TOKEN'] ?? '';
+    const token = cfg.gateway.auth.token ?? process.env.AGENTFLYER_TOKEN ?? '';
     requireGateway(token, s);
 
     const sessionKey = args.key as string;

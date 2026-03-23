@@ -1,7 +1,7 @@
-import { createLogger } from '../../../core/logger.js';
-import type { RegisteredTool } from '../registry.js';
-import type { MemoryStore } from '../../../memory/store.js';
 import type { MemoryConfig } from '../../../core/config/schema.js';
+import { createLogger } from '../../../core/logger.js';
+import type { MemoryStore } from '../../../memory/store.js';
+import type { RegisteredTool } from '../registry.js';
 
 const logger = createLogger('tools:memory');
 
@@ -30,7 +30,11 @@ export function createMemoryTools(store: MemoryStore, config: MemoryConfig): Reg
       if (!config.enabled) {
         return { isError: false, content: 'Memory is disabled in configuration.' };
       }
-      const { query, limit = 5, partition = 'shared' } = input as {
+      const {
+        query,
+        limit = 5,
+        partition = 'shared',
+      } = input as {
         query: string;
         limit?: number;
         partition?: string;
@@ -41,9 +45,7 @@ export function createMemoryTools(store: MemoryStore, config: MemoryConfig): Reg
         if (results.length === 0) {
           return { isError: false, content: 'No memory entries found.' };
         }
-        const text = results
-          .map((r, i) => `[${i + 1}] (${r.key}) ${r.content}`)
-          .join('\n\n');
+        const text = results.map((r, i) => `[${i + 1}] (${r.key}) ${r.content}`).join('\n\n');
         return { isError: false, content: text };
       } catch (err) {
         logger.error('memory_search failed', { error: String(err) });
@@ -84,7 +86,12 @@ export function createMemoryTools(store: MemoryStore, config: MemoryConfig): Reg
       if (!config.enabled) {
         return { isError: false, content: 'Memory is disabled in configuration.' };
       }
-      const { key, body, tags = [], partition = 'shared' } = input as {
+      const {
+        key,
+        body,
+        tags = [],
+        partition = 'shared',
+      } = input as {
         key: string;
         body: string;
         tags?: string[];

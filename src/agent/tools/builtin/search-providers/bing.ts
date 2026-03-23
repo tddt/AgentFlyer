@@ -1,5 +1,5 @@
 import { createLogger } from '../../../../core/logger.js';
-import type { SearchProvider, SearchResponse, SearchOptions } from './provider.js';
+import type { SearchOptions, SearchProvider, SearchResponse } from './provider.js';
 
 const logger = createLogger('search:bing');
 
@@ -30,8 +30,8 @@ export class BingProvider implements SearchProvider {
   }
 
   async search(query: string, options?: SearchOptions): Promise<SearchResponse> {
-    const count = Math.min((options?.maxResults ?? this.opts.maxResults), 50);
-    const market = (options?.['market'] as string | undefined) ?? this.opts.market;
+    const count = Math.min(options?.maxResults ?? this.opts.maxResults, 50);
+    const market = (options?.market as string | undefined) ?? this.opts.market;
 
     logger.debug('Bing search', { query, count, market });
 

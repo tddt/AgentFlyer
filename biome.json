@@ -12,7 +12,8 @@
         "noConsole": "off"
       },
       "style": {
-        "noParameterAssign": "off"
+        "noParameterAssign": "off",
+        "noNonNullAssertion": "warn"
       },
       "correctness": {
         "noUnusedImports": "warn",
@@ -35,6 +36,12 @@
     }
   },
   "files": {
-    "ignore": ["node_modules", "dist", "coverage", "*.d.ts"]
+    "ignore": [
+      "node_modules",
+      "dist",
+      "coverage",
+      "*.d.ts",
+      "src/gateway/console-ui"
+    ]
   }
 }

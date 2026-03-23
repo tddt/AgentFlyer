@@ -1,5 +1,5 @@
 import { createLogger } from '../../core/logger.js';
-import type { ToolDefinition, ToolCallResult } from '../../core/types.js';
+import type { ToolCallResult, ToolDefinition } from '../../core/types.js';
 
 const logger = createLogger('tools:registry');
 

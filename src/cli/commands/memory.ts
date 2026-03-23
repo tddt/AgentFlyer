@@ -1,7 +1,6 @@
-import { defineCommand } from 'citty';
 import { note } from '@clack/prompts';
 import chalk from 'chalk';
-import { loadConfig } from '../../core/config/loader.js';
+import { defineCommand } from 'citty';
 import { getDefaultConfigDir } from '../../core/config/loader.js';
 import { MemoryStore } from '../../memory/store.js';
 
@@ -29,18 +28,22 @@ export const memoryCommand = defineCommand({
         await store.open();
         const entries = store.listRecent(
           args.partition as string,
-          Math.max(1, parseInt(args.limit as string, 10) || 20),
+          Math.max(1, Number.parseInt(args.limit as string, 10) || 20),
         );
         store.close();
         if (entries.length === 0) {
           note(`No memory entries in partition '${args.partition}'.`, 'Memory');
           process.exit(0);
         }
-        process.stdout.write(chalk.bold(`\n${entries.length} memory entries (${args.partition}):\n\n`));
+        process.stdout.write(
+          chalk.bold(`\n${entries.length} memory entries (${args.partition}):\n\n`),
+        );
         for (const e of entries) {
           const date = new Date(e.updatedAt).toLocaleString();
           process.stdout.write(`  ${chalk.cyan(e.key.padEnd(30))} ${chalk.gray(date)}\n`);
-          process.stdout.write(`  ${''.padEnd(30)} ${e.content.slice(0, 80)}${e.content.length > 80 ? '\u2026' : ''}\n\n`);
+          process.stdout.write(
+            `  ${''.padEnd(30)} ${e.content.slice(0, 80)}${e.content.length > 80 ? '\u2026' : ''}\n\n`,
+          );
         }
         process.exit(0);
       },
@@ -65,7 +68,7 @@ export const memoryCommand = defineCommand({
         const results = store.searchFts(
           args.query as string,
           args.partition as string,
-          parseInt(args.limit as string, 10) || 10,
+          Number.parseInt(args.limit as string, 10) || 10,
         );
         store.close();
         if (results.length === 0) {

@@ -62,8 +62,8 @@ async function callAnthropicCompact(prompt: string, api: LLMApiConfig): Promise<
     }),
   });
   if (!res.ok) throw new Error(`Anthropic API error ${res.status}: ${await res.text()}`);
-  const json = await res.json() as { content?: Array<{ type: string; text?: string }> };
-  return json.content?.find(c => c.type === 'text')?.text ?? '';
+  const json = (await res.json()) as { content?: Array<{ type: string; text?: string }> };
+  return json.content?.find((c) => c.type === 'text')?.text ?? '';
 }
 
 async function callOpenAICompact(prompt: string, api: LLMApiConfig): Promise<string> {
@@ -71,7 +71,7 @@ async function callOpenAICompact(prompt: string, api: LLMApiConfig): Promise<str
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${api.apiKey}`,
+      Authorization: `Bearer ${api.apiKey}`,
     },
     body: JSON.stringify({
       model: api.model,
@@ -80,7 +80,7 @@ async function callOpenAICompact(prompt: string, api: LLMApiConfig): Promise<str
     }),
   });
   if (!res.ok) throw new Error(`OpenAI API error ${res.status}: ${await res.text()}`);
-  const json = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
+  const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
   return json.choices?.[0]?.message?.content ?? '';
 }
 

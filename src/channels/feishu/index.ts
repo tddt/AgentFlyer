@@ -1,6 +1,6 @@
-import * as Lark from '@larksuiteoapi/node-sdk';
 import { createReadStream } from 'node:fs';
 import { basename } from 'node:path';
+import * as Lark from '@larksuiteoapi/node-sdk';
 import { createLogger } from '../../core/logger.js';
 import type { AgentId, StreamChunk, ThreadKey } from '../../core/types.js';
 import type { Channel, ChannelMessage, ContentAttachment, InboundHandler } from '../types.js';
@@ -53,7 +53,8 @@ export class FeishuChannel implements Channel {
   readonly id = 'feishu';
   readonly name = '飞书 (Lark) Bot';
 
-  private opts: Required<Omit<FeishuChannelOptions, 'agentMappings' | 'knownAgentIds'>> & Pick<FeishuChannelOptions, 'agentMappings' | 'knownAgentIds'>;
+  private opts: Required<Omit<FeishuChannelOptions, 'agentMappings' | 'knownAgentIds'>> &
+    Pick<FeishuChannelOptions, 'agentMappings' | 'knownAgentIds'>;
   private client: Lark.Client | null = null;
   private wsClient: Lark.WSClient | null = null;
 
@@ -88,10 +89,7 @@ export class FeishuChannel implements Channel {
         const { message, sender } = data;
         const { chat_id, chat_type, message_type, content, message_id } = message;
 
-        if (
-          this.opts.allowedChatIds.length > 0 &&
-          !this.opts.allowedChatIds.includes(chat_id)
-        ) {
+        if (this.opts.allowedChatIds.length > 0 && !this.opts.allowedChatIds.includes(chat_id)) {
           logger.debug('Feishu message from non-allowed chat skipped', { chatId: chat_id });
           return;
         }
@@ -111,7 +109,7 @@ export class FeishuChannel implements Channel {
 
             logger.debug('Feishu message raw', {
               rawText,
-              mentions: mentionsList.map(m => ({ key: m.key, name: m.name })),
+              mentions: mentionsList.map((m) => ({ key: m.key, name: m.name })),
               agentMappings: this.opts.agentMappings,
               knownAgentIds: this.opts.knownAgentIds,
             });
@@ -120,9 +118,13 @@ export class FeishuChannel implements Channel {
             for (const mention of mentionsList) {
               const name = mention.name ?? '';
               const mapped = this.opts.agentMappings?.[name];
-              if (mapped) { resolvedAgentId = mapped as AgentId; break; }
+              if (mapped) {
+                resolvedAgentId = mapped as AgentId;
+                break;
+              }
               if (name && this.opts.knownAgentIds?.includes(name)) {
-                resolvedAgentId = name as AgentId; break;
+                resolvedAgentId = name as AgentId;
+                break;
               }
             }
 
@@ -150,12 +152,18 @@ export class FeishuChannel implements Channel {
 
             // Strip @placeholder tokens (Feishu keys like "@_user_1") AND custom @alias patterns
             text = rawText.replace(/@\S+\s*/g, '').trim();
-          } catch { /* ignore malformed content */ }
+          } catch {
+            /* ignore malformed content */
+          }
         }
         if (!text) return;
 
         const threadKey = `feishu:${chat_id}` as ThreadKey;
-        this.threadMap.set(threadKey, { chatId: chat_id, chatType: chat_type, messageId: message_id });
+        this.threadMap.set(threadKey, {
+          chatId: chat_id,
+          chatType: chat_type,
+          messageId: message_id,
+        });
 
         const channelMsg: ChannelMessage = {
           channelId: this.id,
@@ -307,7 +315,11 @@ export class FeishuChannel implements Channel {
 
       logger.info('Feishu attachment sent', { chatId: info.chatId, displayName, mimeType });
     } catch (err: unknown) {
-      logger.error('Feishu sendAttachment failed', { error: String(err), chatId: info.chatId, displayName });
+      logger.error('Feishu sendAttachment failed', {
+        error: String(err),
+        chatId: info.chatId,
+        displayName,
+      });
       throw err;
     }
   }

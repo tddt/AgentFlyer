@@ -1,7 +1,7 @@
 import { ulid } from 'ulid';
+import type { AgentConfig } from '../../core/config/schema.js';
 import { createLogger } from '../../core/logger.js';
 import { parseSessionKey } from '../../core/types.js';
-import type { AgentConfig } from '../../core/config/schema.js';
 import type { AgentRunner } from '../runner.js';
 import type { RegisteredTool } from './registry.js';
 
@@ -121,7 +121,11 @@ export function createMeshTools(
         }
         const result = next.value;
         output = result.text || output;
-        logger.info('mesh_send: task complete', { agent_id, inputTokens: result.inputTokens, outputTokens: result.outputTokens });
+        logger.info('mesh_send: task complete', {
+          agent_id,
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+        });
         return { isError: false, content: output || '(agent returned no output)' };
       } catch (err) {
         logger.error('mesh_send: task failed', { agent_id, error: String(err) });
@@ -157,7 +161,10 @@ export function createMeshTools(
       const runner = runners.get(agent_id);
       if (!runner) {
         const available = Array.from(runners.keys()).join(', ');
-        return { isError: true, content: `Agent '${agent_id}' not found. Available: ${available || 'none'}` };
+        return {
+          isError: true,
+          content: `Agent '${agent_id}' not found. Available: ${available || 'none'}`,
+        };
       }
 
       const taskId = ulid();
@@ -195,7 +202,10 @@ export function createMeshTools(
         }
       })().catch(() => undefined);
 
-      return { isError: false, content: `Task spawned. ID: ${taskId}\nUse mesh_status to check progress.` };
+      return {
+        isError: false,
+        content: `Task spawned. ID: ${taskId}\nUse mesh_status to check progress.`,
+      };
     },
   };
 
@@ -264,14 +274,19 @@ export function createMeshTools(
       },
     },
     async handler(input) {
-      const { message, agent_ids, exclude_self = true, thread_prefix = 'mesh-bc' } = input as {
+      const {
+        message,
+        agent_ids,
+        exclude_self = true,
+        thread_prefix = 'mesh-bc',
+      } = input as {
         message: string;
         agent_ids?: string[];
         exclude_self?: boolean;
         thread_prefix?: string;
       };
 
-      let targets = agent_ids
+      const targets = agent_ids
         ? agent_ids.filter((id) => runners.has(id))
         : Array.from(runners.keys());
 
@@ -314,7 +329,10 @@ export function createMeshTools(
       const formatted = results
         .map((r) => `### ${r.agentId} (${r.ok ? 'OK' : 'ERROR'})\n${r.output}`)
         .join('\n\n---\n\n');
-      return { isError: false, content: `Broadcast to ${targets.length} agent(s):\n\n${formatted}` };
+      return {
+        isError: false,
+        content: `Broadcast to ${targets.length} agent(s):\n\n${formatted}`,
+      };
     },
   };
 
@@ -326,7 +344,7 @@ export function createMeshTools(
       name: 'mesh_discuss',
       description:
         'Run a structured multi-turn discussion between multiple agents. Each agent sees the ' +
-        'previous agent\'s response and adds its own perspective. Returns the full discussion transcript. ' +
+        "previous agent's response and adds its own perspective. Returns the full discussion transcript. " +
         'Use this for collaborative analysis, brainstorming, or consensus-building.',
       inputSchema: {
         type: 'object',
@@ -346,14 +364,20 @@ export function createMeshTools(
           },
           instructions: {
             type: 'string',
-            description: 'Optional instructions added to each turn, e.g. "Be concise, under 150 words."',
+            description:
+              'Optional instructions added to each turn, e.g. "Be concise, under 150 words."',
           },
         },
         required: ['topic', 'agent_ids'],
       },
     },
     async handler(input) {
-      const { topic, agent_ids, rounds = 1, instructions = '' } = input as {
+      const {
+        topic,
+        agent_ids,
+        rounds = 1,
+        instructions = '',
+      } = input as {
         topic: string;
         agent_ids: string[];
         rounds?: number;
@@ -379,9 +403,7 @@ export function createMeshTools(
 
           const prompt = [
             `You are participating in a group discussion. Topic:\n${topic}`,
-            round > 0 || agent_ids.indexOf(agentId) > 0
-              ? `\nDiscussion so far:\n${context}`
-              : '',
+            round > 0 || agent_ids.indexOf(agentId) > 0 ? `\nDiscussion so far:\n${context}` : '',
             instructions ? `\nInstruction: ${instructions}` : '',
             '\nPlease share your perspective or respond to the above.',
           ]
@@ -405,11 +427,11 @@ export function createMeshTools(
             const displayName = cfg?.name ?? agentId;
             const entry = `**${displayName}** (Round ${round + 1}):\n${reply}`;
             transcript.push(entry);
-            context = context + '\n\n' + entry;
+            context = `${context}\n\n${entry}`;
           } catch (err) {
             const errEntry = `**${agentId}**: Error — ${String(err)}`;
             transcript.push(errEntry);
-            context = context + '\n\n' + errEntry;
+            context = `${context}\n\n${errEntry}`;
           } finally {
             const parsed = parseSessionKey(prevThread);
             if (parsed) runner.setThread(parsed.threadKey);
@@ -450,4 +472,3 @@ export function createMeshToolStubs(): RegisteredTool[] {
     stub('mesh_discuss', 'Run a structured multi-turn discussion between multiple agents.'),
   ];
 }
-

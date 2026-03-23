@@ -30,7 +30,9 @@ export class HeartbeatScheduler {
       const ts = Date.now();
       logger.debug('Heartbeat', { agentId });
       for (const h of this.handlers) {
-        try { h(agentId, ts); } catch (err) {
+        try {
+          h(agentId, ts);
+        } catch (err) {
           logger.error('Heartbeat handler error', { agentId, error: String(err) });
         }
       }

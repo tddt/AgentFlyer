@@ -1,6 +1,6 @@
-import { defineCommand } from 'citty';
 import { note } from '@clack/prompts';
 import chalk from 'chalk';
+import { defineCommand } from 'citty';
 import { loadConfig } from '../../core/config/loader.js';
 
 /**
@@ -20,8 +20,8 @@ export const federationCommand = defineCommand({
           [
             'Federation is not yet enabled.',
             '',
-            'To enable, set ' + chalk.cyan('federation.enabled = true') + ' in agentflyer.json',
-            'and configure peer nodes under ' + chalk.cyan('federation.peers') + '.',
+            `To enable, set ${chalk.cyan('federation.enabled = true')} in agentflyer.json`,
+            `and configure peer nodes under ${chalk.cyan('federation.peers')}.`,
             '',
             'See docs/05-decentralized-economy.md for design details.',
           ].join('\n'),

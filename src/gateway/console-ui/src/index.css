@@ -1,17 +1,21 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,400;0,500;1,400&display=swap');
+@import url("https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,400;0,500;1,400&display=swap");
 @import "tailwindcss";
 
 /* ─── Base ────────────────────────────────────────────────── */
-html, body {
-  font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+html,
+body {
+  font-family: "Outfit", system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
 }
 
 /* ─── Monospace ───────────────────────────────────────────── */
-code, kbd, pre, .font-mono {
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace !important;
+code,
+kbd,
+pre,
+.font-mono {
+  font-family: "JetBrains Mono", "Fira Code", ui-monospace, monospace !important;
   font-feature-settings: "liga" 1, "calt" 1;
 }
 
@@ -20,13 +24,20 @@ code, kbd, pre, .font-mono {
   scrollbar-width: thin;
   scrollbar-color: rgba(99, 102, 241, 0.22) transparent;
 }
-::-webkit-scrollbar { width: 4px; height: 4px; }
-::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
 ::-webkit-scrollbar-thumb {
   background: rgba(99, 102, 241, 0.28);
   border-radius: 999px;
 }
-::-webkit-scrollbar-thumb:hover { background: rgba(99, 102, 241, 0.5); }
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(99, 102, 241, 0.5);
+}
 
 /* ─── Selection ───────────────────────────────────────────── */
 ::selection {
@@ -41,26 +52,52 @@ code, kbd, pre, .font-mono {
 }
 
 /* ─── Form elements ───────────────────────────────────────── */
-input, textarea, select {
+input,
+textarea,
+select {
   font-family: inherit;
 }
 
 /* ─── Animations ──────────────────────────────────────────── */
 @keyframes af-fade-up {
-  from { opacity: 0; transform: translateY(8px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 @keyframes af-slide-right {
-  from { opacity: 0; transform: translateX(14px); }
-  to   { opacity: 1; transform: translateX(0); }
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 @keyframes af-scale-in {
-  from { opacity: 0; transform: scale(0.94); }
-  to   { opacity: 1; transform: scale(1); }
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
-.af-fade-up     { animation: af-fade-up     340ms cubic-bezier(0.16,1,0.3,1) both; }
-.af-slide-right { animation: af-slide-right 260ms cubic-bezier(0.16,1,0.3,1) both; }
-.af-scale-in    { animation: af-scale-in    200ms cubic-bezier(0.16,1,0.3,1) both; }
+.af-fade-up {
+  animation: af-fade-up 340ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.af-slide-right {
+  animation: af-slide-right 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.af-scale-in {
+  animation: af-scale-in 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
 
 /* ─── Doc Prose (Markdown → HTML renderer) ────────────────── */
 .doc-prose {
@@ -72,32 +109,60 @@ input, textarea, select {
 .doc-prose h2,
 .doc-prose h3,
 .doc-prose h4 {
-  font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+  font-family: "Outfit", system-ui, -apple-system, sans-serif;
   font-weight: 600;
   color: #e2e8f0;
   margin-top: 1.5em;
   margin-bottom: 0.5em;
 }
-.doc-prose h1 { font-size: 1.35em; padding-bottom: 0.35em; border-bottom: 1px solid rgba(255,255,255,0.08); }
-.doc-prose h2 { font-size: 1.15em; padding-bottom: 0.25em; border-bottom: 1px solid rgba(255,255,255,0.06); }
-.doc-prose h3 { font-size: 1.0em; color: #a5b4fc; }
-.doc-prose h4 { font-size: 0.9em; color: #94a3b8; }
-.doc-prose p  { margin: 0.65em 0; }
-.doc-prose a  { color: #818cf8; text-decoration: underline; text-underline-offset: 2px; }
-.doc-prose a:hover { color: #a5b4fc; }
-.doc-prose strong { color: #e2e8f0; font-weight: 600; }
-.doc-prose em     { color: #94a3b8; font-style: italic; }
+.doc-prose h1 {
+  font-size: 1.35em;
+  padding-bottom: 0.35em;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.doc-prose h2 {
+  font-size: 1.15em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.doc-prose h3 {
+  font-size: 1.0em;
+  color: #a5b4fc;
+}
+.doc-prose h4 {
+  font-size: 0.9em;
+  color: #94a3b8;
+}
+.doc-prose p {
+  margin: 0.65em 0;
+}
+.doc-prose a {
+  color: #818cf8;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.doc-prose a:hover {
+  color: #a5b4fc;
+}
+.doc-prose strong {
+  color: #e2e8f0;
+  font-weight: 600;
+}
+.doc-prose em {
+  color: #94a3b8;
+  font-style: italic;
+}
 .doc-prose blockquote {
-  border-left: 3px solid rgba(99,102,241,0.4);
+  border-left: 3px solid rgba(99, 102, 241, 0.4);
   padding: 0.3em 0.9em;
   margin: 0.9em 0;
   color: #94a3b8;
-  background: rgba(99,102,241,0.06);
+  background: rgba(99, 102, 241, 0.06);
   border-radius: 0 6px 6px 0;
 }
 .doc-prose pre {
-  background: rgba(0,0,0,0.35);
-  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 8px;
   padding: 0.9em 1.1em;
   overflow-x: auto;
@@ -113,12 +178,12 @@ input, textarea, select {
   font-size: inherit;
 }
 .doc-prose code {
-  background: rgba(99,102,241,0.12);
+  background: rgba(99, 102, 241, 0.12);
   color: #a5b4fc;
   padding: 0.15em 0.4em;
   border-radius: 4px;
   font-size: 12px;
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
 }
 .doc-prose table {
   border-collapse: collapse;
@@ -127,31 +192,38 @@ input, textarea, select {
   font-size: 12.5px;
 }
 .doc-prose th {
-  background: rgba(99,102,241,0.12);
+  background: rgba(99, 102, 241, 0.12);
   color: #a5b4fc;
   font-weight: 600;
   padding: 0.5em 0.8em;
   text-align: left;
-  border: 1px solid rgba(255,255,255,0.08);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 .doc-prose td {
   padding: 0.45em 0.8em;
-  border: 1px solid rgba(255,255,255,0.06);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   vertical-align: top;
 }
 .doc-prose tr:nth-child(even) td {
-  background: rgba(255,255,255,0.02);
+  background: rgba(255, 255, 255, 0.02);
 }
 .doc-prose ul,
 .doc-prose ol {
   padding-left: 1.4em;
   margin: 0.6em 0;
 }
-.doc-prose li { margin: 0.25em 0; }
-.doc-prose ul li::marker { color: rgba(99,102,241,0.7); }
-.doc-prose ol li::marker { color: #a5b4fc; font-weight: 600; }
+.doc-prose li {
+  margin: 0.25em 0;
+}
+.doc-prose ul li::marker {
+  color: rgba(99, 102, 241, 0.7);
+}
+.doc-prose ol li::marker {
+  color: #a5b4fc;
+  font-weight: 600;
+}
 .doc-prose hr {
   border: none;
-  border-top: 1px solid rgba(255,255,255,0.08);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
   margin: 1.5em 0;
 }

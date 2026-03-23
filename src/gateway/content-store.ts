@@ -34,12 +34,21 @@ export interface ContentItem {
 // ── MIME / type helpers ───────────────────────────────────────────────────────
 
 const EXT_MIME: Record<string, string> = {
-  '.png': 'image/png',  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',  '.webp': 'image/webp', '.svg': 'image/svg+xml',
-  '.mp4': 'video/mp4',  '.webm': 'video/webm', '.mov': 'video/quicktime',
-  '.mp3': 'audio/mpeg', '.wav': 'audio/wav',   '.ogg': 'audio/ogg',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
   '.pdf': 'application/pdf',
-  '.txt': 'text/plain', '.md': 'text/markdown',
+  '.txt': 'text/plain',
+  '.md': 'text/markdown',
   '.json': 'application/json',
   '.csv': 'text/csv',
   '.zip': 'application/zip',
@@ -82,9 +91,7 @@ export class ContentStore {
       if (!workspace) continue;
 
       const outputDir = agentCfg.persona?.outputDir ?? 'output';
-      const absOutput = outputDir.startsWith('/')
-        ? outputDir
-        : join(workspace, outputDir);
+      const absOutput = outputDir.startsWith('/') ? outputDir : join(workspace, outputDir);
 
       if (!existsSync(absOutput)) continue;
 
@@ -123,10 +130,7 @@ export class ContentStore {
 }
 
 /** Recursively list files one level deep under dir. */
-async function scanDir(
-  dir: string,
-  depth = 0,
-): Promise<{ filePath: string; name: string }[]> {
+async function scanDir(dir: string, depth = 0): Promise<{ filePath: string; name: string }[]> {
   if (depth > 1) return [];
   const entries = await readdir(dir, { withFileTypes: true });
   const results: { filePath: string; name: string }[] = [];

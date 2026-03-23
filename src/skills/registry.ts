@@ -1,11 +1,11 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join, basename } from 'node:path';
-import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { basename, join } from 'node:path';
 import matter from 'gray-matter';
 import type { Config } from '../core/config/schema.js';
-import type { SkillId } from '../core/types.js';
 import { createLogger } from '../core/logger.js';
+import type { SkillId } from '../core/types.js';
 
 const logger = createLogger('skills:registry');
 
@@ -54,9 +54,7 @@ export class SkillRegistry {
 
   /** Return only skills whose IDs are in the given allow-list */
   filterByIds(ids: string[]): SkillMeta[] {
-    return ids
-      .map((id) => this.skills.get(id as SkillId))
-      .filter((s): s is SkillMeta => s != null);
+    return ids.map((id) => this.skills.get(id as SkillId)).filter((s): s is SkillMeta => s != null);
   }
 
   size(): number {
@@ -75,10 +73,7 @@ export class SkillRegistry {
  *   <dir>/<skill>/SKILL.md           — direct skill dir
  *   <dir>/<collection>/<skill>/SKILL.md — collection dir (no SKILL.md at top level)
  */
-export function scanSkillsDir(
-  dir: string,
-  shortDescMaxLen = 60,
-): SkillMeta[] {
+export function scanSkillsDir(dir: string, shortDescMaxLen = 60): SkillMeta[] {
   if (!existsSync(dir)) return [];
 
   const results: SkillMeta[] = [];
@@ -117,12 +112,13 @@ export function parseSkillFile(filePath: string, shortDescMaxLen = 60): SkillMet
     const raw = readFileSync(filePath, 'utf-8');
     const { data, content } = matter(raw);
 
-    const id = (data['id'] as string | undefined) ?? basename(join(filePath, '../')) as SkillId;
-    const name: string = (data['name'] as string | undefined) ?? id;
-    const description: string = (data['description'] as string | undefined) ?? content.slice(0, 200).trim();
+    const id = (data.id as string | undefined) ?? (basename(join(filePath, '../')) as SkillId);
+    const name: string = (data.name as string | undefined) ?? id;
+    const description: string =
+      (data.description as string | undefined) ?? content.slice(0, 200).trim();
     const shortDesc = truncateToSentence(description, shortDescMaxLen);
-    const tags: string[] = (data['tags'] as string[] | undefined) ?? [];
-    const apiKeyRequired: boolean = (data['apiKeyRequired'] as boolean | undefined) ?? false;
+    const tags: string[] = (data.tags as string[] | undefined) ?? [];
+    const apiKeyRequired: boolean = (data.apiKeyRequired as boolean | undefined) ?? false;
 
     const contentHash = createHash('sha256').update(raw).digest('hex');
 
@@ -150,7 +146,7 @@ function truncateToSentence(text: string, maxLen: number): string {
   const lastPeriod = slice.lastIndexOf('.');
   const lastSpace = slice.lastIndexOf(' ');
   const cut = lastPeriod > maxLen / 2 ? lastPeriod + 1 : lastSpace > 0 ? lastSpace : maxLen;
-  return slice.slice(0, cut).trimEnd() + '…';
+  return `${slice.slice(0, cut).trimEnd()}…`;
 }
 
 /**

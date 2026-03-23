@@ -1,9 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { join } from 'node:path';
 import JSON5 from 'json5';
-import { ConfigSchema, type Config, type AgentConfig } from './schema.js';
 import { createLogger } from '../logger.js';
+import { type AgentConfig, type Config, ConfigSchema } from './schema.js';
 
 const logger = createLogger('config:migrate');
 
@@ -18,9 +18,9 @@ export function migrateV1toV2(raw: unknown): unknown {
   const v1 = raw as Record<string, unknown>;
 
   // Detect v1: either explicit version:1 or has agents.list shape
-  const agentsField = v1['agents'] as Record<string, unknown> | undefined;
+  const agentsField = v1.agents as Record<string, unknown> | undefined;
   const isV1 =
-    v1['version'] === 1 ||
+    v1.version === 1 ||
     (typeof agentsField === 'object' && agentsField !== null && 'list' in agentsField);
 
   if (!isV1) return raw; // already v2 or unknown — leave alone
@@ -28,85 +28,89 @@ export function migrateV1toV2(raw: unknown): unknown {
   logger.info('Migrating v1 config to v2');
 
   // ── agents.list → agents (top-level array) ────────────────────────────────
-  const v1Agents = (agentsField?.['list'] as unknown[] | undefined) ?? [];
-  const v1Defaults = agentsField?.['defaults'] as Record<string, unknown> | undefined;
-  const v1DefaultModel = v1Defaults?.['model'] as Record<string, unknown> | undefined;
-  const defaultModelPrimary = (v1DefaultModel?.['primary'] as string | undefined) ?? 'claude-opus-4-5';
+  const v1Agents = (agentsField?.list as unknown[] | undefined) ?? [];
+  const v1Defaults = agentsField?.defaults as Record<string, unknown> | undefined;
+  const v1DefaultModel = v1Defaults?.model as Record<string, unknown> | undefined;
+  const defaultModelPrimary = (v1DefaultModel?.primary as string | undefined) ?? 'claude-opus-4-5';
 
   // Build models registry from defaults.model if present
   const models: Record<string, unknown> = {};
   if (defaultModelPrimary) {
-    models['smart'] = { provider: 'anthropic', id: defaultModelPrimary, maxTokens: 8192 };
+    models.smart = { provider: 'anthropic', id: defaultModelPrimary, maxTokens: 8192 };
   }
-  models['fast'] = { provider: 'anthropic', id: 'claude-haiku-3-5', maxTokens: 8192 };
-  models['local'] = { provider: 'ollama', id: 'qwen2.5:7b', maxTokens: 4096 };
+  models.fast = { provider: 'anthropic', id: 'claude-haiku-3-5', maxTokens: 8192 };
+  models.local = { provider: 'ollama', id: 'qwen2.5:7b', maxTokens: 4096 };
 
   const migratedAgents = v1Agents.map((a) => {
     const agent = a as Record<string, unknown>;
-    const oldPolicy = agent['toolPolicy'] as Record<string, unknown> | undefined;
-    const oldModel = agent['model'] as Record<string, unknown> | undefined;
+    const oldPolicy = agent.toolPolicy as Record<string, unknown> | undefined;
+    const oldModel = agent.model as Record<string, unknown> | undefined;
 
     // Determine model alias: if agent had custom primary, register it
     let modelAlias: string | undefined;
-    if (oldModel?.['primary'] && oldModel['primary'] !== defaultModelPrimary) {
-      const alias = `agent-${String(agent['id'] ?? 'main')}`;
-      models[alias] = { provider: 'anthropic', id: oldModel['primary'], maxTokens: oldModel['maxTokens'] ?? 8192 };
+    if (oldModel?.primary && oldModel.primary !== defaultModelPrimary) {
+      const alias = `agent-${String(agent.id ?? 'main')}`;
+      models[alias] = {
+        provider: 'anthropic',
+        id: oldModel.primary,
+        maxTokens: oldModel.maxTokens ?? 8192,
+      };
       modelAlias = alias;
     }
 
     return {
-      id: agent['id'] ?? 'main',
-      name: agent['name'],
-      workspace: agent['workspace'],
-      skills: agent['skills'] ?? [],
+      id: agent.id ?? 'main',
+      name: agent.name,
+      workspace: agent.workspace,
+      skills: agent.skills ?? [],
       model: modelAlias,
-      mesh: agent['mesh'],
-      owners: agent['owners'] ?? [],
+      mesh: agent.mesh,
+      owners: agent.owners ?? [],
       // toolPolicy.{denylist,requireApproval} → tools.{deny,approval}
       tools: {
-        allow: oldPolicy?.['allowlist'],
-        deny: oldPolicy?.['denylist'] ?? [],
-        approval: oldPolicy?.['requireApproval'] ?? ['bash'],
+        allow: oldPolicy?.allowlist,
+        deny: oldPolicy?.denylist ?? [],
+        approval: oldPolicy?.requireApproval ?? ['bash'],
       },
-      soulFile: agent['soulFile'],
-      agentsFile: agent['agentsFile'],
+      soulFile: agent.soulFile,
+      agentsFile: agent.agentsFile,
     };
   });
 
   // ── skills: load.extraDirs → dirs, shortDescLength → summaryLength ────────
-  const v1Skills = v1['skills'] as Record<string, unknown> | undefined;
+  const v1Skills = v1.skills as Record<string, unknown> | undefined;
   const migratedSkills: Record<string, unknown> = {
-    dirs: (v1Skills?.['load'] as Record<string, unknown> | undefined)?.['extraDirs'] ?? [],
-    compact: v1Skills?.['compact'] ?? true,
-    summaryLength: v1Skills?.['shortDescLength'] ?? 60,
+    dirs: (v1Skills?.load as Record<string, unknown> | undefined)?.extraDirs ?? [],
+    compact: v1Skills?.compact ?? true,
+    summaryLength: v1Skills?.shortDescLength ?? 60,
     // entries is intentionally dropped — no runtime consumer in AgentFlyer
   };
 
   // ── federation: simplified economy field names ─────────────────────────────
-  const v1Fed = v1['federation'] as Record<string, unknown> | undefined;
-  const v1Econ = v1Fed?.['economy'] as Record<string, unknown> | undefined;
-  const v1Contrib = v1Econ?.['contribution'] as Record<string, unknown> | undefined;
-  const v1Spend = v1Econ?.['spending'] as Record<string, unknown> | undefined;
+  const v1Fed = v1.federation as Record<string, unknown> | undefined;
+  const v1Econ = v1Fed?.economy as Record<string, unknown> | undefined;
+  const v1Contrib = v1Econ?.contribution as Record<string, unknown> | undefined;
+  const v1Spend = v1Econ?.spending as Record<string, unknown> | undefined;
   const migratedFed = v1Fed
     ? {
-        enabled: v1Fed['enabled'] ?? false,
-        peers: v1Fed['peers'] ?? [],
-        discovery: v1Fed['discovery'],
+        enabled: v1Fed.enabled ?? false,
+        peers: v1Fed.peers ?? [],
+        discovery: v1Fed.discovery,
         economy: v1Econ
           ? {
-              mode: v1Econ['mode'] ?? 'invite-only',
+              mode: v1Econ.mode ?? 'invite-only',
               earn: {
-                maxDaily: v1Contrib?.['maxDailyFC'] ?? 100,
-                maxPerTask: v1Contrib?.['maxPerTaskFC'] ?? 20,
+                maxDaily: v1Contrib?.maxDailyFC ?? 100,
+                maxPerTask: v1Contrib?.maxPerTaskFC ?? 20,
               },
               spend: {
-                maxDaily: v1Spend?.['maxDailyFC'] ?? 200,
-                minBalance: v1Spend?.['requireBalanceAbove'] ?? 10,
+                maxDaily: v1Spend?.maxDailyFC ?? 200,
+                minBalance: v1Spend?.requireBalanceAbove ?? 10,
               },
-              peerToolPolicy: v1Econ['remotePeerToolPolicy'] ?? 'read-only',
+              peerToolPolicy: v1Econ.remotePeerToolPolicy ?? 'read-only',
               notifications: {
-                onContribution: v1Econ['notifyOnContribution'] ?? true,
-                monthlyReport: v1Econ['monthlyReport'] ?? true,
+                onContribution: v1Econ.notifyOnContribution ?? true,
+                monthlyReport: v1Econ.monthlyReport ?? true,
               },
             }
           : undefined,
@@ -115,19 +119,19 @@ export function migrateV1toV2(raw: unknown): unknown {
 
   return {
     version: 2,
-    gateway: v1['gateway'],
+    gateway: v1.gateway,
     models,
     defaults: {
       model: defaultModelPrimary === 'claude-opus-4-5' ? 'smart' : 'fast',
-      maxTokens: (v1DefaultModel?.['maxTokens'] as number | undefined) ?? 8192,
-      workspace: v1Defaults?.['workspace'],
+      maxTokens: (v1DefaultModel?.maxTokens as number | undefined) ?? 8192,
+      workspace: v1Defaults?.workspace,
     },
-    context: v1['context'],
+    context: v1.context,
     agents: migratedAgents,
     skills: migratedSkills,
-    memory: v1['memory'],
+    memory: v1.memory,
     federation: migratedFed,
-    log: v1['log'],
+    log: v1.log,
   };
 }
 
@@ -184,12 +188,11 @@ export function migrateFromOpenclaw(openclawPath: string): Config {
     throw new Error(`Failed to parse openclaw.json: ${String(err)}`);
   }
 
-  const defaultModelPrimary =
-    oc.agents?.defaults?.model?.primary ?? 'claude-opus-4-5';
+  const defaultModelPrimary = oc.agents?.defaults?.model?.primary ?? 'claude-opus-4-5';
 
   // Build models registry
   const models: Record<string, { provider: string; id: string; maxTokens: number }> = {
-    fast:  { provider: 'anthropic', id: 'claude-haiku-3-5', maxTokens: 8192 },
+    fast: { provider: 'anthropic', id: 'claude-haiku-3-5', maxTokens: 8192 },
     smart: { provider: 'anthropic', id: defaultModelPrimary, maxTokens: 8192 },
     local: { provider: 'ollama', id: 'qwen2.5:7b', maxTokens: 4096 },
   };
@@ -199,7 +202,8 @@ export function migrateFromOpenclaw(openclawPath: string): Config {
     name: a.id,
     workspace: a.workspace,
     skills: a.skills ?? [],
-    model: a.model?.primary && a.model.primary !== defaultModelPrimary ? a.model.primary : undefined,
+    model:
+      a.model?.primary && a.model.primary !== defaultModelPrimary ? a.model.primary : undefined,
     mesh: {
       role: 'coordinator',
       capabilities: [],
@@ -270,6 +274,3 @@ export function detectOpenclawConfig(): string | null {
   }
   return null;
 }
-
-
-

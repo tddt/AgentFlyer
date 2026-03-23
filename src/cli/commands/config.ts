@@ -1,10 +1,10 @@
-import { defineCommand } from 'citty';
+import { constants, accessSync, readFileSync } from 'node:fs';
+import { createConnection } from 'node:net';
 import { note, outro } from '@clack/prompts';
 import chalk from 'chalk';
+import { defineCommand } from 'citty';
 import JSON5 from 'json5';
-import { readFileSync, accessSync, constants } from 'node:fs';
-import { createConnection } from 'node:net';
-import { loadConfig, saveConfig, getDefaultConfigPath } from '../../core/config/loader.js';
+import { getDefaultConfigPath, loadConfig, saveConfig } from '../../core/config/loader.js';
 import { ConfigSchema } from '../../core/config/schema.js';
 
 export const configCommand = defineCommand({
@@ -20,7 +20,7 @@ export const configCommand = defineCommand({
       },
       run({ args }) {
         const cfg = loadConfig(args.config as string | undefined);
-        process.stdout.write(JSON.stringify(cfg, null, 2) + '\n');
+        process.stdout.write(`${JSON.stringify(cfg, null, 2)}\n`);
         process.exit(0);
       },
     }),
@@ -28,7 +28,7 @@ export const configCommand = defineCommand({
     path: defineCommand({
       meta: { name: 'path', description: 'Print path to the config file' },
       run() {
-        process.stdout.write(getDefaultConfigPath() + '\n');
+        process.stdout.write(`${getDefaultConfigPath()}\n`);
         process.exit(0);
       },
     }),
@@ -96,9 +96,17 @@ export const configCommand = defineCommand({
         let errors = 0;
         let warnings = 0;
 
-        const ok = (msg: string): void => { lines.push(chalk.green('  ✔  ') + msg); };
-        const fail = (msg: string): void => { errors++; lines.push(chalk.red('  ✘  ') + msg); };
-        const warn = (msg: string): void => { warnings++; lines.push(chalk.yellow('  ⚠  ') + msg); };
+        const ok = (msg: string): void => {
+          lines.push(chalk.green('  ✔  ') + msg);
+        };
+        const fail = (msg: string): void => {
+          errors++;
+          lines.push(chalk.red('  ✘  ') + msg);
+        };
+        const warn = (msg: string): void => {
+          warnings++;
+          lines.push(chalk.yellow('  ⚠  ') + msg);
+        };
 
         // ── 1. File exists and is readable ────────────────────────────────
         let rawText = '';
@@ -137,11 +145,13 @@ export const configCommand = defineCommand({
             const apiKey =
               (model as { apiKey?: string }).apiKey ??
               process.env[`AGENTFLYER_${key.toUpperCase()}_API_KEY`] ??
-              process.env['AGENTFLYER_API_KEY'];
+              process.env.AGENTFLYER_API_KEY;
             if (apiKey) {
               ok(`Model "${key}": API key present`);
             } else {
-              warn(`Model "${key}": no API key (set models.${key}.apiKey or AGENTFLYER_${key.toUpperCase()}_API_KEY)`);
+              warn(
+                `Model "${key}": no API key (set models.${key}.apiKey or AGENTFLYER_${key.toUpperCase()}_API_KEY)`,
+              );
             }
           }
 
@@ -172,7 +182,9 @@ export const configCommand = defineCommand({
                 accessSync(wsDir, constants.W_OK);
                 ok(`Agent "${agent.id}": workspace writable (${wsDir})`);
               } catch {
-                warn(`Agent "${agent.id}": workspace not writable (${wsDir}) — will be created on start`);
+                warn(
+                  `Agent "${agent.id}": workspace not writable (${wsDir}) — will be created on start`,
+                );
               }
             }
           }
@@ -181,8 +193,13 @@ export const configCommand = defineCommand({
           const port = cfg.gateway.port;
           const portFree = await new Promise<boolean>((resolve) => {
             const socket = createConnection(port, '127.0.0.1');
-            socket.on('connect', () => { socket.destroy(); resolve(false); });
-            socket.on('error', () => { resolve(true); });
+            socket.on('connect', () => {
+              socket.destroy();
+              resolve(false);
+            });
+            socket.on('error', () => {
+              resolve(true);
+            });
           });
           if (portFree) {
             ok(`Gateway port ${port} is available`);
@@ -195,13 +212,13 @@ export const configCommand = defineCommand({
         if (errors > 0) process.exit(1);
 
         function printSummary(msgs: string[], errs: number, warns: number): void {
-          process.stdout.write('\n' + chalk.bold('AgentFlyer Config Doctor\n') + '\n');
-          for (const l of msgs) process.stdout.write(l + '\n');
+          process.stdout.write(`\n${chalk.bold('AgentFlyer Config Doctor\n')}\n`);
+          for (const l of msgs) process.stdout.write(`${l}\n`);
           process.stdout.write('\n');
           if (errs === 0 && warns === 0) {
             process.stdout.write(chalk.green.bold('Everything looks good!\n'));
           } else {
-            if (errs > 0) process.stdout.write(chalk.red.bold(`${errs} error(s)  `) );
+            if (errs > 0) process.stdout.write(chalk.red.bold(`${errs} error(s)  `));
             if (warns > 0) process.stdout.write(chalk.yellow.bold(`${warns} warning(s)`));
             process.stdout.write('\n');
           }
@@ -210,7 +227,10 @@ export const configCommand = defineCommand({
     }),
 
     migrate: defineCommand({
-      meta: { name: 'migrate', description: 'Migrate config from OpenClaw or legacy AgentFlyer v1 format' },
+      meta: {
+        name: 'migrate',
+        description: 'Migrate config from OpenClaw or legacy AgentFlyer v1 format',
+      },
       args: {
         from: {
           type: 'string',
@@ -232,8 +252,8 @@ export const configCommand = defineCommand({
         const { existsSync } = await import('node:fs');
         const { readFile, writeFile } = await import('node:fs/promises');
 
-        const srcPath = (args.from as string | undefined) ??
-          [homedir(), '.openclaw', 'openclaw.json'].join('/');
+        const srcPath =
+          (args.from as string | undefined) ?? [homedir(), '.openclaw', 'openclaw.json'].join('/');
 
         if (!existsSync(srcPath)) {
           note(`Source config not found: ${srcPath}`, 'Error');
@@ -251,19 +271,22 @@ export const configCommand = defineCommand({
         // Basic migration mapping — copies top-level known fields
         const src = raw as Record<string, unknown>;
         const migrated: Record<string, unknown> = {
-          agents: (src['agents'] as unknown[]) ?? [],
-          models: (src['models'] as Record<string, unknown>) ?? {},
-          gateway: (src['gateway'] as Record<string, unknown>) ?? {},
-          defaults: (src['defaults'] as Record<string, unknown>) ?? {},
-          federation: (src['federation'] as Record<string, unknown>) ?? { enabled: false, peers: [] },
-          log: (src['log'] as Record<string, unknown>) ?? {},
-          scheduler: (src['scheduler'] as Record<string, unknown>) ?? {},
+          agents: (src.agents as unknown[]) ?? [],
+          models: (src.models as Record<string, unknown>) ?? {},
+          gateway: (src.gateway as Record<string, unknown>) ?? {},
+          defaults: (src.defaults as Record<string, unknown>) ?? {},
+          federation: (src.federation as Record<string, unknown>) ?? {
+            enabled: false,
+            peers: [],
+          },
+          log: (src.log as Record<string, unknown>) ?? {},
+          scheduler: (src.scheduler as Record<string, unknown>) ?? {},
         };
 
         const parsed = ConfigSchema.safeParse(migrated);
         if (parsed.success) {
           if (args.dry) {
-            process.stdout.write(JSON.stringify(parsed.data, null, 2) + '\n');
+            process.stdout.write(`${JSON.stringify(parsed.data, null, 2)}\n`);
             note('Dry run complete — no file written.', 'Migrate');
             return;
           }
@@ -274,10 +297,10 @@ export const configCommand = defineCommand({
           note(`Migrated config written to ${dest}`, 'Migrate complete');
         } else {
           note(
-            'Migration produced an invalid config:\n' + parsed.error.message,
+            `Migration produced an invalid config:\n${parsed.error.message}`,
             'Validation error',
           );
-          process.stdout.write(JSON.stringify(migrated, null, 2) + '\n');
+          process.stdout.write(`${JSON.stringify(migrated, null, 2)}\n`);
           process.exit(1);
         }
       },

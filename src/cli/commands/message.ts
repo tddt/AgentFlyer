@@ -1,7 +1,7 @@
-import { defineCommand } from 'citty';
-import { spinner, note, outro } from '@clack/prompts';
-import chalk from 'chalk';
 import { readFile } from 'node:fs/promises';
+import { note, outro, spinner } from '@clack/prompts';
+import chalk from 'chalk';
+import { defineCommand } from 'citty';
 import { getDefaultConfigDir, loadConfig } from '../../core/config/loader.js';
 import { isGatewayRunning } from '../../gateway/lifecycle.js';
 import { streamChatFromGateway } from '../gateway-client.js';
@@ -45,14 +45,14 @@ export const messageCommand = defineCommand({
         const running = await isGatewayRunning(dataDir);
         if (!running) {
           s.stop(chalk.red('Gateway is not running'));
-          note('Start the gateway first with ' + chalk.bold('agentflyer start'), 'Not running');
+          note(`Start the gateway first with ${chalk.bold('agentflyer start')}`, 'Not running');
           process.exit(1);
         }
         s.stop('Connected');
 
         const cfg = loadConfig(args.config as string | undefined);
         const port = cfg.gateway.port;
-        const token = cfg.gateway.auth.token ?? process.env['AGENTFLYER_TOKEN'] ?? '';
+        const token = cfg.gateway.auth.token ?? process.env.AGENTFLYER_TOKEN ?? '';
         if (!token) {
           note('Set gateway.auth.token in config or AGENTFLYER_TOKEN env.', 'Error');
           process.exit(1);
@@ -77,7 +77,13 @@ export const messageCommand = defineCommand({
         process.stdout.write(chalk.dim(`\n  [${agentId}] ↗ streaming…\n\n`));
 
         try {
-          for await (const chunk of streamChatFromGateway({ port, token, agentId, message: text, thread })) {
+          for await (const chunk of streamChatFromGateway({
+            port,
+            token,
+            agentId,
+            message: text,
+            thread,
+          })) {
             if (chunk.type === 'text_delta' && chunk.text) {
               process.stdout.write(chunk.text);
             }

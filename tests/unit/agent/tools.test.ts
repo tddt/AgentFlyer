@@ -1,11 +1,11 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
-  checkPolicy,
-  filterAllowedTools,
-  autoApprove,
-  denyApproval,
-  policyBlockedResult,
   type ToolPolicy,
+  autoApprove,
+  checkPolicy,
+  denyApproval,
+  filterAllowedTools,
+  policyBlockedResult,
 } from '../../../src/agent/tools/policy.js';
 import { ToolRegistry } from '../../../src/agent/tools/registry.js';
 
@@ -164,8 +164,16 @@ describe('ToolRegistry', () => {
   it('getDefinitions() returns all registered definitions', () => {
     const reg = makeRegistry();
     reg.registerMany([
-      { definition: { name: 'a', description: '', inputSchema: {} }, handler: async () => ({ isError: false, content: '' }), category: 'x' },
-      { definition: { name: 'b', description: '', inputSchema: {} }, handler: async () => ({ isError: false, content: '' }), category: 'x' },
+      {
+        definition: { name: 'a', description: '', inputSchema: {} },
+        handler: async () => ({ isError: false, content: '' }),
+        category: 'x',
+      },
+      {
+        definition: { name: 'b', description: '', inputSchema: {} },
+        handler: async () => ({ isError: false, content: '' }),
+        category: 'x',
+      },
     ]);
     const defs = reg.getDefinitions();
     expect(defs).toHaveLength(2);
@@ -197,7 +205,9 @@ describe('ToolRegistry', () => {
     const reg = makeRegistry();
     reg.register({
       definition: { name: 'boom', description: '', inputSchema: {} },
-      handler: async () => { throw new Error('oops'); },
+      handler: async () => {
+        throw new Error('oops');
+      },
       category: 'test',
     });
     const result = await reg.execute('boom', {});
@@ -207,7 +217,11 @@ describe('ToolRegistry', () => {
 
   it('list() returns all registered tools', () => {
     const reg = makeRegistry();
-    reg.register({ definition: { name: 'x', description: '', inputSchema: {} }, handler: async () => ({ isError: false, content: '' }), category: 'c' });
+    reg.register({
+      definition: { name: 'x', description: '', inputSchema: {} },
+      handler: async () => ({ isError: false, content: '' }),
+      category: 'c',
+    });
     expect(reg.list()).toHaveLength(1);
     expect(reg.list()[0]?.definition.name).toBe('x');
   });

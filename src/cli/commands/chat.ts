@@ -1,13 +1,13 @@
-import { defineCommand } from 'citty';
 import { intro, note } from '@clack/prompts';
 import chalk from 'chalk';
+import { defineCommand } from 'citty';
+import { CliChannel } from '../../channels/cli/index.js';
+import type { ChannelMessage } from '../../channels/types.js';
 import { loadConfig } from '../../core/config/loader.js';
 import { getDefaultConfigDir } from '../../core/config/loader.js';
-import { startGateway, isGatewayRunning } from '../../gateway/lifecycle.js';
-import { CliChannel } from '../../channels/cli/index.js';
 import { setLogLevel } from '../../core/logger.js';
-import type { AgentId, ThreadKey, StreamChunk } from '../../core/types.js';
-import type { ChannelMessage } from '../../channels/types.js';
+import type { AgentId, StreamChunk, ThreadKey } from '../../core/types.js';
+import { isGatewayRunning, startGateway } from '../../gateway/lifecycle.js';
 import { streamChatFromGateway } from '../gateway-client.js';
 
 export const chatCommand = defineCommand({
@@ -86,7 +86,7 @@ export const chatCommand = defineCommand({
     if (gatewayRunning) {
       // ── Remote mode: connect to the running gateway via HTTP SSE ─────────
       const port = config.gateway.port;
-      const token = config.gateway.auth.token ?? process.env['AGENTFLYER_TOKEN'] ?? '';
+      const token = config.gateway.auth.token ?? process.env.AGENTFLYER_TOKEN ?? '';
       if (!token) {
         note('No auth token found. Set gateway.auth.token in agentflyer.json.', 'Error');
         process.exit(1);
@@ -113,11 +113,16 @@ export const chatCommand = defineCommand({
         }
 
         async function* remoteStream(): AsyncIterable<StreamChunk> {
-          yield* streamChatFromGateway({ port, token, agentId: agentId!, message: text, thread: threadKey });
+          yield* streamChatFromGateway({
+            port,
+            token,
+            agentId: agentId!,
+            message: text,
+            thread: threadKey,
+          });
         }
         await channel.sendStream({ agentId: agentId as AgentId, threadKey }, remoteStream());
       });
-
     } else {
       // ── Local mode: start gateway in-process ──────────────────────────────
       const instance = await startGateway(config, dataDir);

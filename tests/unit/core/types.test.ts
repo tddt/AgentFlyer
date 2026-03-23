@@ -1,10 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
+  asAgentId,
+  asSessionKey,
+  asThreadKey,
   makeSessionKey,
   parseSessionKey,
-  asAgentId,
-  asThreadKey,
-  asSessionKey,
 } from '../../../src/core/types.js';
 import type { AgentId, ThreadKey } from '../../../src/core/types.js';
 
@@ -26,8 +26,8 @@ describe('types — branded helpers', () => {
       const key = makeSessionKey('my-agent' as AgentId, 'thread-abc' as ThreadKey);
       const parsed = parseSessionKey(key);
       expect(parsed).not.toBeNull();
-      expect(parsed!.agentId).toBe('my-agent');
-      expect(parsed!.threadKey).toBe('thread-abc');
+      expect(parsed?.agentId).toBe('my-agent');
+      expect(parsed?.threadKey).toBe('thread-abc');
     });
 
     it('returns null for invalid format', () => {

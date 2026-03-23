@@ -1,5 +1,5 @@
 import { createLogger } from '../../../../core/logger.js';
-import type { SearchProvider, SearchResponse, SearchOptions } from './provider.js';
+import type { SearchOptions, SearchProvider, SearchResponse } from './provider.js';
 
 const logger = createLogger('search:duckduckgo');
 
@@ -90,7 +90,7 @@ export class DuckDuckGoProvider implements SearchProvider {
       }
     }
 
-    const answer = data.AbstractText ? undefined : undefined; // only use as result, not summary
+    const _answer = data.AbstractText ? undefined : undefined; // only use as result, not summary
 
     return {
       provider: this.name,

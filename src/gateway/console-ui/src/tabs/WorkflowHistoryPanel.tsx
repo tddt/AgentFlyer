@@ -2,23 +2,23 @@
  * WorkflowHistoryPanel — displays the last 100 workflow run records.
  * Fetches from workflow.history RPC; collapsible per-run cards.
  */
-import { useState } from 'react'
-import { rpc, useQuery } from '../hooks/useRpc.js'
-import { Badge } from '../components/Badge.js'
-import { Button } from '../components/Button.js'
-import type { WorkflowDef, WorkflowRunRecord } from '../types.js'
+import { useState } from 'react';
+import { Badge } from '../components/Badge.js';
+import { Button } from '../components/Button.js';
+import { rpc, useQuery } from '../hooks/useRpc.js';
+import type { WorkflowDef, WorkflowRunRecord } from '../types.js';
 
 function diffSnapshot(
   current: Record<string, string> | undefined,
   prev: Record<string, string> | undefined,
 ): Record<string, string> {
-  if (!current || Object.keys(current).length === 0) return {}
-  if (!prev) return { ...current }
-  const delta: Record<string, string> = {}
+  if (!current || Object.keys(current).length === 0) return {};
+  if (!prev) return { ...current };
+  const delta: Record<string, string> = {};
   for (const [k, v] of Object.entries(current)) {
-    if (!(k in prev) || prev[k] !== v) delta[k] = v
+    if (!(k in prev) || prev[k] !== v) delta[k] = v;
   }
-  return delta
+  return delta;
 }
 
 export function WorkflowHistoryPanel({
@@ -26,29 +26,29 @@ export function WorkflowHistoryPanel({
   agents,
   onClose,
 }: {
-  workflows: WorkflowDef[]
-  agents: { agentId: string; name?: string }[]
-  onClose: () => void
+  workflows: WorkflowDef[];
+  agents: { agentId: string; name?: string }[];
+  onClose: () => void;
 }) {
   const { data, loading } = useQuery<{ runs: WorkflowRunRecord[] }>(
     () => rpc<{ runs: WorkflowRunRecord[] }>('workflow.history'),
     [],
-  )
-  const [expanded, setExpanded] = useState<string | null>(null)
+  );
+  const [expanded, setExpanded] = useState<string | null>(null);
 
-  const runs = data?.runs ?? []
+  const runs = data?.runs ?? [];
 
-  const workflowName = (wid: string) =>
-    workflows.find((w) => w.id === wid)?.name ?? wid
+  const workflowName = (wid: string) => workflows.find((w) => w.id === wid)?.name ?? wid;
 
-  const agentName = (agentId: string) =>
-    agents.find((a) => a.agentId === agentId)?.name ?? agentId
+  const agentName = (agentId: string) => agents.find((a) => a.agentId === agentId)?.name ?? agentId;
 
   return (
     <div className="flex flex-col gap-5">
       <div className="flex items-center justify-between">
         <h2 className="text-base font-semibold text-slate-100">Run History</h2>
-        <Button size="sm" variant="ghost" onClick={onClose}>← Back</Button>
+        <Button size="sm" variant="ghost" onClick={onClose}>
+          ← Back
+        </Button>
       </div>
 
       {loading && <p className="text-xs text-slate-500">Loading…</p>}
@@ -62,12 +62,11 @@ export function WorkflowHistoryPanel({
 
       <div className="flex flex-col gap-2">
         {runs.map((r) => {
-          const isOpen = expanded === r.runId
-          const wfDef = workflows.find((w) => w.id === r.workflowId)
-          const duration =
-            r.finishedAt
-              ? `${((r.finishedAt - r.startedAt) / 1000).toFixed(1)}s`
-              : null
+          const isOpen = expanded === r.runId;
+          const wfDef = workflows.find((w) => w.id === r.workflowId);
+          const duration = r.finishedAt
+            ? `${((r.finishedAt - r.startedAt) / 1000).toFixed(1)}s`
+            : null;
 
           return (
             <div
@@ -112,9 +111,9 @@ export function WorkflowHistoryPanel({
                     </div>
                   )}
                   {r.stepResults.map((sr, si) => {
-                    const step = wfDef?.steps.find((s) => s.id === sr.stepId)
-                    const prevSnap = si > 0 ? r.stepResults[si - 1]?.varsSnapshot : undefined
-                    const newVars = diffSnapshot(sr.varsSnapshot, prevSnap)
+                    const step = wfDef?.steps.find((s) => s.id === sr.stepId);
+                    const prevSnap = si > 0 ? r.stepResults[si - 1]?.varsSnapshot : undefined;
+                    const newVars = diffSnapshot(sr.varsSnapshot, prevSnap);
                     return (
                       <div
                         key={sr.stepId}
@@ -140,43 +139,61 @@ export function WorkflowHistoryPanel({
                         )}
                         {Object.keys(newVars).length > 0 && (
                           <div className="rounded-md bg-emerald-950/40 ring-1 ring-emerald-800/40 px-2.5 py-2 flex flex-col gap-1">
-                            <span className="text-[10px] text-emerald-500 font-medium uppercase tracking-wider mb-0.5">本步赋值变量</span>
+                            <span className="text-[10px] text-emerald-500 font-medium uppercase tracking-wider mb-0.5">
+                              本步赋值变量
+                            </span>
                             {Object.entries(newVars).map(([k, v]) => (
-                              <div key={k} className="grid grid-cols-[auto_1fr] gap-2 items-start font-mono text-[11px]">
-                                <span className="text-emerald-400 shrink-0 whitespace-nowrap">{k}</span>
+                              <div
+                                key={k}
+                                className="grid grid-cols-[auto_1fr] gap-2 items-start font-mono text-[11px]"
+                              >
+                                <span className="text-emerald-400 shrink-0 whitespace-nowrap">
+                                  {k}
+                                </span>
                                 <span className="text-slate-300 break-all">{v}</span>
                               </div>
                             ))}
                           </div>
                         )}
                       </div>
-                    )
+                    );
                   })}
 
                   {/* Global variables summary for this run */}
                   {(() => {
-                    const latestSnap = [...r.stepResults].reverse().find((s) => s.varsSnapshot && Object.keys(s.varsSnapshot).length > 0)?.varsSnapshot
-                    if (!latestSnap || Object.keys(latestSnap).length === 0) return null
+                    const latestSnap = [...r.stepResults]
+                      .reverse()
+                      .find(
+                        (s) => s.varsSnapshot && Object.keys(s.varsSnapshot).length > 0,
+                      )?.varsSnapshot;
+                    if (!latestSnap || Object.keys(latestSnap).length === 0) return null;
                     return (
                       <div className="rounded-lg bg-slate-800/50 ring-1 ring-slate-700/40 px-3 py-2 flex flex-col gap-1.5">
-                        <span className="text-[10px] text-slate-500 font-medium uppercase tracking-wider">📦 全部变量 ({Object.keys(latestSnap).length})</span>
+                        <span className="text-[10px] text-slate-500 font-medium uppercase tracking-wider">
+                          📦 全部变量 ({Object.keys(latestSnap).length})
+                        </span>
                         <div className="flex flex-col gap-1 font-mono">
                           {Object.entries(latestSnap).map(([k, v]) => (
-                            <div key={k} className="grid grid-cols-[auto_1fr] gap-2 items-start text-[11px]">
-                              <span className="text-indigo-400 shrink-0 whitespace-nowrap">{k}</span>
+                            <div
+                              key={k}
+                              className="grid grid-cols-[auto_1fr] gap-2 items-start text-[11px]"
+                            >
+                              <span className="text-indigo-400 shrink-0 whitespace-nowrap">
+                                {k}
+                              </span>
                               <span className="text-slate-300 break-all">{v}</span>
                             </div>
                           ))}
                         </div>
                       </div>
-                    )
+                    );
                   })()}
                 </div>
               )}
             </div>
-          )
+          );
         })}
       </div>
     </div>
-  )
+  );
 }

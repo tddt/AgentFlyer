@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 import { defineCommand, runMain } from 'citty';
-import { startCommand } from './commands/start.js';
+import { agentCommand } from './commands/agent.js';
 import { chatCommand } from './commands/chat.js';
 import { configCommand } from './commands/config.js';
-import { reloadCommand } from './commands/reload.js';
-import { skillsCommand } from './commands/skills.js';
-import { memoryCommand } from './commands/memory.js';
 import { federationCommand } from './commands/federation.js';
-import { webCommand } from './commands/web.js';
-import { gatewayCommand, gatewayStop, gatewayStatus } from './commands/gateway.js';
-import { agentCommand } from './commands/agent.js';
+import { gatewayCommand, gatewayStatus, gatewayStop } from './commands/gateway.js';
+import { memoryCommand } from './commands/memory.js';
 import { messageCommand } from './commands/message.js';
+import { reloadCommand } from './commands/reload.js';
 import { sessionsCommand } from './commands/sessions.js';
+import { skillsCommand } from './commands/skills.js';
+import { startCommand } from './commands/start.js';
+import { webCommand } from './commands/web.js';
 
 const main = defineCommand({
   meta: {

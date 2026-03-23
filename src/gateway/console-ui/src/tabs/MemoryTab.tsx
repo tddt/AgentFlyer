@@ -1,52 +1,56 @@
-import { useState, useCallback } from 'react'
-import { rpc, useQuery } from '../hooks/useRpc.js'
-import { useToast } from '../hooks/useToast.js'
-import { Badge } from '../components/Badge.js'
-import { Button } from '../components/Button.js'
-import type { MemoryEntry, MemorySearchResult } from '../types.js'
+import { useCallback, useState } from 'react';
+import { Badge } from '../components/Badge.js';
+import { Button } from '../components/Button.js';
+import { rpc, useQuery } from '../hooks/useRpc.js';
+import { useToast } from '../hooks/useToast.js';
+import type { MemoryEntry, MemorySearchResult } from '../types.js';
 
 function relDate(ms: number): string {
-  const diff = Date.now() - ms
-  if (diff < 60_000) return `${Math.floor(diff / 1000)}s ago`
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`
-  return `${Math.floor(diff / 86_400_000)}d ago`
+  const diff = Date.now() - ms;
+  if (diff < 60_000) return `${Math.floor(diff / 1000)}s ago`;
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
 export function MemoryTab() {
-  const { toast } = useToast()
-  const [query, setQuery] = useState('')
-  const [submitted, setSubmitted] = useState('')
-  const [partition, setPartition] = useState('')
-  const [deleting, setDeleting] = useState<string | null>(null)
+  const { toast } = useToast();
+  const [query, setQuery] = useState('');
+  const [submitted, setSubmitted] = useState('');
+  const [partition, setPartition] = useState('');
+  const [deleting, setDeleting] = useState<string | null>(null);
 
   const { data, loading, error, refetch } = useQuery<MemorySearchResult>(
-    () => rpc<MemorySearchResult>('memory.search', {
-      query: submitted || '*',
-      partition: partition || undefined,
-      limit: 50,
-    }),
+    () =>
+      rpc<MemorySearchResult>('memory.search', {
+        query: submitted || '*',
+        partition: partition || undefined,
+        limit: 50,
+      }),
     [submitted, partition],
-  )
+  );
 
   const handleSearch = useCallback(() => {
-    setSubmitted(query)
-  }, [query])
+    setSubmitted(query);
+  }, [query]);
 
-  const handleDelete = useCallback(async (entryId: string) => {
-    setDeleting(entryId)
-    try {
-      await rpc('memory.delete', { entryId })
-      toast('Entry deleted', 'success')
-      refetch()
-    } catch (e) {
-      toast(e instanceof Error ? e.message : 'Delete failed', 'error')
-    } finally {
-      setDeleting(null)
-    }
-  }, [toast, refetch])
+  const handleDelete = useCallback(
+    async (entryId: string) => {
+      setDeleting(entryId);
+      try {
+        await rpc('memory.delete', { entryId });
+        toast('Entry deleted', 'success');
+        refetch();
+      } catch (e) {
+        toast(e instanceof Error ? e.message : 'Delete failed', 'error');
+      } finally {
+        setDeleting(null);
+      }
+    },
+    [toast, refetch],
+  );
 
-  const results: MemoryEntry[] = data?.results ?? []
+  const results: MemoryEntry[] = data?.results ?? [];
 
   return (
     <div className="flex flex-col gap-5">
@@ -54,9 +58,13 @@ export function MemoryTab() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-base font-semibold text-slate-100">Memory</h1>
-          <p className="text-[13px] text-slate-500 mt-0.5">Search and manage agent memory entries</p>
+          <p className="text-[13px] text-slate-500 mt-0.5">
+            Search and manage agent memory entries
+          </p>
         </div>
-        <Button size="sm" variant="ghost" onClick={refetch}>Refresh</Button>
+        <Button size="sm" variant="ghost" onClick={refetch}>
+          Refresh
+        </Button>
       </div>
 
       {/* ── Search bar ────────────────────────────────────────────────────── */}
@@ -78,7 +86,9 @@ export function MemoryTab() {
           onChange={(e) => setPartition(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
         />
-        <Button size="sm" variant="primary" onClick={handleSearch}>Search</Button>
+        <Button size="sm" variant="primary" onClick={handleSearch}>
+          Search
+        </Button>
       </div>
 
       {/* ── Results ───────────────────────────────────────────────────────── */}
@@ -107,7 +117,10 @@ export function MemoryTab() {
           {/* Table header */}
           <div
             className="grid grid-cols-[1fr_100px_80px_80px_80px] gap-4 px-4 py-2.5 text-[11px] font-medium text-slate-500 uppercase tracking-wider"
-            style={{ borderBottom: '1px solid rgba(255,255,255,0.07)', background: 'rgba(255,255,255,0.02)' }}
+            style={{
+              borderBottom: '1px solid rgba(255,255,255,0.07)',
+              background: 'rgba(255,255,255,0.02)',
+            }}
           >
             <span>Content</span>
             <span>Partition</span>
@@ -126,18 +139,20 @@ export function MemoryTab() {
               <div className="flex flex-col gap-1 min-w-0">
                 <p className="text-sm text-slate-200 line-clamp-2 leading-snug">{entry.content}</p>
                 {entry.score != null && (
-                  <span className="text-[11px] text-slate-600">score: {entry.score.toFixed(3)}</span>
+                  <span className="text-[11px] text-slate-600">
+                    score: {entry.score.toFixed(3)}
+                  </span>
                 )}
-                {entry.superseded && (
-                  <Badge color="red">superseded</Badge>
-                )}
+                {entry.superseded && <Badge color="red">superseded</Badge>}
               </div>
 
               {/* Partition */}
               <div>
-                {entry.partition
-                  ? <Badge color="indigo">{entry.partition}</Badge>
-                  : <span className="text-[12px] text-slate-600">—</span>}
+                {entry.partition ? (
+                  <Badge color="indigo">{entry.partition}</Badge>
+                ) : (
+                  <span className="text-[12px] text-slate-600">—</span>
+                )}
               </div>
 
               {/* Importance */}
@@ -146,9 +161,7 @@ export function MemoryTab() {
               </div>
 
               {/* Created */}
-              <div className="text-[12px] text-slate-500">
-                {relDate(entry.createdAt)}
-              </div>
+              <div className="text-[12px] text-slate-500">{relDate(entry.createdAt)}</div>
 
               {/* Delete */}
               <div className="flex justify-end">
@@ -165,5 +178,5 @@ export function MemoryTab() {
         </div>
       )}
     </div>
-  )
+  );
 }

@@ -1,45 +1,48 @@
-import { ulid } from 'ulid';
-import { createLogger } from '../core/logger.js';
 import { createHash } from 'node:crypto';
+import { ulid } from 'ulid';
+import type { AgentConfig } from '../core/config/schema.js';
+import { createLogger } from '../core/logger.js';
+import type { SessionMetaStore } from '../core/session/meta.js';
+import type { SessionStore, StoredMessage } from '../core/session/store.js';
 import type {
   AgentId,
-  ThreadKey,
-  SessionKey,
   Message,
-  ToolCallResult,
-  ToolUseContent,
-  ToolResultContent,
+  SessionKey,
   StreamChunk,
+  ThreadKey,
+  ToolCallResult,
+  ToolResultContent,
+  ToolUseContent,
 } from '../core/types.js';
 import { makeSessionKey } from '../core/types.js';
-import type { AgentConfig } from '../core/config/schema.js';
-import type { LLMProvider } from './llm/provider.js';
-import type { ToolRegistry } from './tools/registry.js';
-import { checkPolicy, filterAllowedTools, policyBlockedResult, type ApprovalHandler, type ToolPolicy } from './tools/policy.js';
-import { SessionStore, type StoredMessage } from '../core/session/store.js';
-import { SessionMetaStore } from '../core/session/meta.js';
 import { checkCompactionNeeded, runCompaction } from './compactor/index.js';
+import type { LLMProvider } from './llm/provider.js';
 import { buildSystemPrompt } from './prompt/builder.js';
-import {
-  layer0Identity,
-  layer1Workspace,
-  layer2Skills,
-  layer3Memory,
-} from './prompt/layers.js';
-import { readWorkspaceDocCached } from './prompt/workspace.js';
+import { layer0Identity, layer1Workspace, layer2Skills, layer3Memory } from './prompt/layers.js';
 import { buildPersonaContent } from './prompt/soul.js';
+import { readWorkspaceDocCached } from './prompt/workspace.js';
+import {
+  type ApprovalHandler,
+  type ToolPolicy,
+  checkPolicy,
+  filterAllowedTools,
+  policyBlockedResult,
+} from './tools/policy.js';
+import type { ToolRegistry } from './tools/registry.js';
 
 const logger = createLogger('agent:runner');
 
 /** Read-only tools whose results can safely be cached within a thread. */
 const READ_ONLY_TOOLS = new Set([
-  'read_file', 'list_dir', 'search_files', 'memory_search', 'grep_search',
+  'read_file',
+  'list_dir',
+  'search_files',
+  'memory_search',
+  'grep_search',
 ]);
 
 /** Mutation tools that invalidate the read-only tool result cache. */
-const MUTATION_TOOLS = new Set([
-  'write_file', 'create_file', 'edit_file', 'bash', 'run_terminal',
-]);
+const MUTATION_TOOLS = new Set(['write_file', 'create_file', 'edit_file', 'bash', 'run_terminal']);
 
 /**
  * Remove messages that violate OpenAI's tool_call sequencing rules.
@@ -77,7 +80,10 @@ function sanitizeMessages(messages: Message[]): Message[] {
 
     while (i < current.length) {
       const msg = current[i];
-      if (!msg) { i++; continue; }
+      if (!msg) {
+        i++;
+        continue;
+      }
 
       // ── Case A: assistant with tool_calls missing matching tool_results ──
       if (msg.role === 'assistant' && Array.isArray(msg.content)) {
@@ -110,7 +116,7 @@ function sanitizeMessages(messages: Message[]): Message[] {
         const prev = out[out.length - 1];
         const prevToolCalls =
           prev?.role === 'assistant' && Array.isArray(prev.content)
-            ? (prev.content as MC[]).filter((c) => c.type === 'tool_use') as TUC[]
+            ? ((prev.content as MC[]).filter((c) => c.type === 'tool_use') as TUC[])
             : [];
         const callIds = new Set(prevToolCalls.map((tc) => tc.id));
         const resultIds = (
@@ -226,7 +232,8 @@ export class AgentRunner {
     opts: RunnerOptions = {},
   ): AsyncGenerator<StreamChunk, TurnResult> {
     const { provider, toolRegistry, sessionStore, metaStore, approvalHandler } = this.deps;
-    const model = opts.model ?? this.deps.resolvedModel?.id ?? this.config.model ?? 'claude-haiku-3-5';
+    const model =
+      opts.model ?? this.deps.resolvedModel?.id ?? this.config.model ?? 'claude-haiku-3-5';
     const maxTokens = opts.maxTokens ?? this.deps.resolvedModel?.maxTokens ?? 8192;
 
     // ── 1. Build system prompt ──────────────────────────────────────────────
@@ -242,12 +249,17 @@ export class AgentRunner {
     // turns. If all hashes match and there is no per-turn taskContext, reuse
     // the cached systemPrompt to skip the trimming pass in buildSystemPrompt.
     const baseLayers = [
-      layer0Identity(agentName, this.agentId, this.config.mesh?.role, buildPersonaContent(this.config)),
+      layer0Identity(
+        agentName,
+        this.agentId,
+        this.config.mesh?.role,
+        buildPersonaContent(this.config),
+      ),
       layer1Workspace(workspaceDoc ?? ''),
       layer2Skills(opts.skillsText ?? this.deps.skillsText ?? ''),
       layer3Memory(opts.memoryText ?? ''),
     ];
-    const newLayerHashes = baseLayers.map(l =>
+    const newLayerHashes = baseLayers.map((l) =>
       createHash('sha256').update(l.content).digest('hex').slice(0, 16),
     );
     const allBaseUnchanged =
@@ -263,7 +275,15 @@ export class AgentRunner {
         [
           ...baseLayers,
           ...(opts.taskContext
-            ? [{ id: 4 as const, name: 'task', content: opts.taskContext, estimatedTokens: 0, trimable: true }]
+            ? [
+                {
+                  id: 4 as const,
+                  name: 'task',
+                  content: opts.taskContext,
+                  estimatedTokens: 0,
+                  trimable: true,
+                },
+              ]
             : []),
         ],
         this.deps.systemPromptMaxTokens,
@@ -352,7 +372,7 @@ export class AgentRunner {
       const toolCallMap = new Map<string, { name: string; inputJson: string }>();
       let accText = '';
       let stopReason: 'end_turn' | 'tool_use' | 'max_tokens' | 'stop_sequence' = 'end_turn';
-      let doneEmitted = false;
+      let _doneEmitted = false;
 
       // Track ids by index (OpenAI sends partial ids per index)
       const indexToId = new Map<string, string>();
@@ -380,7 +400,7 @@ export class AgentRunner {
           totalInputTokens += chunk.inputTokens;
           totalOutputTokens += chunk.outputTokens;
           stopReason = chunk.stopReason;
-          doneEmitted = true;
+          _doneEmitted = true;
         } else if (chunk.type === 'error') {
           logger.error('LLM error', { message: chunk.message });
           // Clear accumulated tool calls so we never persist an orphaned
@@ -407,10 +427,7 @@ export class AgentRunner {
 
       const assistantContent =
         assistantToolUse.length > 0
-          ? [
-              ...(accText ? [{ type: 'text' as const, text: accText }] : []),
-              ...assistantToolUse,
-            ]
+          ? [...(accText ? [{ type: 'text' as const, text: accText }] : []), ...assistantToolUse]
           : accText;
 
       const assistantMsg: StoredMessage = {
@@ -433,7 +450,9 @@ export class AgentRunner {
         let parsedInput: unknown = {};
         try {
           parsedInput = JSON.parse(tc.inputJson || '{}');
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
 
         const tools = this.config.tools;
         // Skill-category tools are exempt from the allowlist (they're scoped to
@@ -513,13 +532,11 @@ export class AgentRunner {
   /** Convenience: run a turn and collect all output into a string (non-streaming). */
   async runTurn(userMessage: string, opts?: RunnerOptions): Promise<TurnResult> {
     const gen = this.turn(userMessage, opts);
-    let result: TurnResult | undefined;
     let value = await gen.next();
     while (!value.done) {
       value = await gen.next();
     }
-    result = value.value;
-    return result;
+    return value.value;
   }
 
   /** Clear the current thread's conversation history. */

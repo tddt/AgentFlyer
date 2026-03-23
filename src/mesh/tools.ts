@@ -1,8 +1,8 @@
 import { ulid } from 'ulid';
+import type { AgentRunner } from '../agent/runner.js';
 import { createLogger } from '../core/logger.js';
 import type { AgentId, TaskId } from '../core/types.js';
 import type { MeshBus } from './bus.js';
-import type { AgentRunner } from '../agent/runner.js';
 
 const logger = createLogger('mesh:tools');
 

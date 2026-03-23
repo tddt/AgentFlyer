@@ -1,8 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-  estimateTokens,
-  estimateMessagesTokens,
   countTokensPrecise,
+  estimateMessagesTokens,
+  estimateTokens,
   remainingTokens,
 } from '../../../src/agent/compactor/token-count.js';
 import { buildSystemPrompt } from '../../../src/agent/prompt/builder.js';
@@ -18,8 +18,8 @@ import type { Message } from '../../../src/core/types.js';
 // ─── Token counting ──────────────────────────────────────────────────────────
 describe('estimateTokens', () => {
   it('returns ceiling of length / 4', () => {
-    expect(estimateTokens('abcd')).toBe(1);   // 4 chars = 1 token
-    expect(estimateTokens('abcde')).toBe(2);  // 5 chars = ceil(1.25) = 2 tokens
+    expect(estimateTokens('abcd')).toBe(1); // 4 chars = 1 token
+    expect(estimateTokens('abcde')).toBe(2); // 5 chars = ceil(1.25) = 2 tokens
     expect(estimateTokens('')).toBe(0);
   });
 
@@ -36,7 +36,7 @@ describe('estimateMessagesTokens', () => {
 
   it('sums token estimates + 4 overhead per message', () => {
     const messages: Message[] = [
-      { role: 'user', content: 'abcd' },   // 1 token + 4 = 5
+      { role: 'user', content: 'abcd' }, // 1 token + 4 = 5
       { role: 'assistant', content: 'xy' }, // ceil(0.5) = 1 token + 4 = 5
     ];
     // total: 5 + 5 = 10
@@ -44,9 +44,7 @@ describe('estimateMessagesTokens', () => {
   });
 
   it('handles array content by JSON-stringifying', () => {
-    const messages: Message[] = [
-      { role: 'user', content: [{ type: 'text', text: 'hi' }] },
-    ];
+    const messages: Message[] = [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }];
     const est = estimateMessagesTokens(messages);
     expect(est).toBeGreaterThan(0);
   });
@@ -99,7 +97,7 @@ describe('buildSystemPrompt', () => {
   it('excludes empty content layers', () => {
     const layers = [
       layer0Identity('A', 'a'),
-      layer2Skills(''),        // empty — should be excluded
+      layer2Skills(''), // empty — should be excluded
       layer4Task('task text'),
     ];
     const result = buildSystemPrompt(layers);
@@ -109,9 +107,9 @@ describe('buildSystemPrompt', () => {
   it('trims trimable layers when over budget', () => {
     const bigContent = 'word '.repeat(3000); // ~3000 words → ~750 tokens estimate
     const layers = [
-      layer0Identity('Agent', 'id'),           // trimable=false
-      layer3Memory(bigContent),                 // trimable=true, large
-      layer4Task('small task'),                 // trimable=true
+      layer0Identity('Agent', 'id'), // trimable=false
+      layer3Memory(bigContent), // trimable=true, large
+      layer4Task('small task'), // trimable=true
     ];
     // Very tight budget to force trimming
     const result = buildSystemPrompt(layers, 100);
@@ -122,10 +120,7 @@ describe('buildSystemPrompt', () => {
   });
 
   it('never trims layer 0 (identity)', () => {
-    const layers = [
-      layer0Identity('KeepMe', 'id'),
-      layer3Memory('a '.repeat(5000)),
-    ];
+    const layers = [layer0Identity('KeepMe', 'id'), layer3Memory('a '.repeat(5000))];
     const result = buildSystemPrompt(layers, 10); // impossibly tight
     expect(result.systemPrompt).toContain('KeepMe');
   });

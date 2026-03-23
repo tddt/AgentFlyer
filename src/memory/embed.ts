@@ -1,8 +1,8 @@
-import { createLogger } from '../core/logger.js';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { ulid } from 'ulid';
-import { fileURLToPath } from 'node:url';
-import { join, dirname } from 'node:path';
+import { createLogger } from '../core/logger.js';
 
 const logger = createLogger('memory:embed');
 
@@ -15,7 +15,9 @@ export interface EmbedConfig {
 
 /** Simple cosine similarity between two float vectors */
 export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
-  let dot = 0, normA = 0, normB = 0;
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
   for (let i = 0; i < a.length; i++) {
     const ai = a[i] ?? 0;
     const bi = b[i] ?? 0;
@@ -27,7 +29,9 @@ export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-let _pipeline: ((text: string | string[], opts?: Record<string, unknown>) => Promise<{ data: Float32Array }>) | null = null;
+let _pipeline:
+  | ((text: string | string[], opts?: Record<string, unknown>) => Promise<{ data: Float32Array }>)
+  | null = null;
 
 /**
  * Lazily initialise the local ONNX embedding pipeline.
@@ -39,8 +43,13 @@ async function getPipeline(modelId: string): Promise<typeof _pipeline> {
   logger.info('Loading embedding model…', { model: modelId });
   try {
     // Dynamically import to avoid startup cost when embeddings are not needed
-    const { pipeline } = await import('@huggingface/transformers') as {
-      pipeline: (task: string, model: string) => Promise<(text: string | string[], opts?: Record<string, unknown>) => Promise<{ data: Float32Array }>>;
+    const { pipeline } = (await import('@huggingface/transformers')) as {
+      pipeline: (
+        task: string,
+        model: string,
+      ) => Promise<
+        (text: string | string[], opts?: Record<string, unknown>) => Promise<{ data: Float32Array }>
+      >;
     };
     _pipeline = await pipeline('feature-extraction', modelId);
     logger.info('Embedding model ready', { model: modelId });
@@ -125,7 +134,7 @@ export function createEmbeddingWorker(): Worker {
       pending.reject(new Error('Empty worker response'));
     }
   });
-  _worker.on('error', err => {
+  _worker.on('error', (err) => {
     logger.error('Embedding worker error', { error: String(err) });
     // Reject all pending requests
     for (const [id, p] of _pending) {

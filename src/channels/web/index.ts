@@ -1,6 +1,6 @@
 import { createLogger } from '../../core/logger.js';
-import type { AgentId, ThreadKey, StreamChunk } from '../../core/types.js';
-import type { Channel, InboundHandler, ChannelMessage } from '../types.js';
+import type { AgentId, StreamChunk, ThreadKey } from '../../core/types.js';
+import type { Channel, ChannelMessage, InboundHandler } from '../types.js';
 
 const logger = createLogger('channels:web');
 
@@ -37,10 +37,7 @@ export class WebChannel implements Channel {
     logger.debug('WebChannel.sendStream called (no-op stub)');
   }
 
-  async send(
-    _target: { agentId: AgentId; threadKey: ThreadKey },
-    _text: string,
-  ): Promise<void> {
+  async send(_target: { agentId: AgentId; threadKey: ThreadKey }, _text: string): Promise<void> {
     logger.debug('WebChannel.send called (no-op stub)');
   }
 }

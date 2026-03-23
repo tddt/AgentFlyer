@@ -1,10 +1,10 @@
 import { existsSync } from 'node:fs';
+import { createReadStream } from 'node:fs';
 import { appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { createReadStream } from 'node:fs';
-import type { Message, SessionKey } from '../types.js';
 import { createLogger } from '../logger.js';
+import type { Message, SessionKey } from '../types.js';
 
 const logger = createLogger('session:store');
 
@@ -16,7 +16,7 @@ export interface StoredMessage extends Message {
 
 /** Convert session key like `agent:main:cli-abc` → safe filename `agent-main-cli-abc.jsonl` */
 export function sessionKeyToFilename(sessionKey: SessionKey): string {
-  return sessionKey.replace(/:/g, '-') + '.jsonl';
+  return `${sessionKey.replace(/:/g, '-')}.jsonl`;
 }
 
 /**
@@ -36,13 +36,13 @@ export class SessionStore {
 
   async append(sessionKey: SessionKey, message: StoredMessage): Promise<void> {
     await this.ensureDir();
-    await appendFile(this.filePath(sessionKey), JSON.stringify(message) + '\n', 'utf-8');
+    await appendFile(this.filePath(sessionKey), `${JSON.stringify(message)}\n`, 'utf-8');
   }
 
   async appendMany(sessionKey: SessionKey, messages: StoredMessage[]): Promise<void> {
     if (messages.length === 0) return;
     await this.ensureDir();
-    const lines = messages.map((m) => JSON.stringify(m)).join('\n') + '\n';
+    const lines = `${messages.map((m) => JSON.stringify(m)).join('\n')}\n`;
     await appendFile(this.filePath(sessionKey), lines, 'utf-8');
   }
 
@@ -53,7 +53,7 @@ export class SessionStore {
     const messages: StoredMessage[] = [];
     const rl = createInterface({
       input: createReadStream(path, 'utf-8'),
-      crlfDelay: Infinity,
+      crlfDelay: Number.POSITIVE_INFINITY,
     });
 
     for await (const line of rl) {
@@ -83,7 +83,7 @@ export class SessionStore {
     await this.ensureDir();
     const { writeFile } = await import('node:fs/promises');
     const content =
-      messages.length > 0 ? messages.map((m) => JSON.stringify(m)).join('\n') + '\n' : '';
+      messages.length > 0 ? `${messages.map((m) => JSON.stringify(m)).join('\n')}\n` : '';
     await writeFile(this.filePath(sessionKey), content, 'utf-8');
   }
 }

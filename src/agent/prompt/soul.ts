@@ -48,8 +48,7 @@ export function buildPersonaContent(cfg: AgentConfig): string {
     ? '\n> `skill_list` 和 `skill_read` 已作为系统工具自动授权，不受 allow 列表约束。'
     : '';
 
-  const denyLine =
-    cfg.tools.deny.length > 0 ? `\nDeny list: ${cfg.tools.deny.join(', ')}` : '';
+  const denyLine = cfg.tools.deny.length > 0 ? `\nDeny list: ${cfg.tools.deny.join(', ')}` : '';
 
   return [
     '## Language',

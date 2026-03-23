@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { SkillRegistry } from './registry.js';
 import type { RegisteredTool } from '../agent/tools/registry.js';
 import { createLogger } from '../core/logger.js';
+import type { SkillRegistry } from './registry.js';
 
 const logger = createLogger('skills:tools');
 
@@ -76,11 +76,7 @@ export function createSkillTools(registry: SkillRegistry): RegisteredTool[] {
         // RATIONALE: Prepend the skill directory so the agent knows where to cd before
         // running any scripts referenced in the SKILL.md. Without this, the agent
         // defaults to the workspace dir and cannot find scripts or config files.
-        const content =
-          `> **IMPORTANT — Skill directory:** \`${skillDir}\`\n` +
-          `> All scripts and config files in this skill are relative to that directory.\n` +
-          `> Before running any command, execute: \`cd "${skillDir}"\`\n\n` +
-          raw;
+        const content = `> **IMPORTANT — Skill directory:** \`${skillDir}\`\n> All scripts and config files in this skill are relative to that directory.\n> Before running any command, execute: \`cd "${skillDir}"\`\n\n${raw}`;
         logger.info('skill_read: returning skill content', { skill_id, bytes: content.length });
         return { content, isError: false };
       } catch (err) {

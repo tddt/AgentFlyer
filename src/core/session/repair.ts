@@ -1,5 +1,5 @@
-import type { Message, MessageContent, ToolUseContent, ToolResultContent } from '../types.js';
 import { createLogger } from '../logger.js';
+import type { Message, MessageContent, ToolResultContent, ToolUseContent } from '../types.js';
 
 const logger = createLogger('session:repair');
 
@@ -31,11 +31,7 @@ export function repairTranscript(messages: Message[]): RepairResult {
 
       if (toolUses.length > 0) {
         const nextMsg = messages[i + 1];
-        if (
-          !nextMsg ||
-          nextMsg.role !== 'user' ||
-          !Array.isArray(nextMsg.content)
-        ) {
+        if (!nextMsg || nextMsg.role !== 'user' || !Array.isArray(nextMsg.content)) {
           issues.push(
             `Assistant msg[${i}] has tool_use but no following user tool_result — removing`,
           );
@@ -62,11 +58,7 @@ export function repairTranscript(messages: Message[]): RepairResult {
 
       if (toolResults.length > 0) {
         const prevMsg = repaired[repaired.length - 1];
-        if (
-          !prevMsg ||
-          prevMsg.role !== 'assistant' ||
-          !Array.isArray(prevMsg.content)
-        ) {
+        if (!prevMsg || prevMsg.role !== 'assistant' || !Array.isArray(prevMsg.content)) {
           issues.push(
             `User msg[${i}] has tool_result but no preceding assistant tool_use — removing`,
           );
@@ -82,9 +74,7 @@ export function repairTranscript(messages: Message[]): RepairResult {
   // A trailing user message that contains ONLY tool_results is invalid
   const lastMsg = repaired.at(-1);
   if (lastMsg?.role === 'user' && Array.isArray(lastMsg.content)) {
-    const allResults = (lastMsg.content as MessageContent[]).every(
-      (c) => c.type === 'tool_result',
-    );
+    const allResults = (lastMsg.content as MessageContent[]).every((c) => c.type === 'tool_result');
     if (allResults) {
       issues.push('Trailing orphaned tool_result message removed');
       repaired.pop();

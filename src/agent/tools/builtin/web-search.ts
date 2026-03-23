@@ -1,15 +1,23 @@
 import { createLogger } from '../../../core/logger.js';
 import type { RegisteredTool } from '../registry.js';
+import { BingProvider, type BingProviderOptions } from './search-providers/bing.js';
+import {
+  DuckDuckGoProvider,
+  type DuckDuckGoProviderOptions,
+} from './search-providers/duckduckgo.js';
 import type { SearchProvider } from './search-providers/provider.js';
 import { formatSearchResponse } from './search-providers/provider.js';
-import { TavilyProvider, type TavilyProviderOptions } from './search-providers/tavily.js';
-import { BingProvider, type BingProviderOptions } from './search-providers/bing.js';
 import { SerpApiProvider, type SerpApiProviderOptions } from './search-providers/serpapi.js';
-import { DuckDuckGoProvider, type DuckDuckGoProviderOptions } from './search-providers/duckduckgo.js';
+import { TavilyProvider, type TavilyProviderOptions } from './search-providers/tavily.js';
 
 export type { SearchProvider };
 export { TavilyProvider, BingProvider, SerpApiProvider, DuckDuckGoProvider };
-export type { TavilyProviderOptions, BingProviderOptions, SerpApiProviderOptions, DuckDuckGoProviderOptions };
+export type {
+  TavilyProviderOptions,
+  BingProviderOptions,
+  SerpApiProviderOptions,
+  DuckDuckGoProviderOptions,
+};
 
 const logger = createLogger('tools:web-search');
 
@@ -37,7 +45,10 @@ export function createWebSearchTool(opts: WebSearchToolOptions): RegisteredTool 
     if (!name) return providers[0]!;
     const found = providers.find((p) => p.name === name);
     if (!found) {
-      logger.warn('Unknown search provider requested, using default', { requested: name, available: providerNames });
+      logger.warn('Unknown search provider requested, using default', {
+        requested: name,
+        available: providerNames,
+      });
       return providers[0]!;
     }
     return found;
@@ -52,10 +63,7 @@ export function createWebSearchTool(opts: WebSearchToolOptions): RegisteredTool 
     category: 'builtin',
     definition: {
       name: 'web_search',
-      description:
-        'Search the web and return relevant results with titles, URLs, and content snippets. ' +
-        `Available providers: ${providerNames.join(', ')}. ` +
-        'Use this to find up-to-date information, news, documentation, or any topic that requires internet access.',
+      description: `Search the web and return relevant results with titles, URLs, and content snippets. Available providers: ${providerNames.join(', ')}. Use this to find up-to-date information, news, documentation, or any topic that requires internet access.`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -76,7 +84,11 @@ export function createWebSearchTool(opts: WebSearchToolOptions): RegisteredTool 
       },
     },
     async handler(input) {
-      const { query, provider: providerName, max_results } = input as {
+      const {
+        query,
+        provider: providerName,
+        max_results,
+      } = input as {
         query: string;
         provider?: string;
         max_results?: number;

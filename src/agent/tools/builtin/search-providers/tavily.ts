@@ -1,5 +1,5 @@
 import { createLogger } from '../../../../core/logger.js';
-import type { SearchProvider, SearchResponse, SearchOptions } from './provider.js';
+import type { SearchOptions, SearchProvider, SearchResponse } from './provider.js';
 
 const logger = createLogger('search:tavily');
 
@@ -35,8 +35,8 @@ export class TavilyProvider implements SearchProvider {
   }
 
   async search(query: string, options?: SearchOptions): Promise<SearchResponse> {
-    const numResults = Math.min((options?.maxResults ?? this.opts.maxResults), 10);
-    const depth = (options?.['searchDepth'] as string | undefined) ?? this.opts.searchDepth;
+    const numResults = Math.min(options?.maxResults ?? this.opts.maxResults, 10);
+    const depth = (options?.searchDepth as string | undefined) ?? this.opts.searchDepth;
 
     logger.debug('Tavily search', { query, numResults, depth });
 

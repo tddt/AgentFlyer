@@ -1,13 +1,13 @@
-import { defineCommand } from 'citty';
-import { intro, outro, spinner, note, isCancel, cancel } from '@clack/prompts';
-import chalk from 'chalk';
 import { unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { intro, note, spinner } from '@clack/prompts';
+import chalk from 'chalk';
+import { defineCommand } from 'citty';
 import { loadConfig } from '../../core/config/loader.js';
 import { getDefaultConfigDir } from '../../core/config/loader.js';
-import { freePortSync } from '../../core/process/port-cleanup.js';
-import { startGateway, isGatewayRunning } from '../../gateway/lifecycle.js';
 import { setLogLevel } from '../../core/logger.js';
+import { freePortSync } from '../../core/process/port-cleanup.js';
+import { isGatewayRunning, startGateway } from '../../gateway/lifecycle.js';
 
 export const startCommand = defineCommand({
   meta: {
@@ -93,14 +93,14 @@ export const startCommand = defineCommand({
       const instance = await startGateway(config, dataDir);
       s.stop(`Gateway running on port ${config.gateway.port}`);
 
-      const tokenHint = instance.state.authToken.slice(0, 8) + '...';
+      const tokenHint = `${instance.state.authToken.slice(0, 8)}...`;
       note(
         [
           `Port:  ${chalk.green(config.gateway.port)}`,
           `Token: ${chalk.yellow(tokenHint)} (see ${dataDir}/agentflyer.json)`,
           `Agents: ${chalk.cyan(config.agents.map((a) => a.id).join(', '))}`,
           '',
-          'Run ' + chalk.bold('agentflyer chat') + ' in another terminal to start chatting.',
+          `Run ${chalk.bold('agentflyer chat')} in another terminal to start chatting.`,
           'Press Ctrl-C to stop.',
         ].join('\n'),
         'Gateway ready',

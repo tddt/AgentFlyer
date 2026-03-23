@@ -1,10 +1,10 @@
-import { embed, cosineSimilarity, type EmbedConfig } from './embed.js';
-import type { MemoryStore, MemoryEntry } from './store.js';
-import type { MemoryEntryId } from '../core/types.js';
 import { createLogger } from '../core/logger.js';
+import type { MemoryEntryId } from '../core/types.js';
 import { decayScore } from './decay.js';
+import { type EmbedConfig, cosineSimilarity, embed } from './embed.js';
+import type { MemoryEntry, MemoryStore } from './store.js';
 
-const logger = createLogger('memory:search');
+const _logger = createLogger('memory:search');
 
 export interface SearchResult {
   entry: MemoryEntry;
@@ -97,16 +97,16 @@ function mergeAndRank(
   const scoreMap = new Map<string, SearchResult>();
 
   // Normalise BM25 ranks into 0-1 scores
-  bm25.forEach((entry, idx) => {
+  for (const [idx, entry] of bm25.entries()) {
     const bm25Score = 1 - idx / Math.max(bm25.length, 1);
     const decay = opts.decayEnabled
       ? decayScore(1, entry.updatedAt, opts.now, opts.halfLifeDays)
       : 1;
     scoreMap.set(entry.id, { entry, score: bm25Score * decay * 0.5, method: 'bm25' });
-  });
+  }
 
   // Add vector scores
-  vector.forEach(({ entry, similarity }) => {
+  for (const { entry, similarity } of vector) {
     const decay = opts.decayEnabled
       ? decayScore(1, entry.updatedAt, opts.now, opts.halfLifeDays)
       : 1;
@@ -122,7 +122,7 @@ function mergeAndRank(
     } else {
       scoreMap.set(entry.id, { entry, score: vecScore, method: 'vector' });
     }
-  });
+  }
 
   const results = Array.from(scoreMap.values());
   results.sort((a, b) => b.score - a.score);

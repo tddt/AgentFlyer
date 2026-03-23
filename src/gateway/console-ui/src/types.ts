@@ -1,103 +1,101 @@
-export {}
-
 declare global {
   interface Window {
-    __AF_TOKEN__: string
-    __AF_PORT__: number
+    __AF_TOKEN__: string;
+    __AF_PORT__: number;
   }
 }
 
-export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 export interface AgentInfo {
-  agentId: string
-  name?: string
+  agentId: string;
+  name?: string;
 }
 
 export interface AgentConfig {
-  id: string
-  name?: string
-  model?: string
-  workspace?: string
-  mesh?: Record<string, unknown>
-  persona?: string
+  id: string;
+  name?: string;
+  model?: string;
+  workspace?: string;
+  mesh?: Record<string, unknown>;
+  persona?: string;
 }
 
 export interface GatewayStatus {
-  version: string
-  uptime: number
-  agents: number
+  version: string;
+  uptime: number;
+  agents: number;
 }
 
 export interface AgentListResult {
-  agents: AgentInfo[]
+  agents: AgentInfo[];
 }
 
 export interface TaskInfo {
-  id: string
-  name: string
+  id: string;
+  name: string;
   /** Agent to invoke. Empty/absent when workflowId is used. */
   agentId?: string;
   /** Workflow to invoke. Takes precedence over agentId when present. */
   workflowId?: string;
-  message: string
-  cronExpr: string
-  reportTo?: string
-  outputChannel?: 'logs' | 'cli' | 'web'
-  enabled?: boolean
-  createdAt?: number
-  runCount: number
-  lastRunAt?: number
-  nextRunAt?: number
-  lastResult?: string
+  message: string;
+  cronExpr: string;
+  reportTo?: string;
+  outputChannel?: 'logs' | 'cli' | 'web';
+  enabled?: boolean;
+  createdAt?: number;
+  runCount: number;
+  lastRunAt?: number;
+  nextRunAt?: number;
+  lastResult?: string;
 }
 
 export interface SchedulerListResult {
-  tasks: TaskInfo[]
+  tasks: TaskInfo[];
 }
 
 export interface RunningTaskInfo {
-  taskId: string
-  taskName: string
-  startedAt: number
-  agentId?: string
-  workflowId?: string
+  taskId: string;
+  taskName: string;
+  startedAt: number;
+  agentId?: string;
+  workflowId?: string;
 }
 
 export interface TaskRunRecord {
-  taskId: string
-  taskName: string
-  startedAt: number
-  finishedAt: number
-  ok: boolean
-  result: string
-  agentId?: string
-  workflowId?: string
+  taskId: string;
+  taskName: string;
+  startedAt: number;
+  finishedAt: number;
+  ok: boolean;
+  result: string;
+  agentId?: string;
+  workflowId?: string;
 }
 
 export interface TaskHistoryResult {
-  records: TaskRunRecord[]
+  records: TaskRunRecord[];
 }
 
 export interface SkillInfo {
-  id: string
-  name: string
-  description: string
-  shortDesc: string
-  tags: string[]
-  apiKeyRequired: boolean
+  id: string;
+  name: string;
+  description: string;
+  shortDesc: string;
+  tags: string[];
+  apiKeyRequired: boolean;
 }
 
 export interface SkillListResult {
-  skills: SkillInfo[]
+  skills: SkillInfo[];
 }
 
 export interface LogEntry {
-  ts: number
-  level: LogLevel
-  name?: string
-  msg: string
-  [k: string]: unknown
+  ts: number;
+  level: LogLevel;
+  name?: string;
+  msg: string;
+  [k: string]: unknown;
 }
 
 export type ChatChunk =
@@ -108,14 +106,14 @@ export type ChatChunk =
   | { type: 'tool_use_start'; id: string; name: string }
   | { type: 'tool_result'; id: string; content: string; isError?: boolean }
   | {
-      type: 'done'
-      inputTokens: number
-      outputTokens: number
-      cacheReadTokens?: number
-      cacheWriteTokens?: number
-      stopReason: 'end_turn' | 'tool_use' | 'max_tokens' | 'stop_sequence'
+      type: 'done';
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadTokens?: number;
+      cacheWriteTokens?: number;
+      stopReason: 'end_turn' | 'tool_use' | 'max_tokens' | 'stop_sequence';
     }
-  | { type: 'error'; message: string }
+  | { type: 'error'; message: string };
 
 export interface SessionMetaInfo {
   sessionKey: string;
@@ -281,7 +279,9 @@ export interface MemoryEntry {
   accessedAt?: number;
   score?: number;
 }
-export interface MemorySearchResult { results: MemoryEntry[] }
+export interface MemorySearchResult {
+  results: MemoryEntry[];
+}
 
 // ── Federation tab types ──────────────────────────────────────────────────────
 export interface FederationPeer {
@@ -292,8 +292,16 @@ export interface FederationPeer {
   latencyMs?: number;
   lastSeen?: number;
 }
-export interface FederationStatusResult { enabled: boolean; peers: FederationPeer[] }
+export interface FederationStatusResult {
+  enabled: boolean;
+  peers: FederationPeer[];
+}
 
 // ── Docs tab types ────────────────────────────────────────────────────────────
-export interface DocListResult { docs: string[] }
-export interface DocContent { name: string; content: string }
+export interface DocListResult {
+  docs: string[];
+}
+export interface DocContent {
+  name: string;
+  content: string;
+}

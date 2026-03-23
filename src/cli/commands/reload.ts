@@ -1,7 +1,7 @@
-import { defineCommand } from 'citty';
-import { outro, spinner, note } from '@clack/prompts';
+import { note, outro, spinner } from '@clack/prompts';
 import chalk from 'chalk';
-import { loadConfig, getDefaultConfigDir } from '../../core/config/loader.js';
+import { defineCommand } from 'citty';
+import { getDefaultConfigDir, loadConfig } from '../../core/config/loader.js';
 import { isGatewayRunning } from '../../gateway/lifecycle.js';
 import { callRpc } from '../gateway-client.js';
 
@@ -32,7 +32,7 @@ export const reloadCommand = defineCommand({
     if (!running) {
       s.stop(chalk.yellow('Gateway is not running'));
       note(
-        'Start the gateway first with ' + chalk.bold('agentflyer start') + ', then retry.',
+        `Start the gateway first with ${chalk.bold('agentflyer start')}, then retry.`,
         'Not running',
       );
       process.exit(1);
@@ -48,7 +48,7 @@ export const reloadCommand = defineCommand({
     }
 
     const port = config.gateway.port;
-    const token = config.gateway.auth.token ?? process.env['AGENTFLYER_TOKEN'] ?? '';
+    const token = config.gateway.auth.token ?? process.env.AGENTFLYER_TOKEN ?? '';
     if (!token) {
       note(
         'No auth token found. Set gateway.auth.token in agentflyer.json or AGENTFLYER_TOKEN env.',
@@ -62,10 +62,10 @@ export const reloadCommand = defineCommand({
     s.start(`Reloading ${label}…`);
 
     try {
-      const result = await callRpc(port, token, 'agent.reload', agentId ? { agentId } : {}) as {
+      const result = (await callRpc(port, token, 'agent.reload', agentId ? { agentId } : {})) as {
         reloaded: string[];
       };
-      s.stop(chalk.green(`Reload complete`));
+      s.stop(chalk.green('Reload complete'));
       outro(
         [
           `Reloaded: ${chalk.cyan(result.reloaded.join(', ') || '(none)')}`,

@@ -1,5 +1,5 @@
-import { createLogger } from '../core/logger.js';
 import type { AgentRunner } from '../agent/runner.js';
+import { createLogger } from '../core/logger.js';
 
 const logger = createLogger('gateway:hooks');
 

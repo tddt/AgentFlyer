@@ -1,12 +1,13 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { AnthropicProvider } from '../agent/llm/anthropic.js';
 import { OpenAIProvider, createCompatProvider } from '../agent/llm/openai.js';
 import { createProviderRegistry } from '../agent/llm/provider.js';
 import { generateSoulMd } from '../agent/prompt/soul.js';
 import { AgentRunner } from '../agent/runner.js';
 import { createBashTool } from '../agent/tools/builtin/bash.js';
+import { createChannelTools } from '../agent/tools/builtin/channel-tools.js';
 import { createFsTools } from '../agent/tools/builtin/fs.js';
 import { createMemoryTools } from '../agent/tools/builtin/memory.js';
 import { createSchedulerTools } from '../agent/tools/builtin/scheduler-tools.js';
@@ -24,6 +25,7 @@ import { DiscordChannel } from '../channels/discord/index.js';
 import { FeishuChannel } from '../channels/feishu/index.js';
 import { QQChannel } from '../channels/qq/index.js';
 import { TelegramChannel } from '../channels/telegram/index.js';
+import type { Channel } from '../channels/types.js';
 import {
   type ConfigWatcher,
   getDefaultConfigPath,
@@ -35,24 +37,22 @@ import type { Config } from '../core/config/schema.js';
 import { ConfigSchema } from '../core/config/schema.js';
 import type { AgentConfig } from '../core/config/schema.js';
 import { createLogger } from '../core/logger.js';
-import type { AgentId } from '../core/types.js';
 import { SessionMetaStore } from '../core/session/meta.js';
 import { SessionStore } from '../core/session/store.js';
+import type { AgentId } from '../core/types.js';
+import { FederationNode } from '../federation/node.js';
 import { MemoryStore } from '../memory/store.js';
-import { buildRegistry } from '../skills/registry.js';
+import { CronScheduler } from '../scheduler/cron.js';
 import { filterSkillsForAgent } from '../skills/filter.js';
 import { buildSkillsDirectory } from '../skills/format.js';
+import { buildRegistry } from '../skills/registry.js';
 import { createSkillTools } from '../skills/skill-tools.js';
-import { CronScheduler } from '../scheduler/cron.js';
 import { generateToken } from './auth.js';
+import { ContentStore } from './content-store.js';
 import { HookRegistry } from './hooks.js';
 import { logBroadcaster } from './log-buffer.js';
 import type { RpcContext } from './rpc.js';
 import { type GatewayServer, createGatewayServer } from './server.js';
-import { ContentStore } from './content-store.js';
-import { FederationNode } from '../federation/node.js';
-import type { Channel } from '../channels/types.js';
-import { createChannelTools } from '../agent/tools/builtin/channel-tools.js';
 
 const logger = createLogger('gateway:lifecycle');
 
@@ -137,7 +137,9 @@ export async function readRunningPort(dataDir: string, fallback: number): Promis
   try {
     const { port } = parsePidFile(await readFile(pidPath, 'utf-8'));
     if (typeof port === 'number' && port > 0) return port;
-  } catch { /* no pid file */ }
+  } catch {
+    /* no pid file */
+  }
   return fallback;
 }
 
@@ -145,8 +147,12 @@ export async function readRunningPort(dataDir: string, fallback: number): Promis
 const sharedChannels = new Map<string, Channel>();
 
 type FlatModelEntry = {
-  provider: string; id: string; maxTokens: number; temperature?: number;
-  apiKey?: string; apiBaseUrl?: string;
+  provider: string;
+  id: string;
+  maxTokens: number;
+  temperature?: number;
+  apiKey?: string;
+  apiBaseUrl?: string;
 };
 
 /**
@@ -162,7 +168,14 @@ function resolveModelEntry(
   if (slash !== -1) {
     const groupName = fullKey.slice(0, slash);
     const modelName = fullKey.slice(slash + 1);
-    const group = models[groupName] as { provider: string; apiKey?: string; apiBaseUrl?: string; models?: Record<string, { id: string; maxTokens: number; temperature?: number }> } | undefined;
+    const group = models[groupName] as
+      | {
+          provider: string;
+          apiKey?: string;
+          apiBaseUrl?: string;
+          models?: Record<string, { id: string; maxTokens: number; temperature?: number }>;
+        }
+      | undefined;
     if (!group?.models) return undefined;
     const def = group.models[modelName];
     if (!def) return undefined;
@@ -172,7 +185,12 @@ function resolveModelEntry(
   return models[fullKey] as FlatModelEntry | undefined;
 }
 
-function buildRunner(agentCfg: AgentConfig, state: GatewayState, skillsText = '', agentSkillRegistry?: import('../skills/registry.js').SkillRegistry): AgentRunner {
+function buildRunner(
+  agentCfg: AgentConfig,
+  state: GatewayState,
+  skillsText = '',
+  agentSkillRegistry?: import('../skills/registry.js').SkillRegistry,
+): AgentRunner {
   const { config, dataDir } = state;
   const sessionsDir = join(dataDir, 'sessions');
   const workspaceDir = agentCfg.workspace ?? config.defaults.workspace ?? process.cwd();
@@ -210,10 +228,16 @@ function buildRunner(agentCfg: AgentConfig, state: GatewayState, skillsText = ''
   // Supports both grouped format { provider, models: { key: { id } } }
   // and legacy flat format { provider: 'openai-compat', id, apiBaseUrl, apiKey }.
   for (const [groupName, groupVal] of Object.entries(config.models as Record<string, unknown>)) {
-    const group = groupVal as { provider?: string; apiKey?: string; apiBaseUrl?: string; models?: Record<string, { id: string }> };
+    const group = groupVal as {
+      provider?: string;
+      apiKey?: string;
+      apiBaseUrl?: string;
+      models?: Record<string, { id: string }>;
+    };
     const provider = group.provider;
     if (!provider || (provider !== 'openai-compat' && provider !== 'ollama')) continue;
-    const baseURL = group.apiBaseUrl ?? (provider === 'ollama' ? 'http://localhost:11434/v1' : undefined);
+    const baseURL =
+      group.apiBaseUrl ?? (provider === 'ollama' ? 'http://localhost:11434/v1' : undefined);
     if (!baseURL) {
       logger.warn('Skipping compat model registration: missing apiBaseUrl', { groupName });
       continue;
@@ -257,7 +281,9 @@ function buildRunner(agentCfg: AgentConfig, state: GatewayState, skillsText = ''
   // Tool registry
   const tools = new ToolRegistry();
   // Pass skill dirs so the agent can read files inside skill directories
-  const skillAllowedDirs = agentSkillRegistry ? agentSkillRegistry.list().map((s) => dirname(s.filePath)) : [];
+  const skillAllowedDirs = agentSkillRegistry
+    ? agentSkillRegistry.list().map((s) => dirname(s.filePath))
+    : [];
   tools.registerMany(createFsTools(workspaceDir, skillAllowedDirs));
   tools.register(createBashTool({ cwd: workspaceDir }));
   tools.registerMany(createMemoryTools(memoryStore, config.memory));
@@ -271,11 +297,13 @@ function buildRunner(agentCfg: AgentConfig, state: GatewayState, skillsText = ''
   // Scheduler tools share the same CronScheduler singleton across all agents.
   tools.registerMany(createSchedulerTools(state.runners, state.scheduler, state.dataDir));
   // Channel tools — let the agent send text/files to any registered channel.
-  tools.registerMany(createChannelTools({
-    channels: sharedChannels,
-    agentId: agentCfg.id as import('../core/types.js').AgentId,
-    workspaceDir,
-  }));
+  tools.registerMany(
+    createChannelTools({
+      channels: sharedChannels,
+      agentId: agentCfg.id as import('../core/types.js').AgentId,
+      workspaceDir,
+    }),
+  );
 
   // Web search — build provider list from config
   const searchProviders: SearchProvider[] = [];
@@ -388,7 +416,10 @@ export async function startGateway(
       const agentSkills = filterSkillsForAgent(globalSkillRegistry.list(), agentCfg.skills ?? []);
       const agentSkillsText = buildSkillsDirectory(agentSkills, config.skills.compact ?? true);
       if (agentSkills.length > 0) {
-        logger.info('Skills loaded for agent', { agentId: agentCfg.id, skills: agentSkills.map((s) => s.id) });
+        logger.info('Skills loaded for agent', {
+          agentId: agentCfg.id,
+          skills: agentSkills.map((s) => s.id),
+        });
       }
       // Build a per-agent registry so skill_read / skill_list are scoped to this agent's skills
       const agentSkillRegistry = new (await import('../skills/registry.js')).SkillRegistry();
@@ -498,7 +529,10 @@ export async function startGateway(
   // Routes a ChannelMessage to the appropriate AgentRunner and streams/sends
   // the reply back via the originating channel.
   const activeChannels: { stop(): Promise<void> }[] = [];
-  type WebhookHandler = (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => Promise<void>;
+  type WebhookHandler = (
+    req: import('node:http').IncomingMessage,
+    res: import('node:http').ServerResponse,
+  ) => Promise<void>;
   const webhookHandlers = new Map<string, WebhookHandler>();
 
   async function startExternalChannels(): Promise<void> {
@@ -536,7 +570,9 @@ export async function startGateway(
         sharedChannels.set('telegram', tg as unknown as Channel);
         logger.info('Telegram channel active', { agentId: tgCfg.defaultAgentId });
       } catch (err: unknown) {
-        logger.error('Failed to start Telegram channel — gateway continues without it', { error: String(err) });
+        logger.error('Failed to start Telegram channel — gateway continues without it', {
+          error: String(err),
+        });
       }
     }
 
@@ -576,7 +612,9 @@ export async function startGateway(
         sharedChannels.set('discord', dc as unknown as Channel);
         logger.info('Discord channel active', { agentId: dcCfg.defaultAgentId });
       } catch (err: unknown) {
-        logger.error('Failed to start Discord channel — gateway continues without it', { error: String(err) });
+        logger.error('Failed to start Discord channel — gateway continues without it', {
+          error: String(err),
+        });
       }
     }
 
@@ -613,9 +651,13 @@ export async function startGateway(
         // WebSocket mode: no webhook handler needed — events arrive via WSClient
         activeChannels.push(feishu);
         sharedChannels.set('feishu', feishu as unknown as Channel);
-        logger.info('Feishu channel active (WebSocket mode)', { agentId: feishuCfg.defaultAgentId });
+        logger.info('Feishu channel active (WebSocket mode)', {
+          agentId: feishuCfg.defaultAgentId,
+        });
       } catch (err: unknown) {
-        logger.error('Failed to start Feishu channel — gateway continues without it', { error: String(err) });
+        logger.error('Failed to start Feishu channel — gateway continues without it', {
+          error: String(err),
+        });
       }
     }
 
@@ -650,7 +692,9 @@ export async function startGateway(
         sharedChannels.set('qq', qq as unknown as Channel);
         logger.info('QQ channel active', { agentId: qqCfg.defaultAgentId });
       } catch (err: unknown) {
-        logger.error('Failed to start QQ channel — gateway continues without it', { error: String(err) });
+        logger.error('Failed to start QQ channel — gateway continues without it', {
+          error: String(err),
+        });
       }
     }
   }
@@ -670,7 +714,9 @@ export async function startGateway(
       await federationNode.start();
       rpcContext.federationNode = federationNode;
     } catch (err) {
-      logger.error('Federation node failed to start — gateway continues without it', { error: String(err) });
+      logger.error('Federation node failed to start — gateway continues without it', {
+        error: String(err),
+      });
     }
   }
 

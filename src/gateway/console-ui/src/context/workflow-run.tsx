@@ -6,39 +6,39 @@
  * stores the active runId and its associated WorkflowDef for cross-tab banner display.
  */
 import {
-  createContext,
-  useContext,
-  useState,
   type Dispatch,
   type ReactNode,
   type SetStateAction,
-} from 'react'
-import type { WorkflowDef } from '../types.js'
+  createContext,
+  useContext,
+  useState,
+} from 'react';
+import type { WorkflowDef } from '../types.js';
 
 export interface ActiveRunRef {
-  runId: string
-  workflowDef: WorkflowDef
+  runId: string;
+  workflowDef: WorkflowDef;
 }
 
 export interface WorkflowRunCtxValue {
-  activeRunRef: ActiveRunRef | null
-  setActiveRunRef: Dispatch<SetStateAction<ActiveRunRef | null>>
+  activeRunRef: ActiveRunRef | null;
+  setActiveRunRef: Dispatch<SetStateAction<ActiveRunRef | null>>;
 }
 
-export const WorkflowRunContext = createContext<WorkflowRunCtxValue | null>(null)
+export const WorkflowRunContext = createContext<WorkflowRunCtxValue | null>(null);
 
 export function useWorkflowRun(): WorkflowRunCtxValue {
-  const ctx = useContext(WorkflowRunContext)
-  if (!ctx) throw new Error('useWorkflowRun must be used inside WorkflowRunProvider')
-  return ctx
+  const ctx = useContext(WorkflowRunContext);
+  if (!ctx) throw new Error('useWorkflowRun must be used inside WorkflowRunProvider');
+  return ctx;
 }
 
 export function WorkflowRunProvider({ children }: { children: ReactNode }) {
-  const [activeRunRef, setActiveRunRef] = useState<ActiveRunRef | null>(null)
+  const [activeRunRef, setActiveRunRef] = useState<ActiveRunRef | null>(null);
 
   return (
     <WorkflowRunContext.Provider value={{ activeRunRef, setActiveRunRef }}>
       {children}
     </WorkflowRunContext.Provider>
-  )
+  );
 }

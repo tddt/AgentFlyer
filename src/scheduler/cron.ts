@@ -1,7 +1,6 @@
 import { Cron } from 'croner';
 import { ulid } from 'ulid';
 import { createLogger } from '../core/logger.js';
-import type { TaskId } from '../core/types.js';
 
 const logger = createLogger('scheduler:cron');
 
@@ -52,7 +51,9 @@ export class CronScheduler {
       name: spec.name,
       expression: spec.expression,
       createdAt: Date.now(),
-      get lastRunAt() { return lastRunAt; },
+      get lastRunAt() {
+        return lastRunAt;
+      },
       get nextRunAt() {
         const next = cron.nextRun();
         return next ? next.getTime() : undefined;

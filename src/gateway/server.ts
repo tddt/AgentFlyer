@@ -1,9 +1,9 @@
 import * as http from 'node:http';
-import * as net from 'node:net';
+import type * as net from 'node:net';
 import { createLogger } from '../core/logger.js';
+import type { LogBroadcaster } from './log-buffer.js';
 import { routeRequest } from './router.js';
 import type { RouterOptions } from './router.js';
-import type { LogBroadcaster } from './log-buffer.js';
 
 const logger = createLogger('gateway:server');
 
@@ -22,7 +22,7 @@ function bindAddress(mode: GatewayServerOptions['bind']): string {
   if (mode === 'loopback') return '127.0.0.1';
   if (mode === 'local') return '0.0.0.0';
   // tailscale: look up *ts.net address or fall back
-  return process.env['TAILSCALE_ADDR'] ?? '100.64.0.0';
+  return process.env.TAILSCALE_ADDR ?? '100.64.0.0';
 }
 
 export interface GatewayServer {
@@ -71,7 +71,10 @@ export function createGatewayServer(opts: GatewayServerOptions): GatewayServer {
     stop() {
       return new Promise((resolve, reject) => {
         server.close((err) => {
-          if (err) { reject(err); return; }
+          if (err) {
+            reject(err);
+            return;
+          }
           logger.info('Gateway server stopped');
           resolve();
         });

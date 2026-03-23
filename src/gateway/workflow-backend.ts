@@ -222,7 +222,11 @@ function extractStepVars(
   const vars = stepVars.get(stepId) ?? new Map<string, string>();
 
   let parsed: unknown;
-  try { parsed = JSON.parse(output); } catch { /* not JSON */ }
+  try {
+    parsed = JSON.parse(output);
+  } catch {
+    /* not JSON */
+  }
 
   for (const def of step.outputs) {
     let value = '';
@@ -232,8 +236,16 @@ function extractStepVars(
         const varsFlat: Record<string, Record<string, string>> = {};
         for (const [sid, vmap] of stepVars) varsFlat[sid] = Object.fromEntries(vmap);
         // eslint-disable-next-line no-new-func
-        value = String(new Function('output', 'vars', 'globals', `return (${def.transform})`)(output, varsFlat, globals) ?? '');
-      } catch { value = ''; }
+        value = String(
+          new Function('output', 'vars', 'globals', `return (${def.transform})`)(
+            output,
+            varsFlat,
+            globals,
+          ) ?? '',
+        );
+      } catch {
+        value = '';
+      }
     } else if (def.jsonPath && parsed !== undefined) {
       // Simple JSONPath: support "$.field" and "$.a.b" only (no arrays)
       const pathParts = def.jsonPath.replace(/^\$\.?/, '').split('.');
@@ -270,7 +282,9 @@ function evalBranchExpression(
       vars[sid] = Object.fromEntries(vmap);
     }
     // eslint-disable-next-line no-new-func
-    return Boolean(new Function('output', 'vars', 'globals', `return (${expression});`)(output, vars, globals));
+    return Boolean(
+      new Function('output', 'vars', 'globals', `return (${expression});`)(output, vars, globals),
+    );
   } catch {
     return false;
   }
@@ -305,9 +319,8 @@ async function executeWorkflowBackground(
   const stepIndexMap = new Map<string, number>(workflow.steps.map((s, i) => [s.id, i]));
 
   // Pointer into workflow.steps — may jump (condition branches).
-  let stepIdx = workflow.entryStepId !== undefined
-    ? (stepIndexMap.get(workflow.entryStepId) ?? 0)
-    : 0;
+  let stepIdx =
+    workflow.entryStepId !== undefined ? (stepIndexMap.get(workflow.entryStepId) ?? 0) : 0;
 
   // Guard: at most steps.length * (maxRetries+1) + 1 iterations to prevent infinite loops
   const maxIter = workflow.steps.length * 10 + 1;
@@ -339,7 +352,13 @@ async function executeWorkflowBackground(
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         const type = step.type ?? 'agent';
-        const message = interpolate(step.messageTemplate, run.input, prevOutputs, stepVars, globals);
+        const message = interpolate(
+          step.messageTemplate,
+          run.input,
+          prevOutputs,
+          stepVars,
+          globals,
+        );
 
         if (type === 'agent') {
           const runner = ctx.runners.get(step.agentId ?? '');
@@ -349,17 +368,17 @@ async function executeWorkflowBackground(
           let agentMsg = message;
           const formatInstruction = step.outputFormatPrompt
             ? step.outputFormatPrompt
-            : (step.outputFormat && FORMAT_INSTRUCTIONS[step.outputFormat])
+            : step.outputFormat && FORMAT_INSTRUCTIONS[step.outputFormat]
               ? FORMAT_INSTRUCTIONS[step.outputFormat]!
               : '';
           if (formatInstruction) {
             if (step.outputFormatMode === 'prepend') {
               // RATIONALE: prepend mode places the format requirement as the primary directive
               // so the agent treats it with higher priority than a trailing hint.
-              agentMsg = formatInstruction.trimStart() + '\n\n' + message;
+              agentMsg = `${formatInstruction.trimStart()}\n\n${message}`;
             } else {
               // append (default)
-              agentMsg = message + '\n\n' + formatInstruction.trimStart();
+              agentMsg = `${message}\n\n${formatInstruction.trimStart()}`;
             }
           }
 
@@ -373,13 +392,16 @@ async function executeWorkflowBackground(
             }
           }
           stepOutput = output.trim();
-
         } else if (type === 'transform') {
           // RATIONALE: transform steps run a tiny JS snippet so non-LLM data transformation
           // is cheap and does not consume API tokens. Code runs in a limited Function scope.
           // eslint-disable-next-line no-new-func
-          const result = new Function('vars', 'globals', 'input', 'prev_output',
-            `return (${step.transformCode ?? message});`
+          const result = new Function(
+            'vars',
+            'globals',
+            'input',
+            'prev_output',
+            `return (${step.transformCode ?? message});`,
           )(
             Object.fromEntries([...stepVars.entries()].map(([k, v]) => [k, Object.fromEntries(v)])),
             globals,
@@ -387,7 +409,6 @@ async function executeWorkflowBackground(
             prevOutputs[prevOutputs.length - 1] ?? '',
           );
           stepOutput = String(result ?? '');
-
         } else if (type === 'http') {
           const url = interpolate(step.url ?? '', run.input, prevOutputs, stepVars, globals);
           const body = step.bodyTemplate
@@ -399,7 +420,6 @@ async function executeWorkflowBackground(
             body: body,
           });
           stepOutput = await resp.text();
-
         } else if (type === 'condition') {
           // Condition steps evaluate the most recent output to choose a branch.
           const testOutput = prevOutputs[prevOutputs.length - 1] ?? '';
@@ -411,7 +431,11 @@ async function executeWorkflowBackground(
                 if (branch.goto === '$end') {
                   // Finish pipeline immediately
                   const snapEnd = snapshotVars(stepVars);
-                  run.stepResults[resultSlot] = { stepId: step.id, output: `→ $end`, ...(Object.keys(snapEnd).length ? { varsSnapshot: snapEnd } : {}) };
+                  run.stepResults[resultSlot] = {
+                    stepId: step.id,
+                    output: '→ $end',
+                    ...(Object.keys(snapEnd).length ? { varsSnapshot: snapEnd } : {}),
+                  };
                   prevOutputs.push(stepOutput);
                   run.status = 'done';
                   run.finishedAt = Date.now();
@@ -424,7 +448,11 @@ async function executeWorkflowBackground(
                 if (targetIdx !== undefined) {
                   extractStepVars(stepOutput, step.id, step, stepVars, globals);
                   const snapBranch = snapshotVars(stepVars);
-                  run.stepResults[resultSlot] = { stepId: step.id, output: `→ ${branch.goto}`, ...(Object.keys(snapBranch).length ? { varsSnapshot: snapBranch } : {}) };
+                  run.stepResults[resultSlot] = {
+                    stepId: step.id,
+                    output: `→ ${branch.goto}`,
+                    ...(Object.keys(snapBranch).length ? { varsSnapshot: snapBranch } : {}),
+                  };
                   prevOutputs.push(stepOutput);
                   activeWorkflowRuns.set(run.runId, { ...run, stepResults: [...run.stepResults] });
                   stepIdx = targetIdx;
@@ -442,7 +470,12 @@ async function executeWorkflowBackground(
       } catch (err) {
         lastError = String(err);
         if (attempt < maxRetries) {
-          logger.warn('Workflow step error, retrying', { runId: run.runId, step: stepIdx, attempt, error: lastError });
+          logger.warn('Workflow step error, retrying', {
+            runId: run.runId,
+            step: stepIdx,
+            attempt,
+            error: lastError,
+          });
         }
       }
     }
@@ -469,7 +502,11 @@ async function executeWorkflowBackground(
     if ((step.type ?? 'agent') !== 'condition') {
       extractStepVars(stepOutput, step.id, step, stepVars, globals);
       const snap = snapshotVars(stepVars);
-      run.stepResults[resultSlot] = { stepId: step.id, output: stepOutput, ...(Object.keys(snap).length ? { varsSnapshot: snap } : {}) };
+      run.stepResults[resultSlot] = {
+        stepId: step.id,
+        output: stepOutput,
+        ...(Object.keys(snap).length ? { varsSnapshot: snap } : {}),
+      };
       prevOutputs.push(stepOutput);
       activeWorkflowRuns.set(run.runId, { ...run, stepResults: [...run.stepResults] });
       stepIdx += 1;
@@ -575,7 +612,10 @@ export async function dispatchWorkflowRpc(
       const { workflowId } = (params ?? {}) as { workflowId?: string };
       if (!workflowId) return err(id, -32602, 'workflowId is required');
       const workflows = await readWorkflowsFile(ctx.dataDir);
-      await writeWorkflowsFile(ctx.dataDir, workflows.filter((w) => w.id !== workflowId));
+      await writeWorkflowsFile(
+        ctx.dataDir,
+        workflows.filter((w) => w.id !== workflowId),
+      );
       return ok(id, { deleted: true, workflowId });
     }
 
@@ -648,7 +688,10 @@ export async function dispatchWorkflowRpc(
       // workflows before they finish (persistence only happens on completion/cancel).
       const activeRuns = Array.from(activeWorkflowRuns.values());
       const activeIds = new Set(activeRuns.map((r) => r.runId));
-      const merged = [...activeRuns, ...history.filter((r) => !activeIds.has(r.runId))].slice(0, 100);
+      const merged = [...activeRuns, ...history.filter((r) => !activeIds.has(r.runId))].slice(
+        0,
+        100,
+      );
       return ok(id, { runs: merged });
     }
 

@@ -1,78 +1,84 @@
-import { useState } from 'react'
-import { Button } from './Button.js'
+import { Button } from './Button.js';
 
-type JsonPrimitive = string | number | boolean | null
-export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
+type JsonPrimitive = string | number | boolean | null;
+export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
-type JsonType = 'string' | 'number' | 'boolean' | 'null' | 'array' | 'object'
+type JsonType = 'string' | 'number' | 'boolean' | 'null' | 'array' | 'object';
 
 interface JsonEditorProps {
-  value: JsonValue
-  onChange: (value: JsonValue) => void
-  path?: string
-  depth?: number
+  value: JsonValue;
+  onChange: (value: JsonValue) => void;
+  path?: string;
+  depth?: number;
 }
 
 function detectType(value: JsonValue): JsonType {
-  if (value === null) return 'null'
-  if (Array.isArray(value)) return 'array'
-  if (typeof value === 'object') return 'object'
-  if (typeof value === 'boolean') return 'boolean'
-  if (typeof value === 'number') return 'number'
-  return 'string'
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  if (typeof value === 'object') return 'object';
+  if (typeof value === 'boolean') return 'boolean';
+  if (typeof value === 'number') return 'number';
+  return 'string';
 }
 
 function createDefaultValue(type: JsonType): JsonValue {
   switch (type) {
     case 'string':
-      return ''
+      return '';
     case 'number':
-      return 0
+      return 0;
     case 'boolean':
-      return false
+      return false;
     case 'null':
-      return null
+      return null;
     case 'array':
-      return []
+      return [];
     case 'object':
-      return {}
+      return {};
   }
 }
 
 function nextObjectKey(obj: Record<string, JsonValue>): string {
-  const base = 'newKey'
-  if (!(base in obj)) return base
-  let i = 1
-  while (`${base}${i}` in obj) i += 1
-  return `${base}${i}`
+  const base = 'newKey';
+  if (!(base in obj)) return base;
+  let i = 1;
+  while (`${base}${i}` in obj) i += 1;
+  return `${base}${i}`;
 }
 
-function renameKey(obj: Record<string, JsonValue>, oldKey: string, newKey: string): Record<string, JsonValue> {
-  if (oldKey === newKey || !newKey.trim()) return obj
-  const key = newKey.trim()
-  const entries = Object.entries(obj).map(([k, v]) => [k === oldKey ? key : k, v] as const)
-  return Object.fromEntries(entries)
+function renameKey(
+  obj: Record<string, JsonValue>,
+  oldKey: string,
+  newKey: string,
+): Record<string, JsonValue> {
+  if (oldKey === newKey || !newKey.trim()) return obj;
+  const key = newKey.trim();
+  const entries = Object.entries(obj).map(([k, v]) => [k === oldKey ? key : k, v] as const);
+  return Object.fromEntries(entries);
 }
 
 function FieldLabel({ path, depth }: { path: string; depth: number }) {
   return (
-    <div className="text-[11px] uppercase tracking-wide text-slate-500" style={{ paddingLeft: `${depth * 8}px` }}>
+    <div
+      className="text-[11px] uppercase tracking-wide text-slate-500"
+      style={{ paddingLeft: `${depth * 8}px` }}
+    >
       {path || 'root'}
     </div>
-  )
+  );
 }
 
 export function JsonEditor({ value, onChange, path = 'root', depth = 0 }: JsonEditorProps) {
-  const currentType = detectType(value)
+  const currentType = detectType(value);
 
   const handleTypeChange = (nextType: JsonType) => {
-    if (nextType === currentType) return
-    onChange(createDefaultValue(nextType))
-  }
+    if (nextType === currentType) return;
+    onChange(createDefaultValue(nextType));
+  };
 
   if (currentType === 'object') {
-    const obj = value as Record<string, JsonValue>
-    const entries = Object.entries(obj)
+    const obj = value as Record<string, JsonValue>;
+    const entries = Object.entries(obj);
     return (
       <div className="rounded-xl bg-slate-900/50 ring-1 ring-slate-700/60 p-3 flex flex-col gap-3">
         <div className="flex items-center justify-between gap-2">
@@ -94,8 +100,8 @@ export function JsonEditor({ value, onChange, path = 'root', depth = 0 }: JsonEd
               size="sm"
               variant="ghost"
               onClick={() => {
-                const key = nextObjectKey(obj)
-                onChange({ ...obj, [key]: '' })
+                const key = nextObjectKey(obj);
+                onChange({ ...obj, [key]: '' });
               }}
             >
               + Field
@@ -103,12 +109,13 @@ export function JsonEditor({ value, onChange, path = 'root', depth = 0 }: JsonEd
           </div>
         </div>
 
-        {entries.length === 0 && (
-          <div className="text-xs text-slate-500">Empty object</div>
-        )}
+        {entries.length === 0 && <div className="text-xs text-slate-500">Empty object</div>}
 
         {entries.map(([k, v]) => (
-          <div key={`${path}.${k}`} className="grid grid-cols-[180px_minmax(0,1fr)_auto] gap-2 items-start">
+          <div
+            key={`${path}.${k}`}
+            className="grid grid-cols-[180px_minmax(0,1fr)_auto] gap-2 items-start"
+          >
             <input
               value={k}
               onChange={(e) => onChange(renameKey(obj, k, e.target.value))}
@@ -124,9 +131,9 @@ export function JsonEditor({ value, onChange, path = 'root', depth = 0 }: JsonEd
               size="sm"
               variant="ghost"
               onClick={() => {
-                const next = { ...obj }
-                delete next[k]
-                onChange(next)
+                const next = { ...obj };
+                delete next[k];
+                onChange(next);
               }}
             >
               Remove
@@ -134,11 +141,11 @@ export function JsonEditor({ value, onChange, path = 'root', depth = 0 }: JsonEd
           </div>
         ))}
       </div>
-    )
+    );
   }
 
   if (currentType === 'array') {
-    const arr = value as JsonValue[]
+    const arr = value as JsonValue[];
     return (
       <div className="rounded-xl bg-slate-900/50 ring-1 ring-slate-700/60 p-3 flex flex-col gap-3">
         <div className="flex items-center justify-between gap-2">
@@ -156,28 +163,25 @@ export function JsonEditor({ value, onChange, path = 'root', depth = 0 }: JsonEd
               <option value="boolean">boolean</option>
               <option value="null">null</option>
             </select>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => onChange([...arr, ''])}
-            >
+            <Button size="sm" variant="ghost" onClick={() => onChange([...arr, ''])}>
               + Item
             </Button>
           </div>
         </div>
 
-        {arr.length === 0 && (
-          <div className="text-xs text-slate-500">Empty array</div>
-        )}
+        {arr.length === 0 && <div className="text-xs text-slate-500">Empty array</div>}
 
         {arr.map((item, idx) => (
-          <div key={`${path}[${idx}]`} className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 items-start">
+          <div
+            key={`${path}[${idx}]`}
+            className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 items-start"
+          >
             <JsonEditor
               value={item}
               onChange={(next) => {
-                const clone = [...arr]
-                clone[idx] = next
-                onChange(clone)
+                const clone = [...arr];
+                clone[idx] = next;
+                onChange(clone);
               }}
               path={`${path}[${idx}]`}
               depth={depth + 1}
@@ -186,9 +190,9 @@ export function JsonEditor({ value, onChange, path = 'root', depth = 0 }: JsonEd
               size="sm"
               variant="ghost"
               onClick={() => {
-                const clone = [...arr]
-                clone.splice(idx, 1)
-                onChange(clone)
+                const clone = [...arr];
+                clone.splice(idx, 1);
+                onChange(clone);
               }}
             >
               Remove
@@ -196,7 +200,7 @@ export function JsonEditor({ value, onChange, path = 'root', depth = 0 }: JsonEd
           </div>
         ))}
       </div>
-    )
+    );
   }
 
   if (currentType === 'boolean') {
@@ -227,7 +231,7 @@ export function JsonEditor({ value, onChange, path = 'root', depth = 0 }: JsonEd
           </label>
         </div>
       </div>
-    )
+    );
   }
 
   if (currentType === 'number') {
@@ -255,7 +259,7 @@ export function JsonEditor({ value, onChange, path = 'root', depth = 0 }: JsonEd
           />
         </div>
       </div>
-    )
+    );
   }
 
   if (currentType === 'null') {
@@ -275,7 +279,7 @@ export function JsonEditor({ value, onChange, path = 'root', depth = 0 }: JsonEd
           <option value="object">object</option>
         </select>
       </div>
-    )
+    );
   }
 
   return (
@@ -301,16 +305,16 @@ export function JsonEditor({ value, onChange, path = 'root', depth = 0 }: JsonEd
         />
       </div>
     </div>
-  )
+  );
 }
 
 export function isJsonValue(value: unknown): value is JsonValue {
-  if (value === null) return true
-  const t = typeof value
-  if (t === 'string' || t === 'number' || t === 'boolean') return true
-  if (Array.isArray(value)) return value.every((item) => isJsonValue(item))
+  if (value === null) return true;
+  const t = typeof value;
+  if (t === 'string' || t === 'number' || t === 'boolean') return true;
+  if (Array.isArray(value)) return value.every((item) => isJsonValue(item));
   if (t === 'object') {
-    return Object.values(value as Record<string, unknown>).every((item) => isJsonValue(item))
+    return Object.values(value as Record<string, unknown>).every((item) => isJsonValue(item));
   }
-  return false
+  return false;
 }

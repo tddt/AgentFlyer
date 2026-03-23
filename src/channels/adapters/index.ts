@@ -1,3 +1,4 @@
+import { createLogger } from '../../core/logger.js';
 /**
  * Channel Adapter Factory
  *
@@ -6,7 +7,6 @@
  * from config. Plugins can register new channel factories via the Plugin SDK.
  */
 import type { Channel } from '../types.js';
-import { createLogger } from '../../core/logger.js';
 
 const logger = createLogger('channels:adapters');
 
@@ -60,7 +60,7 @@ export function buildChannel(type: string, config: ChannelConfig): Channel {
   if (!factory) {
     throw new Error(
       `No channel adapter registered for type "${type}". ` +
-      `Available: ${listChannelAdapterTypes().join(', ') || '(none)'}`,
+        `Available: ${listChannelAdapterTypes().join(', ') || '(none)'}`,
     );
   }
   return factory(config);

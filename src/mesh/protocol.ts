@@ -1,6 +1,6 @@
 import { ulid } from 'ulid';
 import { createLogger } from '../core/logger.js';
-import type { AgentId, TaskId, NodeId } from '../core/types.js';
+import type { AgentId, NodeId, TaskId } from '../core/types.js';
 
 const logger = createLogger('mesh:protocol');
 

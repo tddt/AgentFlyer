@@ -1,8 +1,8 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ulid } from 'ulid';
 import { createLogger } from '../../../core/logger.js';
-import { CronScheduler } from '../../../scheduler/cron.js';
+import type { CronScheduler } from '../../../scheduler/cron.js';
 import type { AgentRunner } from '../../runner.js';
 import type { RegisteredTool } from '../registry.js';
 
@@ -84,16 +84,28 @@ class TaskStore {
 
   private save(): void {
     try {
-      writeFileSync(this.filePath, JSON.stringify(Array.from(this.tasks.values()), null, 2), 'utf-8');
+      writeFileSync(
+        this.filePath,
+        JSON.stringify(Array.from(this.tasks.values()), null, 2),
+        'utf-8',
+      );
     } catch (err) {
       logger.error('Failed to save scheduled-tasks.json', { error: String(err) });
     }
   }
 
-  has(id: string): boolean { return this.tasks.has(id); }
-  get(id: string): ScheduledTaskMeta | undefined { return this.tasks.get(id); }
-  all(): ScheduledTaskMeta[] { return Array.from(this.tasks.values()); }
-  size(): number { return this.tasks.size; }
+  has(id: string): boolean {
+    return this.tasks.has(id);
+  }
+  get(id: string): ScheduledTaskMeta | undefined {
+    return this.tasks.get(id);
+  }
+  all(): ScheduledTaskMeta[] {
+    return Array.from(this.tasks.values());
+  }
+  size(): number {
+    return this.tasks.size;
+  }
 
   set(meta: ScheduledTaskMeta): void {
     this.tasks.set(meta.id, meta);
@@ -150,17 +162,26 @@ export function createSchedulerTools(
 
         // Workflow-targeted tasks are dispatched by the gateway's RPC layer, not here.
         if (!current.agentId || current.workflowId) {
-          logger.info('Scheduled task: workflow target, skipping agent runner', { taskId: meta.id });
+          logger.info('Scheduled task: workflow target, skipping agent runner', {
+            taskId: meta.id,
+          });
           return;
         }
 
         const workerRunner = runners.get(current.agentId);
         if (!workerRunner) {
-          logger.warn('Scheduled task: agent no longer available', { taskId: meta.id, agentId: current.agentId });
+          logger.warn('Scheduled task: agent no longer available', {
+            taskId: meta.id,
+            agentId: current.agentId,
+          });
           return;
         }
 
-        logger.info('Running scheduled task', { taskId: meta.id, name: current.name, agentId: current.agentId });
+        logger.info('Running scheduled task', {
+          taskId: meta.id,
+          name: current.name,
+          agentId: current.agentId,
+        });
         const thread = `sched-${meta.id}-run-${current.runCount + 1}`;
         let result: string;
         try {
@@ -173,7 +194,11 @@ export function createSchedulerTools(
           logger.info('Scheduled task complete', { taskId: meta.id, name: current.name });
         } catch (err) {
           result = `Error: ${String(err)}`;
-          logger.error('Scheduled task failed', { taskId: meta.id, name: current.name, error: String(err) });
+          logger.error('Scheduled task failed', {
+            taskId: meta.id,
+            name: current.name,
+            error: String(err),
+          });
         }
 
         if (current.reportTo) {
@@ -185,7 +210,11 @@ export function createSchedulerTools(
               await runTurn(reporterRunner, reportMsg, reportThread);
               logger.info('Task report sent', { taskId: meta.id, reportTo: current.reportTo });
             } catch (err) {
-              logger.error('Failed to send task report', { taskId: meta.id, reportTo: current.reportTo, error: String(err) });
+              logger.error('Failed to send task report', {
+                taskId: meta.id,
+                reportTo: current.reportTo,
+                error: String(err),
+              });
             }
           }
         }
@@ -199,7 +228,11 @@ export function createSchedulerTools(
     for (const meta of taskStore.all()) {
       try {
         scheduleTaskHandler(meta);
-        logger.info('Restored scheduled task', { taskId: meta.id, name: meta.name, cron: meta.cronExpr });
+        logger.info('Restored scheduled task', {
+          taskId: meta.id,
+          name: meta.name,
+          cron: meta.cronExpr,
+        });
       } catch (err) {
         logger.warn('Failed to restore scheduled task', { taskId: meta.id, error: String(err) });
       }
@@ -263,7 +296,10 @@ export function createSchedulerTools(
 
       if (!runners.has(agent_id)) {
         const available = Array.from(runners.keys()).join(', ');
-        return { isError: true, content: `Agent '${agent_id}' not found. Available: ${available || 'none'}` };
+        return {
+          isError: true,
+          content: `Agent '${agent_id}' not found. Available: ${available || 'none'}`,
+        };
       }
       if (report_to && !runners.has(report_to)) {
         return { isError: true, content: `report_to agent '${report_to}' not found.` };
@@ -305,7 +341,7 @@ export function createSchedulerTools(
       return {
         isError: false,
         content: [
-          `✅ 任务已调度`,
+          '✅ 任务已调度',
           `- Task ID: ${taskId}`,
           `- 名称: ${name}`,
           `- 执行智能体: ${agent_id}`,
@@ -339,7 +375,9 @@ export function createSchedulerTools(
           `  last: ${lastRun} | next: ${nextRun}`,
           m.reportTo ? `  reports to: ${m.reportTo}` : '',
           m.lastResult ? `  last result preview: ${m.lastResult.slice(0, 80)}…` : '',
-        ].filter(Boolean).join('\n');
+        ]
+          .filter(Boolean)
+          .join('\n');
       });
       return { isError: false, content: lines.join('\n\n') };
     },

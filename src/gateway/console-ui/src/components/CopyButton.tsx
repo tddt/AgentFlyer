@@ -1,19 +1,19 @@
-import { useState } from 'react'
+import { useState } from 'react';
 
 interface Props {
-  text: string
-  className?: string
+  text: string;
+  className?: string;
 }
 
 export function CopyButton({ text, className = '' }: Props) {
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState(false);
 
   const handleClick = () => {
     navigator.clipboard.writeText(text).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    })
-  }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
 
   return (
     <button
@@ -23,5 +23,5 @@ export function CopyButton({ text, className = '' }: Props) {
     >
       {copied ? '✓ Copied' : 'Copy'}
     </button>
-  )
+  );
 }

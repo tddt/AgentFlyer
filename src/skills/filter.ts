@@ -5,10 +5,7 @@ import type { SkillMeta } from './registry.js';
  * If allowlist is provided, only listed skill IDs are returned.
  * Denylist entries are always excluded.
  */
-export function filterSkillsForAgent(
-  all: SkillMeta[],
-  agentSkillIds: string[],
-): SkillMeta[] {
+export function filterSkillsForAgent(all: SkillMeta[], agentSkillIds: string[]): SkillMeta[] {
   const allowed = new Set(agentSkillIds);
   // Empty list means "no skills assigned to this agent"
   if (allowed.size === 0) return [];

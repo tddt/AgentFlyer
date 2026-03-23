@@ -13,26 +13,25 @@
  *   federationWsPort = gatewayHttpPort + 200
  *   (e.g. gateway on 19789 → federation WS on 19989)
  */
-import { generateKeyPairSync, KeyObject } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { type KeyObject, generateKeyPairSync } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ulid } from 'ulid';
-import { createLogger } from '../core/logger.js';
 import type { FederationConfig } from '../core/config/schema.js';
+import { createLogger } from '../core/logger.js';
 import type { MemoryStore } from '../memory/store.js';
-import { PeerRegistry, type PeerInfo } from './peer.js';
-import { WsFederationTransport } from './transport/ws.js';
+import { createMdnsDiscovery } from './discovery/mdns.js';
+import { discoverTailscalePeers } from './discovery/tailscale.js';
+import { PeerRegistry } from './peer.js';
 import {
-  type FederationMessage,
   type AnnouncePayload,
+  type FederationMessage,
   type MemoryQueryPayload,
   type MemoryResultPayload,
   signPayload,
   verifyMessage,
 } from './protocol.js';
-import { createStaticDiscovery } from './discovery/static.js';
-import { createMdnsDiscovery } from './discovery/mdns.js';
-import { discoverTailscalePeers } from './discovery/tailscale.js';
+import { WsFederationTransport } from './transport/ws.js';
 
 const logger = createLogger('federation:node');
 
@@ -96,7 +95,10 @@ export class FederationNode {
     // Generate fresh keypair
     mkdirSync(keyDir, { recursive: true });
     const { privateKey, publicKey } = generateKeyPairSync('ed25519');
-    const privateKeyPem = (privateKey as KeyObject).export({ type: 'pkcs8', format: 'pem' }) as string;
+    const privateKeyPem = (privateKey as KeyObject).export({
+      type: 'pkcs8',
+      format: 'pem',
+    }) as string;
     const publicKeyPem = (publicKey as KeyObject).export({ type: 'spki', format: 'pem' }) as string;
     const nodeId = ulid();
 
@@ -149,10 +151,7 @@ export class FederationNode {
       }
 
       case 'PING': {
-        await this.transport.send(
-          fromPeerId,
-          this.buildMessage('PONG', { ts: Date.now() }),
-        );
+        await this.transport.send(fromPeerId, this.buildMessage('PONG', { ts: Date.now() }));
         break;
       }
 
@@ -166,25 +165,18 @@ export class FederationNode {
         if (!this.deps.memoryStore) break;
         const q = msg.payload as MemoryQueryPayload;
         try {
-          const entries = this.deps.memoryStore.searchFts(
-            q.query,
-            q.partition,
-            q.limit ?? 5,
-          );
+          const entries = this.deps.memoryStore.searchFts(q.query, q.partition, q.limit ?? 5);
           const resultPayload: MemoryResultPayload = {
             requestId: q.requestId,
             fromNodeId: this.nodeId,
-            entries: entries.map(e => ({
+            entries: entries.map((e) => ({
               id: e.id,
               content: e.content,
               partition: e.partition,
               createdAt: e.createdAt,
             })),
           };
-          await this.transport.send(
-            fromPeerId,
-            this.buildMessage('MEMORY_RESULT', resultPayload),
-          );
+          await this.transport.send(fromPeerId, this.buildMessage('MEMORY_RESULT', resultPayload));
         } catch (err) {
           logger.warn('MEMORY_QUERY handler error', { error: String(err) });
         }
@@ -204,9 +196,7 @@ export class FederationNode {
 
   private buildAnnouncePayload(): AnnouncePayload {
     // Strip PEM headers/footers and newlines to get raw base64
-    const publicKey = this.publicKeyPem
-      .replace(/-----[^-]+-----/g, '')
-      .replace(/\s+/g, '');
+    const publicKey = this.publicKeyPem.replace(/-----[^-]+-----/g, '').replace(/\s+/g, '');
     return {
       nodeId: this.nodeId,
       host: 'localhost',
@@ -224,9 +214,7 @@ export class FederationNode {
     await this.transport.start(this.federationPort);
 
     // Connect to static peers
-    const staticPeers = this.deps.config.discovery.static
-      ? this.deps.config.peers
-      : [];
+    const staticPeers = this.deps.config.discovery.static ? this.deps.config.peers : [];
     for (const sp of staticPeers) {
       this.peers.upsert({ nodeId: sp.nodeId, host: sp.host, federationPort: sp.port });
       const ok = await this.transport.connect(sp.host, sp.port, sp.nodeId);
@@ -249,7 +237,11 @@ export class FederationNode {
     if (this.deps.config.discovery.tailscale) {
       const tsPeers = await discoverTailscalePeers(this.federationPort);
       for (const tsp of tsPeers) {
-        this.peers.upsert({ nodeId: tsp.nodeId, host: tsp.host, federationPort: tsp.federationPort });
+        this.peers.upsert({
+          nodeId: tsp.nodeId,
+          host: tsp.host,
+          federationPort: tsp.federationPort,
+        });
         const ok = await this.transport.connect(tsp.host, tsp.federationPort, tsp.nodeId);
         if (ok) this.peers.setStatus(tsp.nodeId, 'connected');
       }
@@ -271,16 +263,14 @@ export class FederationNode {
   }
 
   private async broadcast(msg: FederationMessage): Promise<void> {
-    await this.transport.broadcast(msg).catch(err =>
-      logger.warn('Broadcast error', { error: String(err) }),
-    );
+    await this.transport
+      .broadcast(msg)
+      .catch((err) => logger.warn('Broadcast error', { error: String(err) }));
   }
 
   async stop(): Promise<void> {
     if (this.pingInterval) clearInterval(this.pingInterval);
-    await this.broadcast(
-      this.buildMessage('GOODBYE', { nodeId: this.nodeId, reason: 'shutdown' }),
-    );
+    await this.broadcast(this.buildMessage('GOODBYE', { nodeId: this.nodeId, reason: 'shutdown' }));
     await this.mdnsDiscovery?.stop();
     await this.transport.stop();
     logger.info('Federation node stopped', { nodeId: this.nodeId });
@@ -295,7 +285,7 @@ export class FederationNode {
     latencyMs?: number;
     lastSeen?: number;
   }> {
-    return this.peers.list().map(p => ({
+    return this.peers.list().map((p) => ({
       nodeId: p.nodeId,
       host: p.host,
       port: p.federationPort,

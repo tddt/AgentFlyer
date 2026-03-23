@@ -45,9 +45,7 @@ export class MeshRegistry {
 
   /** Find agents matching a capability filter. */
   findByCapability(capability: string): MeshAgent[] {
-    return this.list().filter(
-      (a) => a.status !== 'offline' && a.capabilities.includes(capability),
-    );
+    return this.list().filter((a) => a.status !== 'offline' && a.capabilities.includes(capability));
   }
 
   /** Evict agents that have not sent a heartbeat within `ttlMs`. */

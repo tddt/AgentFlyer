@@ -1,4 +1,11 @@
-export { loadConfig, saveConfig, ensureDataDir, watchConfig, getDefaultConfigDir, getDefaultConfigPath } from './loader.js';
+export {
+  loadConfig,
+  saveConfig,
+  ensureDataDir,
+  watchConfig,
+  getDefaultConfigDir,
+  getDefaultConfigPath,
+} from './loader.js';
 export {
   ConfigSchema,
   AgentConfigSchema,

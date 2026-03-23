@@ -176,7 +176,8 @@ export class DiscordChannel implements Channel {
       if (
         this.opts.allowedChannelIds.length > 0 &&
         !this.opts.allowedChannelIds.includes(channelId)
-      ) return;
+      )
+        return;
 
       // Prefix check
       const prefix = this.opts.commandPrefix;

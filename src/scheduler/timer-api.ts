@@ -42,11 +42,7 @@ export class TimerApi {
   /**
    * Schedule a repeating callback every `intervalMs` milliseconds.
    */
-  every(
-    intervalMs: number,
-    handler: () => void | Promise<void>,
-    name?: string,
-  ): TimerHandle {
+  every(intervalMs: number, handler: () => void | Promise<void>, name?: string): TimerHandle {
     const id = ulid();
     const label = name ?? id;
     const timer = setInterval(async () => {

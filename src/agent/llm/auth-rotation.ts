@@ -14,7 +14,10 @@ export class ApiKeyRotator {
     if (Array.isArray(keys)) {
       this.keys = keys.filter(Boolean);
     } else {
-      this.keys = keys.split(',').map((k) => k.trim()).filter(Boolean);
+      this.keys = keys
+        .split(',')
+        .map((k) => k.trim())
+        .filter(Boolean);
     }
     if (this.keys.length === 0) {
       throw new Error('ApiKeyRotator: no API keys provided');
@@ -55,7 +58,10 @@ export function buildRotator(options: {
 
   const fromEnv = envVar ? process.env[envVar] : undefined;
   if (fromEnv) {
-    const parsed = fromEnv.split(',').map((k) => k.trim()).filter(Boolean);
+    const parsed = fromEnv
+      .split(',')
+      .map((k) => k.trim())
+      .filter(Boolean);
     logger.debug('Using API keys from env var', { envVar, count: parsed.length });
     return new ApiKeyRotator(parsed);
   }

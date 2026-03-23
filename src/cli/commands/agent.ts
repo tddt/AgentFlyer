@@ -1,6 +1,6 @@
-import { defineCommand } from 'citty';
-import { spinner, note, outro } from '@clack/prompts';
+import { note, outro, spinner } from '@clack/prompts';
 import chalk from 'chalk';
+import { defineCommand } from 'citty';
 import { getDefaultConfigDir, loadConfig } from '../../core/config/loader.js';
 import { isGatewayRunning } from '../../gateway/lifecycle.js';
 import { callRpc } from '../gateway-client.js';
@@ -18,13 +18,13 @@ const agentList = defineCommand({
     const running = await isGatewayRunning(dataDir);
     if (!running) {
       s.stop(chalk.red('Gateway is not running'));
-      note('Start the gateway first with ' + chalk.bold('agentflyer start'), 'Not running');
+      note(`Start the gateway first with ${chalk.bold('agentflyer start')}`, 'Not running');
       process.exit(1);
     }
 
     const cfg = loadConfig(args.config as string | undefined);
     const port = cfg.gateway.port;
-    const token = cfg.gateway.auth.token ?? process.env['AGENTFLYER_TOKEN'] ?? '';
+    const token = cfg.gateway.auth.token ?? process.env.AGENTFLYER_TOKEN ?? '';
     if (!token) {
       s.stop('No auth token');
       note('Set gateway.auth.token in config or AGENTFLYER_TOKEN env.', 'Error');
@@ -33,7 +33,7 @@ const agentList = defineCommand({
 
     s.start('Fetching agents');
     try {
-      const rpcResult = await callRpc(port, token, 'agent.list', {}) as {
+      const rpcResult = (await callRpc(port, token, 'agent.list', {})) as {
         agents: Array<{ id: string; name: string; model: string; role?: string }>;
       };
       const agents = rpcResult.agents ?? [];
@@ -45,28 +45,20 @@ const agentList = defineCommand({
       }
 
       // Table header
-      const colId   = 20;
+      const colId = 20;
       const colName = 20;
       const colModel = 24;
       const colRole = 10;
-      const header =
-        chalk.bold('  ' +
-          'ID'.padEnd(colId) +
-          'Name'.padEnd(colName) +
-          'Model'.padEnd(colModel) +
-          'Role'.padEnd(colRole));
+      const header = chalk.bold(
+        `  ${'ID'.padEnd(colId)}${'Name'.padEnd(colName)}${'Model'.padEnd(colModel)}${'Role'.padEnd(colRole)}`,
+      );
 
-      process.stdout.write('\n' + header + '\n');
-      process.stdout.write('  ' + '─'.repeat(colId + colName + colModel + colRole) + '\n');
+      process.stdout.write(`\n${header}\n`);
+      process.stdout.write(`  ${'─'.repeat(colId + colName + colModel + colRole)}\n`);
 
       for (const a of agents) {
         process.stdout.write(
-          '  ' +
-          chalk.cyan(a.id.padEnd(colId)) +
-          (a.name ?? '').padEnd(colName) +
-          chalk.yellow((a.model ?? '').padEnd(colModel)) +
-          chalk.gray((a.role ?? 'worker').padEnd(colRole)) +
-          '\n',
+          `  ${chalk.cyan(a.id.padEnd(colId))}${(a.name ?? '').padEnd(colName)}${chalk.yellow((a.model ?? '').padEnd(colModel))}${chalk.gray((a.role ?? 'worker').padEnd(colRole))}\n`,
         );
       }
       process.stdout.write('\n');
@@ -98,7 +90,7 @@ const agentReload = defineCommand({
 
     const cfg = loadConfig(args.config as string | undefined);
     const port = cfg.gateway.port;
-    const token = cfg.gateway.auth.token ?? process.env['AGENTFLYER_TOKEN'] ?? '';
+    const token = cfg.gateway.auth.token ?? process.env.AGENTFLYER_TOKEN ?? '';
     if (!token) {
       s.stop('No auth token');
       process.exit(1);
@@ -109,7 +101,7 @@ const agentReload = defineCommand({
     s.start(`Reloading ${label}…`);
 
     try {
-      const result = await callRpc(port, token, 'agent.reload', agentId ? { agentId } : {}) as {
+      const result = (await callRpc(port, token, 'agent.reload', agentId ? { agentId } : {})) as {
         reloaded: string[];
       };
       s.stop(chalk.green('Reload complete'));

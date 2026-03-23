@@ -1,17 +1,17 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-  generateKeyPair,
-  generateKeyPairSync,
-  sign,
-  verify,
-  signText,
-  verifyText,
-  encrypt,
   decrypt,
   deriveKey,
-  toHex,
+  encrypt,
   fromHex,
+  generateKeyPair,
+  generateKeyPairSync,
   sha256Hex,
+  sign,
+  signText,
+  toHex,
+  verify,
+  verifyText,
 } from '../../../src/core/crypto.js';
 
 describe('crypto', () => {

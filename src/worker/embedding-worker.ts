@@ -66,7 +66,7 @@ function stubEmbed(text: string): number[] {
   let norm = 0;
   for (const v of vec) norm += v * v;
   norm = Math.sqrt(norm) || 1;
-  return Array.from(vec).map(v => v / norm);
+  return Array.from(vec).map((v) => v / norm);
 }
 
 parentPort.on('message', async (req: EmbedRequest) => {

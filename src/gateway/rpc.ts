@@ -1,25 +1,29 @@
 import { existsSync } from 'node:fs';
-import { readFile, readdir } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { readFile } from 'node:fs/promises';
 import { writeFile } from 'node:fs/promises';
-import { ulid } from 'ulid';
-import type { MeshRegistry } from '../mesh/registry.js';
-import type { MemoryStore } from '../memory/store.js';
-import { searchMemory } from '../memory/search.js';
-import type { EmbedConfig } from '../memory/embed.js';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Cron } from 'croner';
+import { ulid } from 'ulid';
 import type { AgentRunner } from '../agent/runner.js';
 import type { ScheduledTaskMeta } from '../agent/tools/builtin/scheduler-tools.js';
+import type { Channel } from '../channels/types.js';
 import type { Config } from '../core/config/schema.js';
 import { createLogger } from '../core/logger.js';
-import type { CronScheduler } from '../scheduler/cron.js';
-import type { SessionStore, StoredMessage } from '../core/session/store.js';
 import type { SessionMetaStore } from '../core/session/meta.js';
-import type { SessionKey, MessageContent } from '../core/types.js';
-import { type WorkflowRpcMethod, dispatchWorkflowRpc, runWorkflowForScheduler } from './workflow-backend.js';
+import type { SessionStore, StoredMessage } from '../core/session/store.js';
+import type { MessageContent, SessionKey } from '../core/types.js';
+import type { EmbedConfig } from '../memory/embed.js';
+import { searchMemory } from '../memory/search.js';
+import type { MemoryStore } from '../memory/store.js';
+import type { MeshRegistry } from '../mesh/registry.js';
+import type { CronScheduler } from '../scheduler/cron.js';
 import type { ContentStore } from './content-store.js';
-import type { Channel } from '../channels/types.js';
+import {
+  type WorkflowRpcMethod,
+  dispatchWorkflowRpc,
+  runWorkflowForScheduler,
+} from './workflow-backend.js';
 
 const logger = createLogger('gateway:rpc');
 // Package root: src/gateway/rpc.ts → ../../  (or dist/gateway/rpc.js → ../../)
@@ -98,9 +102,21 @@ export interface RpcContext {
   /** Embed config — used by memory.search. */
   embedConfig?: EmbedConfig;
   /** Federation node — used for federation.peers. */
-  federationNode?: { listPeers(): Array<{ nodeId: string; host: string; port: number; status: string; latencyMs?: number; lastSeen?: number }> };
+  federationNode?: {
+    listPeers(): Array<{
+      nodeId: string;
+      host: string;
+      port: number;
+      status: string;
+      latencyMs?: number;
+      lastSeen?: number;
+    }>;
+  };
   /** In-memory registry of currently executing scheduler tasks (cleared on restart). */
-  runningTasks: Map<string, { taskId: string; taskName: string; startedAt: number; agentId?: string; workflowId?: string }>;
+  runningTasks: Map<
+    string,
+    { taskId: string; taskName: string; startedAt: number; agentId?: string; workflowId?: string }
+  >;
 }
 
 function sanitizeConfig(cfg: unknown): unknown {
@@ -219,7 +235,11 @@ async function appendHistoryRecord(dataDir: string, record: TaskRunRecord): Prom
     return n <= HISTORY_MAX_PER_TASK;
   });
   if (history.length > 1000) history = history.slice(0, 1000);
-  await writeFile(join(dataDir, 'task-run-history.json'), JSON.stringify(history, null, 2), 'utf-8');
+  await writeFile(
+    join(dataDir, 'task-run-history.json'),
+    JSON.stringify(history, null, 2),
+    'utf-8',
+  );
 }
 
 function scheduleRuntimeTask(ctx: RpcContext, taskId: string): void {
@@ -253,7 +273,11 @@ function scheduleRuntimeTask(ctx: RpcContext, taskId: string): void {
           if (current.workflowId) {
             result = await runWorkflowForScheduler(ctx, current.workflowId, current.message);
           } else {
-            result = await runAgentTask(ctx, current, `sched-${current.id}-run-${current.runCount + 1}`);
+            result = await runAgentTask(
+              ctx,
+              current,
+              `sched-${current.id}-run-${current.runCount + 1}`,
+            );
           }
           runOk = !result.startsWith('Error:');
         } catch (err) {
@@ -276,9 +300,9 @@ function scheduleRuntimeTask(ctx: RpcContext, taskId: string): void {
 
         const channel =
           current.outputChannel ??
-          ((ctx.getConfig().channels?.defaults?.schedulerOutput as OutputChannel | undefined) ??
-            (ctx.getConfig().channels?.defaults?.output as OutputChannel | undefined) ??
-            'logs');
+          (ctx.getConfig().channels?.defaults?.schedulerOutput as OutputChannel | undefined) ??
+          (ctx.getConfig().channels?.defaults?.output as OutputChannel | undefined) ??
+          'logs';
         // RATIONALE: AgentFlyer has pluggable channel interfaces but gateway runtime currently guarantees log channel visibility.
         // Emit scheduler events to logs as the default/system channel sink and keep channel id in payload.
         logger.info('Scheduler task result', {
@@ -350,9 +374,10 @@ function convertToDisplay(msg: StoredMessage): DisplayMessage {
       else if (block.type === 'tool_use') {
         tools.push({
           name: block.name,
-          input: typeof block.input === 'object'
-            ? JSON.stringify(block.input, null, 2)
-            : String(block.input ?? ''),
+          input:
+            typeof block.input === 'object'
+              ? JSON.stringify(block.input, null, 2)
+              : String(block.input ?? ''),
         });
       } else if (block.type === 'tool_result') {
         isToolResult = true;
@@ -410,7 +435,8 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
               return {
                 agentId,
                 name: cfg?.name ?? agentId,
-                model: cfg?.model ?? (ctx.getConfig().defaults as Record<string, unknown>)?.model ?? '',
+                model:
+                  cfg?.model ?? (ctx.getConfig().defaults as Record<string, unknown>)?.model ?? '',
                 role: (cfg as unknown as Record<string, unknown>)?.role ?? 'worker',
               };
             }),
@@ -482,7 +508,11 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         // Clear by explicit sessionKey if provided
         if (sessionKey) {
           await ctx.sessionStore.overwrite(sessionKey as SessionKey, []);
-          await ctx.metaStore.update(sessionKey as SessionKey, { messageCount: 0, contextTokensEstimate: 0, compactionCount: 0 });
+          await ctx.metaStore.update(sessionKey as SessionKey, {
+            messageCount: 0,
+            contextTokensEstimate: 0,
+            compactionCount: 0,
+          });
           return { id, result: { cleared: true, sessionKey } };
         }
         const runner = agentId ? ctx.runners.get(agentId) : undefined;
@@ -524,7 +554,11 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
           enabled?: boolean;
         };
         if (!p.name || (!p.agentId && !p.workflowId) || !p.message) {
-          return buildErrorResponse(id, -32602, 'name, (agentId or workflowId) and message are required');
+          return buildErrorResponse(
+            id,
+            -32602,
+            'name, (agentId or workflowId) and message are required',
+          );
         }
         if (p.agentId && !ctx.runners.has(p.agentId)) {
           return buildErrorResponse(id, 404, `Agent not found: ${p.agentId}`);
@@ -532,7 +566,9 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         if (p.reportTo && !ctx.runners.has(p.reportTo)) {
           return buildErrorResponse(id, 404, `reportTo agent not found: ${p.reportTo}`);
         }
-        const cronExpr = p.cronExpr ?? (typeof p.intervalMinutes === 'number' ? intervalToCron(p.intervalMinutes) : undefined);
+        const cronExpr =
+          p.cronExpr ??
+          (typeof p.intervalMinutes === 'number' ? intervalToCron(p.intervalMinutes) : undefined);
         if (!cronExpr) {
           return buildErrorResponse(id, -32602, 'cronExpr or intervalMinutes is required');
         }
@@ -547,9 +583,9 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
           reportTo: p.reportTo,
           outputChannel:
             p.outputChannel ??
-            ((ctx.getConfig().channels?.defaults?.schedulerOutput as OutputChannel | undefined) ??
-              (ctx.getConfig().channels?.defaults?.output as OutputChannel | undefined) ??
-              'logs'),
+            (ctx.getConfig().channels?.defaults?.schedulerOutput as OutputChannel | undefined) ??
+            (ctx.getConfig().channels?.defaults?.output as OutputChannel | undefined) ??
+            'logs',
           createdAt: Date.now(),
           runCount: 0,
           enabled: p.enabled !== false,
@@ -596,7 +632,11 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         if (nextReportTo && !ctx.runners.has(nextReportTo)) {
           return buildErrorResponse(id, 404, `reportTo agent not found: ${nextReportTo}`);
         }
-        const nextCronExpr = p.cronExpr ?? (typeof p.intervalMinutes === 'number' ? intervalToCron(p.intervalMinutes) : current.cronExpr);
+        const nextCronExpr =
+          p.cronExpr ??
+          (typeof p.intervalMinutes === 'number'
+            ? intervalToCron(p.intervalMinutes)
+            : current.cronExpr);
 
         const updated: ScheduledTaskMeta = {
           ...current,
@@ -696,9 +736,9 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
 
         const channel =
           current.outputChannel ??
-          ((ctx.getConfig().channels?.defaults?.schedulerOutput as OutputChannel | undefined) ??
-            (ctx.getConfig().channels?.defaults?.output as OutputChannel | undefined) ??
-            'logs');
+          (ctx.getConfig().channels?.defaults?.schedulerOutput as OutputChannel | undefined) ??
+          (ctx.getConfig().channels?.defaults?.output as OutputChannel | undefined) ??
+          'logs';
         logger.info('Scheduler manual run result', {
           channel,
           taskId: current.id,
@@ -762,7 +802,12 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
       }
 
       case 'memory.search': {
-        const { query, agentId: memAgentId, partition, limit: memLimit } = (params ?? {}) as {
+        const {
+          query,
+          agentId: memAgentId,
+          partition,
+          limit: memLimit,
+        } = (params ?? {}) as {
           query?: string;
           agentId?: string;
           partition?: string;
@@ -779,7 +824,12 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         const filtered = memAgentId
           ? results.filter((r) => r.entry.agentId === memAgentId)
           : results;
-        return { id, result: { results: filtered.map((r) => ({ ...r.entry, score: r.score, method: r.method })) } };
+        return {
+          id,
+          result: {
+            results: filtered.map((r) => ({ ...r.entry, score: r.score, method: r.method })),
+          },
+        };
       }
 
       case 'memory.delete': {
@@ -812,7 +862,8 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         const { name: docName } = (params ?? {}) as { name?: string };
         // Only serve whitelisted doc files from project root
         const allowedDocs = ['README.md', 'README_CN.md'];
-        if (!docName || !allowedDocs.includes(docName)) return buildErrorResponse(id, 403, 'Access denied');
+        if (!docName || !allowedDocs.includes(docName))
+          return buildErrorResponse(id, 403, 'Access denied');
         try {
           const content = await readFile(join(_pkgRoot, docName), 'utf-8');
           return { id, result: { name: docName, content } };
@@ -841,12 +892,19 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
           }
           try {
             await ch.sendAttachment(
-              { agentId: (agentId ?? item.agentId) as import('../core/types.js').AgentId, threadKey: (threadKey ?? '') as import('../core/types.js').ThreadKey },
+              {
+                agentId: (agentId ?? item.agentId) as import('../core/types.js').AgentId,
+                threadKey: (threadKey ?? '') as import('../core/types.js').ThreadKey,
+              },
               { filePath: item.filePath, mimeType: item.mimeType, name: item.name },
             );
             results[channelId] = true;
           } catch (shareErr) {
-            logger.warn('content.share failed for channel', { channelId, itemId, error: String(shareErr) });
+            logger.warn('content.share failed for channel', {
+              channelId,
+              itemId,
+              error: String(shareErr),
+            });
             results[channelId] = false;
           }
         }

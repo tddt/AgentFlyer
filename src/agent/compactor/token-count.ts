@@ -18,7 +18,7 @@ let tiktokenMod: {
 async function getTiktoken(): Promise<typeof tiktokenMod> {
   if (tiktokenReady) return tiktokenMod;
   try {
-    tiktokenMod = await import('tiktoken') as typeof tiktokenMod;
+    tiktokenMod = (await import('tiktoken')) as typeof tiktokenMod;
     tiktokenReady = true;
   } catch {
     // tiktoken optional - graceful degradation

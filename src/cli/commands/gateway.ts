@@ -1,10 +1,10 @@
-import { defineCommand } from 'citty';
-import { spinner, note, outro } from '@clack/prompts';
-import chalk from 'chalk';
 import { readFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { note, outro, spinner } from '@clack/prompts';
+import chalk from 'chalk';
+import { defineCommand } from 'citty';
 import { getDefaultConfigDir, loadConfig } from '../../core/config/loader.js';
-import { isGatewayRunning, readRunningPort, GATEWAY_VERSION } from '../../gateway/lifecycle.js';
+import { GATEWAY_VERSION, isGatewayRunning, readRunningPort } from '../../gateway/lifecycle.js';
 import { callRpc } from '../gateway-client.js';
 import { startCommand } from './start.js';
 
@@ -31,8 +31,10 @@ const gatewayStop = defineCommand({
     let token = '';
     try {
       const cfg = loadConfig(args.config as string | undefined);
-      token = cfg.gateway.auth.token ?? process.env['AGENTFLYER_TOKEN'] ?? '';
-    } catch { /* use defaults */ }
+      token = cfg.gateway.auth.token ?? process.env.AGENTFLYER_TOKEN ?? '';
+    } catch {
+      /* use defaults */
+    }
 
     // Try graceful RPC shutdown first
     if (token) {
@@ -51,11 +53,21 @@ const gatewayStop = defineCommand({
       const pidRaw = await readFile(pidPath, 'utf-8');
       // Handle both JSON ({pid,port}) and legacy plain-number formats
       let pid: number;
-      try { pid = (JSON.parse(pidRaw) as { pid: number }).pid; } catch { pid = parseInt(pidRaw.trim(), 10); }
-      if (!isNaN(pid) && pid > 0) {
-        try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
+      try {
+        pid = (JSON.parse(pidRaw) as { pid: number }).pid;
+      } catch {
+        pid = Number.parseInt(pidRaw.trim(), 10);
       }
-    } catch { /* no PID file */ }
+      if (!Number.isNaN(pid) && pid > 0) {
+        try {
+          process.kill(pid, 'SIGTERM');
+        } catch {
+          /* already gone */
+        }
+      }
+    } catch {
+      /* no PID file */
+    }
 
     await unlink(pidPath).catch(() => undefined);
     outro(chalk.green('Gateway stopped.'));
@@ -98,8 +110,10 @@ const gatewayStatus = defineCommand({
     try {
       const cfg = loadConfig(args.config as string | undefined);
       configPort = cfg.gateway.port;
-      token = cfg.gateway.auth.token ?? process.env['AGENTFLYER_TOKEN'] ?? '';
-    } catch { /* use defaults */ }
+      token = cfg.gateway.auth.token ?? process.env.AGENTFLYER_TOKEN ?? '';
+    } catch {
+      /* use defaults */
+    }
     const port = await readRunningPort(dataDir, configPort);
 
     if (!token) {
@@ -131,7 +145,12 @@ const gatewayStatus = defineCommand({
           agents: Array<{ id: string; name: string; model: string; role: string }>;
         }>,
         callRpc(port, token, 'session.list', {}).catch(() => ({ sessions: [] })) as Promise<{
-          sessions: Array<{ sessionKey: string; agentId: string; lastActivity: number; messageCount: number }>;
+          sessions: Array<{
+            sessionKey: string;
+            agentId: string;
+            lastActivity: number;
+            messageCount: number;
+          }>;
         }>,
       ]);
 
@@ -141,16 +160,23 @@ const gatewayStatus = defineCommand({
         const { readFile } = await import('node:fs/promises');
         const { join } = await import('node:path');
         const raw = (await readFile(join(dataDir, 'gateway.pid'), 'utf-8')).trim();
-        try { pid = String((JSON.parse(raw) as { pid: number }).pid); } catch { pid = raw; }
-      } catch { /* no pid file */ }
+        try {
+          pid = String((JSON.parse(raw) as { pid: number }).pid);
+        } catch {
+          pid = raw;
+        }
+      } catch {
+        /* no pid file */
+      }
 
       // Format uptime
       const upSeconds = Math.floor(gwStatus.uptime / 1000);
-      const upStr = upSeconds < 60
-        ? `${upSeconds}s`
-        : upSeconds < 3600
-          ? `${Math.floor(upSeconds / 60)}m ${upSeconds % 60}s`
-          : `${Math.floor(upSeconds / 3600)}h ${Math.floor((upSeconds % 3600) / 60)}m`;
+      const upStr =
+        upSeconds < 60
+          ? `${upSeconds}s`
+          : upSeconds < 3600
+            ? `${Math.floor(upSeconds / 60)}m ${upSeconds % 60}s`
+            : `${Math.floor(upSeconds / 3600)}h ${Math.floor((upSeconds % 3600) / 60)}m`;
 
       const agents = agentResult.agents ?? [];
       const sessions = sessionResult.sessions ?? [];
@@ -160,7 +186,7 @@ const gatewayStatus = defineCommand({
         .sort((a, b) => b.lastActivity - a.lastActivity)
         .slice(0, 5);
 
-      const sep = chalk.dim('  ' + '─'.repeat(52));
+      const sep = chalk.dim(`  ${'─'.repeat(52)}`);
 
       const lines: string[] = [
         '',
@@ -183,11 +209,7 @@ const gatewayStatus = defineCommand({
       } else {
         const idW = Math.max(10, ...agents.map((a) => a.id.length));
         const modelW = Math.max(12, ...agents.map((a) => (a.model ?? '').length));
-        lines.push(
-          chalk.dim(
-            `  ${'ID'.padEnd(idW + 2)}${'MODEL'.padEnd(modelW + 2)}ROLE`,
-          ),
-        );
+        lines.push(chalk.dim(`  ${'ID'.padEnd(idW + 2)}${'MODEL'.padEnd(modelW + 2)}ROLE`));
         for (const a of agents) {
           lines.push(
             `  ${chalk.cyan(a.id.padEnd(idW + 2))}${chalk.green((a.model ?? '').padEnd(modelW + 2))}${chalk.dim(a.role ?? 'worker')}`,
@@ -208,15 +230,15 @@ const gatewayStatus = defineCommand({
           if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
           return `${Math.floor(sec / 86400)}d ago`;
         };
-        lines.push(
-          chalk.dim('  AGENT              THREAD                  MSGS  LAST ACTIVE'),
-        );
+        lines.push(chalk.dim('  AGENT              THREAD                  MSGS  LAST ACTIVE'));
         for (const sess of recentSessions) {
           // sessionKey format: "agent:{agentId}:{threadKey}" — use as fallback when agentId is empty
           const parts = sess.sessionKey.split(':');
           const agentId = sess.agentId || (parts.length >= 3 ? parts[1] : '') || '?';
           const agentPart = agentId.padEnd(18);
-          const threadPart = (parts.length >= 3 ? parts.slice(2).join(':') : sess.sessionKey).slice(0, 22).padEnd(24);
+          const threadPart = (parts.length >= 3 ? parts.slice(2).join(':') : sess.sessionKey)
+            .slice(0, 22)
+            .padEnd(24);
           const msgs = String(sess.messageCount ?? 0).padStart(4);
           const age = fmtAge(sess.lastActivity);
           lines.push(
