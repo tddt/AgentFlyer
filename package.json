@@ -1,6 +1,6 @@
 {
   "name": "agentflyer",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Decentralized, cross-platform, multi-host federated AI Agent framework",
   "type": "module",
   "license": "MIT",
