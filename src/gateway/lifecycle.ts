@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { AnthropicProvider } from '../agent/llm/anthropic.js';
 import { OpenAIProvider, createCompatProvider } from '../agent/llm/openai.js';
 import { createProviderRegistry } from '../agent/llm/provider.js';
@@ -56,7 +57,10 @@ import { type GatewayServer, createGatewayServer } from './server.js';
 
 const logger = createLogger('gateway:lifecycle');
 
-export const GATEWAY_VERSION = '1.0.0';
+const _gw_pkg = JSON.parse(
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../package.json'), 'utf-8'),
+) as { version: string };
+export const GATEWAY_VERSION: string = _gw_pkg.version;
 
 export interface GatewayState {
   runners: Map<string, AgentRunner>;

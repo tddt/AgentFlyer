@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { createLogger } from '../core/logger.js';
 
 const logger = createLogger('gateway:auth');
@@ -49,6 +50,5 @@ function timingSafeEqual(a: string, b: string): boolean {
 
 /** Generate a random gateway token (32 hex chars). */
 export function generateToken(): string {
-  const { randomBytes } = require('node:crypto') as typeof import('node:crypto');
   return randomBytes(16).toString('hex');
 }

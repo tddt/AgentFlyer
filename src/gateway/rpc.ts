@@ -18,6 +18,7 @@ import { searchMemory } from '../memory/search.js';
 import type { MemoryStore } from '../memory/store.js';
 import type { MeshRegistry } from '../mesh/registry.js';
 import type { CronScheduler } from '../scheduler/cron.js';
+import { scanSkillsDir } from '../skills/registry.js';
 import type { ContentStore } from './content-store.js';
 import {
   type WorkflowRpcMethod,
@@ -53,6 +54,7 @@ export type RpcMethod =
   | 'scheduler.history'
   | 'gateway.shutdown'
   | 'skill.list'
+  | 'skill.validateDir'
   | 'content.list'
   | 'content.share'
   | 'memory.search'
@@ -794,6 +796,28 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
       case 'skill.list': {
         const skills = ctx.listSkills();
         return { id, result: { skills } };
+      }
+
+      case 'skill.validateDir': {
+        const { dir } = (params ?? {}) as { dir?: string };
+        if (!dir?.trim()) return buildErrorResponse(id, -32602, 'dir is required');
+        const trimmed = dir.trim();
+        if (!existsSync(trimmed)) {
+          return buildErrorResponse(id, 404, `Directory not found: ${trimmed}`);
+        }
+        try {
+          const found = scanSkillsDir(trimmed);
+          return {
+            id,
+            result: {
+              valid: found.length > 0,
+              count: found.length,
+              skills: found.map((s) => s.name),
+            },
+          };
+        } catch (err) {
+          return buildErrorResponse(id, -32603, `Scan failed: ${String(err)}`);
+        }
       }
 
       case 'content.list': {

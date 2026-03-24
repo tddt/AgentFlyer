@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useState } from 'react';
+﻿import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Button } from '../components/Button.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
@@ -1816,8 +1816,100 @@ function SkillsPanel({
   onChange,
   availableSkills,
 }: Pick<PanelProps, 'cfg' | 'onChange' | 'availableSkills'>) {
+  const [showDirModal, setShowDirModal] = useState(false);
+  const [dirInput, setDirInput] = useState('');
+  const [dirValidating, setDirValidating] = useState(false);
+  const [dirValidResult, setDirValidResult] = useState<{
+    valid: boolean;
+    count: number;
+    skills: string[];
+  } | null>(null);
+  const [dirValidError, setDirValidError] = useState<string | null>(null);
+
+  function openDirModal() {
+    setDirInput('');
+    setDirValidResult(null);
+    setDirValidError(null);
+    setDirValidating(false);
+    setShowDirModal(true);
+  }
+
+  function closeDirModal() {
+    setShowDirModal(false);
+  }
+
+  async function handleValidateDir() {
+    if (!dirInput.trim()) return;
+    setDirValidating(true);
+    setDirValidResult(null);
+    setDirValidError(null);
+    try {
+      const res = await rpc<{ valid: boolean; count: number; skills: string[] }>(
+        'skill.validateDir',
+        { dir: dirInput.trim() },
+      );
+      setDirValidResult(res);
+    } catch (e) {
+      setDirValidError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDirValidating(false);
+    }
+  }
+
+  function confirmAddDir() {
+    if (!dirInput.trim()) return;
+    onChange({
+      ...cfg,
+      skills: { ...cfg.skills, dirs: [...(cfg.skills.dirs ?? []), dirInput.trim()] },
+    });
+    closeDirModal();
+  }
+
   return (
     <div className="flex flex-col gap-4">
+      {showDirModal && (
+        <FormModal
+          title="Add Skill Directory"
+          description="Enter an absolute path to a directory containing SKILL.md files. Click Validate to check for skills."
+          onClose={closeDirModal}
+          onSubmit={confirmAddDir}
+        >
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={dirInput}
+              onChange={(e) => {
+                setDirInput(e.target.value);
+                setDirValidResult(null);
+                setDirValidError(null);
+              }}
+              placeholder="/path/to/skills"
+              className="flex-1 font-mono text-sm bg-slate-900/80 ring-1 ring-slate-700 focus:ring-indigo-500/60 focus:outline-none text-slate-200 rounded-xl px-4 py-2 transition-shadow"
+            />
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => void handleValidateDir()}
+              disabled={dirValidating || !dirInput.trim()}
+            >
+              {dirValidating ? '…' : 'Validate'}
+            </Button>
+          </div>
+          {dirValidResult !== null && (
+            <p className={`text-sm ${dirValidResult.valid ? 'text-emerald-400' : 'text-amber-400'}`}>
+              {dirValidResult.valid
+                ? `✓ Found ${dirValidResult.count} skill${dirValidResult.count !== 1 ? 's' : ''}: ${dirValidResult.skills.join(', ')}`
+                : 'No SKILL.md files found — confirm to add anyway.'}
+            </p>
+          )}
+          {dirValidError && <p className="text-sm text-red-400">✗ {dirValidError}</p>}
+          {dirValidResult === null && !dirValidError && (
+            <p className="text-xs text-slate-500">
+              Validate first, or click Confirm to add the directory without checking.
+            </p>
+          )}
+        </FormModal>
+      )}
       <PanelSection
         title="Skill Pool Settings"
         description="Global skill directories and compaction behaviour."
@@ -1838,14 +1930,7 @@ function SkillsPanel({
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => {
-              const dir = window.prompt('Enter directory path to add to skill pool:');
-              if (dir?.trim())
-                onChange({
-                  ...cfg,
-                  skills: { ...cfg.skills, dirs: [...(cfg.skills.dirs ?? []), dir.trim()] },
-                });
-            }}
+            onClick={openDirModal}
           >
             + Add Dir
           </Button>

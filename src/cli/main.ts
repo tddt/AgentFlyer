@@ -1,5 +1,12 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defineCommand, runMain } from 'citty';
+
+const _pkg = JSON.parse(
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../package.json'), 'utf-8'),
+) as { version: string };
 import { agentCommand } from './commands/agent.js';
 import { chatCommand } from './commands/chat.js';
 import { configCommand } from './commands/config.js';
@@ -16,7 +23,7 @@ import { webCommand } from './commands/web.js';
 const main = defineCommand({
   meta: {
     name: 'agentflyer',
-    version: '1.0.0',
+    version: _pkg.version,
     description: 'Decentralized, cross-platform, multi-host federated AI Agent framework',
   },
   subCommands: {

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -35,11 +35,13 @@ export function loadConfig(configPath?: string): Config {
     if (!result.success) throw new Error(`Default config invalid: ${result.error.message}`);
     // Write a minimal skeleton so the user has a file to inspect and edit.
     const skeleton = JSON.stringify({ version: 2, models: {}, agents: [] }, null, 2);
-    mkdir(dirname(path), { recursive: true })
-      .then(() => writeFile(path, skeleton, 'utf-8'))
-      .catch((err: unknown) =>
-        logger.warn('Failed to write initial config', { error: String(err) }),
-      );
+    try {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, skeleton, 'utf-8');
+      logger.info('Initial config written', { path });
+    } catch (err: unknown) {
+      logger.warn('Failed to write initial config', { error: String(err) });
+    }
     return result.data;
   }
 
