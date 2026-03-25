@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Badge } from '../components/Badge.js';
 import { Button } from '../components/Button.js';
 import { StatCard } from '../components/StatCard.js';
+import { useLocale } from '../context/i18n.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
 import { useToast } from '../hooks/useToast.js';
 import { useUptime } from '../hooks/useUptime.js';
@@ -22,6 +23,7 @@ function timeAgo(ms: number): string {
 }
 
 function PingWidget() {
+  const { t } = useLocale();
   const [latency, setLatency] = useState<number | null>(null);
   const [status, setStatus] = useState<'idle' | 'checking' | 'ok' | 'error'>('idle');
 
@@ -49,11 +51,11 @@ function PingWidget() {
       />
       <span className="text-xs text-slate-400">
         {status === 'checking'
-          ? 'Pinging…'
+          ? t('overview.pinging')
           : status === 'ok'
             ? `${latency}ms`
             : status === 'error'
-              ? 'No response'
+              ? t('overview.noResponse')
               : '—'}
       </span>
       <button
@@ -74,6 +76,7 @@ interface AgentSessionBar {
 }
 
 export function OverviewTab({ onNavigate }: { onNavigate?: (tab: string) => void }) {
+  const { t } = useLocale();
   const { toast } = useToast();
   const [fetchedAt, setFetchedAt] = useState<number | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
@@ -125,8 +128,8 @@ export function OverviewTab({ onNavigate }: { onNavigate?: (tab: string) => void
     }
   };
 
-  if (loading && !status) return <div className="text-slate-400 text-sm p-8">Loading…</div>;
-  if (error) return <div className="text-red-400 text-sm p-8">Error: {error}</div>;
+  if (loading && !status) return <div className="text-slate-400 text-sm p-8">{t('common.loading')}</div>;
+  if (error) return <div className="text-red-400 text-sm p-8">{t('common.error')}{error}</div>;
 
   const agents: AgentInfo[] = Array.isArray(agentListResult?.agents) ? agentListResult.agents : [];
   const sessions: SessionMetaInfo[] = sessionsData?.sessions ?? [];
@@ -160,8 +163,8 @@ export function OverviewTab({ onNavigate }: { onNavigate?: (tab: string) => void
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
-          <h1 className="text-[17px] font-semibold text-slate-100 tracking-tight">Overview</h1>
-          <p className="text-xs text-slate-500 mt-0.5">Gateway status and system health</p>
+          <h1 className="text-[17px] font-semibold text-slate-100 tracking-tight">{t('overview.title')}</h1>
+          <p className="text-xs text-slate-500 mt-0.5">{t('overview.subtitle')}</p>
         </div>
         <div className="flex items-center gap-2">
           <label className="flex items-center gap-1.5 cursor-pointer text-xs text-slate-400">
@@ -171,7 +174,7 @@ export function OverviewTab({ onNavigate }: { onNavigate?: (tab: string) => void
               checked={autoRefresh}
               onChange={(e) => setAutoRefresh(e.target.checked)}
             />
-            Auto-refresh
+            {t('overview.autoRefresh')}
           </label>
           <Button
             size="sm"
@@ -182,23 +185,23 @@ export function OverviewTab({ onNavigate }: { onNavigate?: (tab: string) => void
               refetchSessions();
             }}
           >
-            Refresh
+            {t('overview.refresh')}
           </Button>
           <Button size="sm" variant="primary" onClick={() => void handleReload()}>
-            Reload Agents
+            {t('overview.reloadAgents')}
           </Button>
         </div>
       </div>
 
       {/* Stats grid */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
-        <StatCard label="Version" value={status?.version ?? '—'} accent="text-slate-300" />
-        <StatCard label="Uptime" value={uptime} accent="text-emerald-400" />
-        <StatCard label="Agents" value={agentCount} accent="text-indigo-400" />
-        <StatCard label="Sessions" value={sessions.length} accent="text-blue-400" />
-        <StatCard label="Messages" value={totalMsgs} accent="text-violet-400" />
+        <StatCard label={t('overview.version')} value={status?.version ?? '—'} accent="text-slate-300" />
+        <StatCard label={t('overview.uptime')} value={uptime} accent="text-emerald-400" />
+        <StatCard label={t('overview.agents')} value={agentCount} accent="text-indigo-400" />
+        <StatCard label={t('overview.sessions')} value={sessions.length} accent="text-blue-400" />
+        <StatCard label={t('overview.messages')} value={totalMsgs} accent="text-violet-400" />
         <StatCard
-          label="Tokens"
+          label={t('overview.tokens')}
           value={totalTokens > 1000 ? `${(totalTokens / 1000).toFixed(1)}k` : totalTokens}
           accent="text-amber-400"
         />
@@ -210,11 +213,11 @@ export function OverviewTab({ onNavigate }: { onNavigate?: (tab: string) => void
         style={{ background: 'rgba(14,17,28,0.8)' }}
       >
         <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-400 font-medium">Gateway</span>
-          <Badge variant="green">online</Badge>
+          <span className="text-xs text-slate-400 font-medium">{t('overview.gateway')}</span>
+          <Badge variant="green">{t('overview.online')}</Badge>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-400">RPC Latency</span>
+          <span className="text-xs text-slate-400">{t('overview.rpcLatency')}</span>
           <PingWidget />
         </div>
         <div className="flex items-center gap-2 ml-auto">
@@ -233,7 +236,7 @@ export function OverviewTab({ onNavigate }: { onNavigate?: (tab: string) => void
             style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}
           >
             <h2 className="text-[13px] font-semibold text-slate-300 tracking-tight">
-              Active Agents
+              {t('overview.activeAgents')}
             </h2>
             <div className="flex items-center gap-2">
               <Badge variant="blue">{agents.length}</Badge>
@@ -248,7 +251,7 @@ export function OverviewTab({ onNavigate }: { onNavigate?: (tab: string) => void
             </div>
           </div>
           {agents.length === 0 ? (
-            <p className="text-slate-500 text-sm px-5 py-4">No agents running</p>
+            <p className="text-slate-500 text-sm px-5 py-4">{t('overview.noAgentsRunning')}</p>
           ) : (
             <ul className="divide-y divide-slate-700/40">
               {agents.map((a) => (
@@ -279,7 +282,7 @@ export function OverviewTab({ onNavigate }: { onNavigate?: (tab: string) => void
             style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}
           >
             <h2 className="text-[13px] font-semibold text-slate-300 tracking-tight">
-              Recent Sessions
+              {t('overview.recentSessions')}
             </h2>
             <div className="flex items-center gap-2">
               <Badge variant="gray">{sessions.length}</Badge>
@@ -294,7 +297,7 @@ export function OverviewTab({ onNavigate }: { onNavigate?: (tab: string) => void
             </div>
           </div>
           {recentSessions.length === 0 ? (
-            <p className="text-slate-500 text-sm px-5 py-4">No sessions yet</p>
+            <p className="text-slate-500 text-sm px-5 py-4">{t('overview.noSessionsYet')}</p>
           ) : (
             <ul className="divide-y divide-slate-700/40">
               {recentSessions.map((s) => (
@@ -329,7 +332,7 @@ export function OverviewTab({ onNavigate }: { onNavigate?: (tab: string) => void
           style={{ background: 'rgba(14,17,28,0.85)' }}
         >
           <h2 className="text-[13px] font-semibold text-slate-300 tracking-tight mb-4">
-            Session Distribution
+            {t('overview.sessionDistribution')}
           </h2>
           <div className="flex flex-col gap-3">
             {agentBars.map((b) => (
@@ -361,23 +364,23 @@ export function OverviewTab({ onNavigate }: { onNavigate?: (tab: string) => void
         style={{ background: 'rgba(14,17,28,0.6)' }}
       >
         <h2 className="text-[13px] font-semibold text-slate-400 tracking-tight mb-3">
-          Quick Actions
+          {t('overview.quickActions')}
         </h2>
         <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="ghost" onClick={() => onNavigate?.('chat')}>
-            Open Chat
+            {t('overview.openChat')}
           </Button>
           <Button size="sm" variant="ghost" onClick={() => onNavigate?.('sessions')}>
-            Browse Sessions
+            {t('overview.browseSessions')}
           </Button>
           <Button size="sm" variant="ghost" onClick={() => onNavigate?.('agents')}>
-            Manage Agents
+            {t('overview.manageAgents')}
           </Button>
           <Button size="sm" variant="ghost" onClick={() => onNavigate?.('workflow')}>
-            Workflows
+            {t('overview.workflows')}
           </Button>
           <Button size="sm" variant="ghost" onClick={() => void handleReload()}>
-            Reload All Agents
+            {t('overview.reloadAllAgents')}
           </Button>
         </div>
       </div>

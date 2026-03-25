@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Badge } from '../components/Badge.js';
 import { Button } from '../components/Button.js';
+import { useLocale } from '../context/i18n.js';
 import { MarkdownView } from '../components/MarkdownView.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
 import { useToast } from '../hooks/useToast.js';
@@ -55,6 +56,7 @@ interface MsgBubbleProps {
 }
 
 function MsgBubble({ msg }: MsgBubbleProps) {
+  const { t } = useLocale();
   const [toolOpen, setToolOpen] = useState(false);
   const isUser = msg.role === 'user';
   return (
@@ -69,7 +71,7 @@ function MsgBubble({ msg }: MsgBubbleProps) {
         <div
           className={`flex items-center gap-2 mb-2 text-[11px] ${isUser ? 'text-indigo-300' : 'text-slate-500'}`}
         >
-          <span className="font-semibold">{isUser ? 'User' : 'Assistant'}</span>
+          <span className="font-semibold">{isUser ? t('sessions.userRole') : t('sessions.assistantRole')}</span>
           <span>·</span>
           <span>{fmtDate(msg.timestamp)}</span>
         </div>
@@ -82,7 +84,7 @@ function MsgBubble({ msg }: MsgBubbleProps) {
             >
               <span>{toolOpen ? '▾' : '▸'}</span>
               <span>
-                🔧 {msg.tools.length} tool call{msg.tools.length > 1 ? 's' : ''}
+                {t(msg.tools.length > 1 ? 'sessions.toolCalls' : 'sessions.toolCall', { n: String(msg.tools.length) })}
               </span>
             </button>
             {toolOpen && (
@@ -117,6 +119,7 @@ interface SessionDetailProps {
 }
 
 function SessionDetail({ session, onClear }: SessionDetailProps) {
+  const { t } = useLocale();
   const { toast } = useToast();
   const { data, loading, refetch } = useQuery<SessionMessagesResult>(
     () => rpc<SessionMessagesResult>('session.messages', { sessionKey: session.sessionKey }),
@@ -162,13 +165,13 @@ function SessionDetail({ session, onClear }: SessionDetailProps) {
             ↺
           </Button>
           <Button size="sm" variant="ghost" onClick={() => void handleCopy()} disabled={!data}>
-            📋 Copy
+            {t('sessions.copy')}
           </Button>
           <Button size="sm" variant="ghost" onClick={handleExport} disabled={!data}>
-            ⬇ Export
+            {t('sessions.export')}
           </Button>
           <Button size="sm" variant="danger" onClick={() => void handleClear()}>
-            🗑 Clear
+            {t('sessions.clear')}
           </Button>
         </div>
       </div>
@@ -176,12 +179,12 @@ function SessionDetail({ session, onClear }: SessionDetailProps) {
       <div className="grid grid-cols-4 gap-2 text-xs">
         {(
           [
-            ['Messages', session.messageCount],
-            ['~Tokens', session.contextTokensEstimate],
-            ['Compactions', session.compactionCount],
-            ['Last active', timeAgo(session.lastActivity)],
+            [t('sessions.messages'), session.messageCount],
+            [t('sessions.tokens'), session.contextTokensEstimate],
+            [t('sessions.compactions'), session.compactionCount],
+            [t('sessions.lastActive'), timeAgo(session.lastActivity)],
           ] as [string, string | number][]
-        ).map(([k, v]) => (
+        ).map(([k, v]: [string, string | number]) => (
           <div
             key={k}
             className="bg-slate-800/60 rounded-lg px-3 py-2 text-center ring-1 ring-slate-700/40"
@@ -195,7 +198,7 @@ function SessionDetail({ session, onClear }: SessionDetailProps) {
       {session.contextTokensEstimate > 0 && (
         <div className="flex flex-col gap-1">
           <div className="flex justify-between text-[11px] text-slate-500">
-            <span>Context usage</span>
+            <span>{t('sessions.contextUsage')}</span>
             <span>{session.contextTokensEstimate.toLocaleString()} tokens</span>
           </div>
           <div className="h-1.5 bg-slate-700/60 rounded-full overflow-hidden">
@@ -206,15 +209,15 @@ function SessionDetail({ session, onClear }: SessionDetailProps) {
               }}
             />
           </div>
-          <div className="text-[10px] text-slate-600">of 200K max</div>
+          <div className="text-[10px] text-slate-600">{t('sessions.maxContext')}</div>
         </div>
       )}
 
       {loading && (
-        <p className="text-xs text-slate-500 animate-pulse py-4 text-center">Loading messages…</p>
+        <p className="text-xs text-slate-500 animate-pulse py-4 text-center">{t('sessions.loadingMessages')}</p>
       )}
       {!loading && data && data.messages.length === 0 && (
-        <p className="text-xs text-slate-500 italic text-center py-4">No messages stored.</p>
+        <p className="text-xs text-slate-500 italic text-center py-4">{t('sessions.noMessages')}</p>
       )}
       {!loading && data && data.messages.length > 0 && (
         <div className="flex flex-col gap-3 max-h-[65vh] overflow-y-auto pr-1">
@@ -278,6 +281,7 @@ function SessionRow({ session, expanded, onToggle, onCleared }: SessionRowProps)
 // ── Main SessionsTab ──────────────────────────────────────────────────────────
 
 export function SessionsTab() {
+  const { t } = useLocale();
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [filterAgent, setFilterAgent] = useState('all');
@@ -319,21 +323,21 @@ export function SessionsTab() {
     <div className="flex flex-col gap-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-lg font-semibold text-slate-100">Sessions</h1>
+          <h1 className="text-lg font-semibold text-slate-100">{t('sessions.title')}</h1>
           <p className="text-xs text-slate-500 mt-0.5">
             {allSessions.length} sessions · {totalMessages} messages · ~
             {totalTokens.toLocaleString()} tokens
           </p>
         </div>
         <Button size="sm" variant="ghost" onClick={refetch} disabled={loading}>
-          {loading ? <span className="animate-spin inline-block">⟳</span> : '↺ Refresh'}
+          {loading ? <span className="animate-spin inline-block">⟳</span> : t('sessions.refresh')}
         </Button>
       </div>
 
       <div className="flex flex-wrap gap-2 items-center">
         <input
           type="text"
-          placeholder="Search sessions…"
+          placeholder={t('sessions.searchPlaceholder')}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="flex-1 min-w-36 bg-slate-800/60 ring-1 ring-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:ring-indigo-500/60"
@@ -343,7 +347,7 @@ export function SessionsTab() {
           onChange={(e) => setFilterAgent(e.target.value)}
           className="bg-slate-800/60 ring-1 ring-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-slate-300 focus:outline-none"
         >
-          <option value="all">All agents</option>
+          <option value="all">{t('sessions.allAgents')}</option>
           {agentIds.map((id) => (
             <option key={id} value={id}>
               {id}
@@ -355,17 +359,17 @@ export function SessionsTab() {
           onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
           className="bg-slate-800/60 ring-1 ring-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-slate-300 focus:outline-none"
         >
-          <option value="recent">Recent first</option>
-          <option value="messages">Most messages</option>
-          <option value="tokens">Most tokens</option>
+          <option value="recent">{t('sessions.recentFirst')}</option>
+          <option value="messages">{t('sessions.mostMessages')}</option>
+          <option value="tokens">{t('sessions.mostTokens')}</option>
         </select>
       </div>
 
       {!loading && sessions.length === 0 && (
         <div className="text-center py-16 text-sm text-slate-500">
           {search || filterAgent !== 'all'
-            ? 'No sessions match the current filter.'
-            : 'No sessions found. Start chatting with an agent to create one.'}
+            ? t('sessions.noMatch')
+            : t('sessions.noSessions')}
         </div>
       )}
 

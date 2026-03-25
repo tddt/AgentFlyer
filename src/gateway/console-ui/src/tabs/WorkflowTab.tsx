@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Badge } from '../components/Badge.js';
 import { Button } from '../components/Button.js';
+import { useLocale } from '../context/i18n.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
 import { useToast } from '../hooks/useToast.js';
 import type {
@@ -24,6 +25,7 @@ type ViewMode = 'list' | 'edit' | 'run' | 'history';
 
 export function WorkflowTab() {
   const { toast } = useToast();
+  const { t } = useLocale();
 
   const [view, setView] = useState<ViewMode>('list');
   const [editTarget, setEditTarget] = useState<WorkflowDef | null>(null);
@@ -162,12 +164,12 @@ export function WorkflowTab() {
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-semibold text-slate-100">Workflows</h1>
-          <p className="text-xs text-slate-500 mt-0.5">Chain agents into multi-step pipelines</p>
+          <h1 className="text-lg font-semibold text-slate-100">{t('workflow.title')}</h1>
+          <p className="text-xs text-slate-500 mt-0.5">{t('workflow.subtitle')}</p>
         </div>
         <div className="flex gap-2">
           <Button size="sm" variant="ghost" onClick={() => setView('history')}>
-            History
+            {t('workflow.history')}
           </Button>
           <Button
             size="sm"
@@ -177,7 +179,7 @@ export function WorkflowTab() {
               setView('edit');
             }}
           >
-            + New Workflow
+            {t('workflow.newWorkflow')}
           </Button>
         </div>
       </div>
@@ -200,7 +202,7 @@ export function WorkflowTab() {
               setView('run');
             }}
           >
-            View →
+            {t('workflow.viewArrow')}
           </Button>
         </div>
       )}
@@ -208,7 +210,7 @@ export function WorkflowTab() {
       {workflows.length === 0 && (
         <div className="rounded-xl bg-slate-800/40 ring-1 ring-slate-700/50 p-10 flex flex-col items-center gap-3">
           <span className="text-4xl">⚡</span>
-          <p className="text-slate-400 text-sm">No workflows yet.</p>
+          <p className="text-slate-400 text-sm">{t('workflow.noWorkflows')}</p>
           <Button
             size="sm"
             variant="ghost"
@@ -217,7 +219,7 @@ export function WorkflowTab() {
               setView('edit');
             }}
           >
-            Create your first workflow
+            {t('workflow.createFirst')}
           </Button>
         </div>
       )}
@@ -238,7 +240,7 @@ export function WorkflowTab() {
                 <div className="flex items-center gap-1.5 shrink-0">
                   {runningRuns.has(w.id) && (
                     <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-yellow-600/20 ring-1 ring-yellow-500/40 text-yellow-300 animate-pulse">
-                      Running
+                      {t('workflow.running')}
                     </span>
                   )}
                   {schedCount > 0 && (
@@ -246,7 +248,7 @@ export function WorkflowTab() {
                       ⏰ {schedCount}
                     </span>
                   )}
-                  <Badge variant="gray">{w.steps.length} steps</Badge>
+                  <Badge variant="gray">{t('workflow.steps', { n: String(w.steps.length) })}</Badge>
                 </div>
               </div>
 
@@ -257,7 +259,7 @@ export function WorkflowTab() {
                       {(s.label ??
                         agents.find((a) => a.agentId === s.agentId)?.name ??
                         s.agentId) ||
-                        `Step ${i + 1}`}
+                        `${t('workflow.run.step', { n: String(i + 1) })}`}
                     </div>
                     {i < w.steps.length - 1 && <span className="text-slate-700 text-xs">→</span>}
                   </div>
@@ -275,7 +277,7 @@ export function WorkflowTab() {
                     setView('run');
                   }}
                 >
-                  {runningRuns.has(w.id) ? '👁 View' : '▶ Run'}
+                  {runningRuns.has(w.id) ? t('workflow.viewRun') : t('workflow.run')}
                 </Button>
                 <Button
                   size="sm"
@@ -285,10 +287,10 @@ export function WorkflowTab() {
                     setView('edit');
                   }}
                 >
-                  Edit
+                  {t('workflow.edit')}
                 </Button>
                 <Button size="sm" variant="danger" onClick={() => void handleDelete(w.id)}>
-                  Delete
+                  {t('workflow.delete')}
                 </Button>
               </div>
             </div>

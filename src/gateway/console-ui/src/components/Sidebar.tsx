@@ -12,6 +12,7 @@ type TabId =
   | 'federation'
   | 'guide'
   | 'about';
+import { useLocale } from '../context/i18n.js';
 import { useWorkflowRun } from '../context/workflow-run.js';
 
 // ─── SVG icon set (Lucide-style) ─────────────────────────────────────────────
@@ -222,19 +223,19 @@ const Ico: Record<string, ReactNode> = {
   ),
 };
 
-const NAV_ITEMS: { id: TabId; label: string }[] = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'agents', label: 'Agents' },
-  { id: 'chat', label: 'Chat' },
-  { id: 'logs', label: 'Logs' },
-  { id: 'config', label: 'Config' },
-  { id: 'scheduler', label: 'Scheduler' },
-  { id: 'sessions', label: 'Sessions' },
-  { id: 'workflow', label: 'Workflow' },
-  { id: 'memory', label: 'Memory' },
-  { id: 'federation', label: 'Federation' },
-  { id: 'guide', label: 'Guide' },
-  { id: 'about', label: 'About' },
+const NAV_IDS: TabId[] = [
+  'overview',
+  'agents',
+  'chat',
+  'logs',
+  'config',
+  'scheduler',
+  'sessions',
+  'workflow',
+  'memory',
+  'federation',
+  'guide',
+  'about',
 ];
 
 interface Props {
@@ -244,6 +245,7 @@ interface Props {
 
 export function Sidebar({ activeTab, setActiveTab }: Props) {
   const { activeRun, cancel } = useWorkflowRun();
+  const { t, locale, setLocale } = useLocale();
   const isRunning = activeRun?.run.status === 'running';
   return (
     <aside
@@ -282,13 +284,13 @@ export function Sidebar({ activeTab, setActiveTab }: Props) {
           <span className="text-[13px] font-semibold text-slate-100 tracking-tight">
             AgentFlyer
           </span>
-          <span className="text-[10px] text-slate-600">Control Console</span>
+          <span className="text-[10px] text-slate-600">{t('sidebar.title')}</span>
         </div>
       </div>
 
       {/* ── Nav ──────────────────────────────────────────────────── */}
       <nav className="flex flex-col gap-px px-2 py-3 flex-1">
-        {NAV_ITEMS.map(({ id, label }) => {
+        {NAV_IDS.map((id) => {
           const active = activeTab === id;
           return (
             <button
@@ -308,7 +310,7 @@ export function Sidebar({ activeTab, setActiveTab }: Props) {
                 <span className="absolute left-0 top-[7px] bottom-[7px] w-[2px] rounded-r-full bg-indigo-400" />
               )}
               <span className={`shrink-0 ${active ? 'text-indigo-400' : ''}`}>{Ico[id]}</span>
-              {label}
+              {t(`nav.${id}`)}
               {id === 'workflow' && isRunning && (
                 <span className="ml-auto w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
               )}
@@ -353,7 +355,7 @@ export function Sidebar({ activeTab, setActiveTab }: Props) {
             onClick={cancel}
             className="text-[11px] text-red-400/80 hover:text-red-300 text-left transition-colors"
           >
-            ✕ Cancel workflow
+            {t('sidebar.cancelWorkflow')}
           </button>
         </div>
       )}
@@ -367,7 +369,33 @@ export function Sidebar({ activeTab, setActiveTab }: Props) {
           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-50" />
           <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
         </span>
-        <span className="text-[11px] text-slate-600">Gateway connected</span>
+        <span className="text-[11px] text-slate-600">{t('sidebar.gatewayConnected')}</span>
+      </div>
+      {/* ── Language toggle ───────────────────────────────────────── */}
+      <div
+        className="px-5 pb-4 flex items-center gap-1"
+      >
+        <button
+          onClick={() => setLocale('en')}
+          className={`text-[11px] px-2 py-0.5 rounded transition-colors ${
+            locale === 'en'
+              ? 'bg-indigo-500/20 text-indigo-300'
+              : 'text-slate-600 hover:text-slate-400'
+          }`}
+        >
+          EN
+        </button>
+        <span className="text-slate-700 text-[11px]">|</span>
+        <button
+          onClick={() => setLocale('zh')}
+          className={`text-[11px] px-2 py-0.5 rounded transition-colors ${
+            locale === 'zh'
+              ? 'bg-indigo-500/20 text-indigo-300'
+              : 'text-slate-600 hover:text-slate-400'
+          }`}
+        >
+          中文
+        </button>
       </div>
     </aside>
   );

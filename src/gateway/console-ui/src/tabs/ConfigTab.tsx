@@ -1,6 +1,7 @@
 ﻿import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Button } from '../components/Button.js';
+import { useLocale } from '../context/i18n.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
 import { useToast } from '../hooks/useToast.js';
 import type { SkillInfo, SkillListResult } from '../types.js';
@@ -232,21 +233,6 @@ const ConfigIco: Record<ConfigSection, ReactNode> = {
     </svg>
   ),
 };
-
-const NAV_SECTIONS: { id: ConfigSection; label: string }[] = [
-  { id: 'gateway', label: 'Gateway' },
-  { id: 'channels', label: 'Channels' },
-  { id: 'models', label: 'Models' },
-  { id: 'agents', label: 'Agents' },
-  { id: 'defaults', label: 'Defaults' },
-  { id: 'context', label: 'Context' },
-  { id: 'skills', label: 'Skills' },
-  { id: 'search', label: 'Search' },
-  { id: 'memory', label: 'Memory' },
-  { id: 'federation', label: 'Federation' },
-  { id: 'log', label: 'Logging' },
-  { id: 'json', label: 'Raw JSON' },
-];
 
 const CAPABILITY_OPTIONS = ['code', 'analysis', 'web_search', 'writing'] as const;
 const ACCEPT_OPTIONS = ['task', 'query', 'notification'] as const;
@@ -2286,6 +2272,22 @@ function LogPanel({ cfg, onChange }: Pick<PanelProps, 'cfg' | 'onChange'>) {
 
 export function ConfigTab() {
   const { toast } = useToast();
+  const { t } = useLocale();
+
+  const NAV_SECTIONS: { id: ConfigSection; label: string }[] = [
+    { id: 'gateway', label: t('config.sections.gateway') },
+    { id: 'channels', label: t('config.sections.channels') },
+    { id: 'models', label: t('config.sections.models') },
+    { id: 'agents', label: t('config.sections.agents') },
+    { id: 'defaults', label: t('config.sections.defaults') },
+    { id: 'context', label: t('config.sections.context') },
+    { id: 'skills', label: t('config.sections.skills') },
+    { id: 'search', label: t('config.sections.search') },
+    { id: 'memory', label: t('config.sections.memory') },
+    { id: 'federation', label: t('config.sections.federation') },
+    { id: 'log', label: t('config.sections.log') },
+    { id: 'json', label: t('config.sections.json') },
+  ];
   const [text, setText] = useState('');
   const [cfg, setCfg] = useState<ConfigShape | null>(null);
   const [activeSection, setActiveSection] = useState<ConfigSection>('gateway');

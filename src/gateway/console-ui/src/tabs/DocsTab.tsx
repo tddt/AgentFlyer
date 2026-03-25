@@ -1,5 +1,6 @@
 import { marked } from 'marked';
 import { useCallback, useMemo, useState } from 'react';
+import { useLocale } from '../context/i18n.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
 import type { DocContent } from '../types.js';
 
@@ -10,6 +11,7 @@ marked.use({
 });
 
 export function DocsTab() {
+  const { t } = useLocale();
   const [lang, setLang] = useState<'en' | 'zh'>('en');
   const docName = lang === 'en' ? 'README.md' : 'README_CN.md';
 
@@ -44,8 +46,8 @@ export function DocsTab() {
       {/* ── Header ────────────────────────────────────────────────────────── */}
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-base font-semibold text-slate-100">Guide</h1>
-          <p className="text-[13px] text-slate-500 mt-0.5">Usage Guide</p>
+          <h1 className="text-base font-semibold text-slate-100">{t('docs.title')}</h1>
+          <p className="text-[13px] text-slate-500 mt-0.5">{t('docs.subtitle')}</p>
         </div>
         {/* Language toggle */}
         <div className="flex items-center gap-1 mt-0.5">
@@ -100,7 +102,7 @@ export function DocsTab() {
         {loading && (
           <div className="flex items-center gap-2 text-sm text-slate-500 px-5 py-5">
             <div className="w-3.5 h-3.5 rounded-full border-2 border-indigo-500/30 border-t-indigo-400 animate-spin" />
-            Loading…
+            {t('docs.loading')}
           </div>
         )}
 

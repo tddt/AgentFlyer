@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { Badge } from '../components/Badge.js';
 import { Button } from '../components/Button.js';
+import { useLocale } from '../context/i18n.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
 import { useToast } from '../hooks/useToast.js';
 import type { AgentConfig, AgentInfo, AgentListResult, SessionListResult } from '../types.js';
@@ -24,6 +25,7 @@ function EditModal({
   onSaved: () => void;
 }) {
   const { toast } = useToast();
+  const { t } = useLocale();
   const [form, setForm] = useState<EditForm>({
     name: current.name ?? '',
     model: current.model ?? '',
@@ -78,30 +80,30 @@ function EditModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
       <div className="bg-slate-900 ring-1 ring-slate-700 rounded-2xl shadow-2xl w-full max-w-md p-6 flex flex-col gap-5">
         <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold text-slate-100">Edit Agent</h2>
+          <h2 className="text-base font-semibold text-slate-100">{t('agents.editModal.title')}</h2>
           <span className="font-mono text-xs text-slate-500">{agentId}</span>
         </div>
         <div className="flex flex-col gap-4">
-          {field('Name', 'name', 'Display name')}
-          {field('Model', 'model', 'e.g. claude-3-5-sonnet-20241022')}
-          {field('Workspace', 'workspace', 'Group label (optional)')}
+          {field(t('agents.editModal.name'), 'name', t('agents.editModal.namePlaceholder'))}
+          {field(t('agents.editModal.model'), 'model', t('agents.editModal.modelPlaceholder'))}
+          {field(t('agents.editModal.workspace'), 'workspace', t('agents.editModal.workspacePlaceholder'))}
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-400">Persona</label>
+            <label className="text-xs text-slate-400">{t('agents.editModal.persona')}</label>
             <textarea
               rows={4}
               className="rounded-lg bg-slate-900/70 ring-1 ring-slate-700 px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-indigo-500 resize-none"
               value={form.persona}
-              placeholder="System prompt / persona…"
+              placeholder={t('agents.editModal.personaPlaceholder')}
               onChange={(e) => setForm((f) => ({ ...f, persona: e.target.value }))}
             />
           </div>
         </div>
         <div className="flex items-center justify-end gap-2 pt-1">
           <Button size="sm" variant="ghost" onClick={onClose}>
-            Cancel
+            {t('common.cancel')}
           </Button>
           <Button size="sm" variant="primary" onClick={() => void handleSave()}>
-            {saving ? 'Saving…' : 'Save'}
+            {saving ? t('common.saving') : t('common.save')}
           </Button>
         </div>
       </div>
@@ -111,6 +113,7 @@ function EditModal({
 
 export function AgentsTab() {
   const { toast } = useToast();
+  const { t } = useLocale();
   const [selected, setSelected] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
 
@@ -170,8 +173,8 @@ export function AgentsTab() {
     [toast],
   );
 
-  if (loading && !agentsResult) return <div className="text-slate-400 text-sm p-8">Loading…</div>;
-  if (error) return <div className="text-red-400 text-sm p-8">Error: {error}</div>;
+  if (loading && !agentsResult) return <div className="text-slate-400 text-sm p-8">{t('common.loading')}</div>;
+  if (error) return <div className="text-red-400 text-sm p-8">{t('common.error')}{error}</div>;
 
   const list: AgentInfo[] = Array.isArray(agentsResult?.agents) ? agentsResult.agents : [];
 
@@ -203,8 +206,8 @@ export function AgentsTab() {
 
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-semibold text-slate-100">Agents</h1>
-          <p className="text-xs text-slate-500 mt-0.5">{list.length} running</p>
+          <h1 className="text-lg font-semibold text-slate-100">{t('agents.title')}</h1>
+          <p className="text-xs text-slate-500 mt-0.5">{t('agents.running', { n: list.length })}</p>
         </div>
         <Button
           size="sm"
@@ -214,7 +217,7 @@ export function AgentsTab() {
             refetchConfig();
           }}
         >
-          Refresh
+          {t('agents.refresh')}
         </Button>
       </div>
 
@@ -252,14 +255,14 @@ export function AgentsTab() {
                         </span>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
-                        <Badge variant="green">running</Badge>
+                        <Badge variant="green">{t('agents.runningBadge')}</Badge>
                       </div>
                     </div>
 
                     <div className="flex flex-wrap gap-1.5">
                       {cfg?.model && <Badge variant="blue">{cfg.model}</Badge>}
-                      {cfg?.persona && <Badge variant="purple">persona</Badge>}
-                      {sessCount > 0 && <Badge variant="gray">{sessCount} sessions</Badge>}
+                      {cfg?.persona && <Badge variant="purple">{t('agents.personaBadge')}</Badge>}
+                      {sessCount > 0 && <Badge variant="gray">{t('agents.sessionsBadge', { n: sessCount })}</Badge>}
                     </div>
 
                     <div className="flex gap-2 mt-1">
@@ -271,7 +274,7 @@ export function AgentsTab() {
                           setEditing(a.agentId);
                         }}
                       >
-                        Edit
+                        {t('agents.edit')}
                       </Button>
                       <Button
                         size="sm"
@@ -281,7 +284,7 @@ export function AgentsTab() {
                           void handleReload(a.agentId);
                         }}
                       >
-                        Reload
+                        {t('agents.reload')}
                       </Button>
                       <Button
                         size="sm"
@@ -291,7 +294,7 @@ export function AgentsTab() {
                           void handleClear(a.agentId);
                         }}
                       >
-                        Clear Sessions
+                        {t('agents.clearSessions')}
                       </Button>
                     </div>
                   </div>
@@ -311,7 +314,7 @@ export function AgentsTab() {
         </div>
       ))}
 
-      {list.length === 0 && <p className="text-slate-500 text-sm py-4">No agents running.</p>}
+      {list.length === 0 && <p className="text-slate-500 text-sm py-4">{t('agents.noAgents')}</p>}
     </div>
   );
 }

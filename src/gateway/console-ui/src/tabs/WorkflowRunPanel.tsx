@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Badge } from '../components/Badge.js';
 import { Button } from '../components/Button.js';
 import { MarkdownView } from '../components/MarkdownView.js';
+import { useLocale } from '../context/i18n.js';
 import { useWorkflowRun } from '../context/workflow-run.js';
 import { rpc } from '../hooks/useRpc.js';
 import { useToast } from '../hooks/useToast.js';
@@ -40,6 +41,7 @@ export function WorkflowRunPanel({
   initialRunId?: string;
 }) {
   const { toast } = useToast();
+  const { t } = useLocale();
   const { setActiveRunRef } = useWorkflowRun();
 
   const [input, setInput] = useState('');
@@ -143,7 +145,7 @@ export function WorkflowRunPanel({
           )}
         </div>
         <Button size="sm" variant="ghost" onClick={onClose}>
-          ✕ Close
+          {t('workflow.run.close')}
         </Button>
       </div>
 
@@ -173,11 +175,11 @@ export function WorkflowRunPanel({
       {/* Input — only shown before first run */}
       {!runId && workflow.inputRequired !== false && (
         <div className="flex flex-col gap-1.5">
-          <label className="text-xs text-slate-400">初始输入</label>
+          <label className="text-xs text-slate-400">{t('workflow.run.initialInput')}</label>
           <textarea
             rows={3}
             className="rounded-xl bg-slate-900/70 ring-1 ring-slate-700 px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-indigo-500 resize-none"
-            placeholder="Enter the initial message / prompt…"
+            placeholder={t('workflow.run.inputPlaceholder')}
             value={input}
             onChange={(e) => setInput(e.target.value)}
           />
@@ -186,14 +188,14 @@ export function WorkflowRunPanel({
 
       {!runId && workflow.inputRequired === false && (
         <div className="rounded-lg bg-indigo-600/10 ring-1 ring-indigo-500/20 px-3 py-2 text-xs text-indigo-300">
-          ℹ️ 此工作流无需初始输入，点击即可直接运行。
+          ℹ️ {t('workflow.run.noInputRequired')}
         </div>
       )}
 
       {/* Run ID badge */}
       {runId && (
         <div className="rounded-lg bg-slate-900/50 ring-1 ring-slate-700/50 px-3 py-2 text-xs text-slate-500 font-mono break-all">
-          Run ID: {runId}
+          {t('workflow.run.runId', { id: runId })}
         </div>
       )}
 
@@ -201,16 +203,16 @@ export function WorkflowRunPanel({
       <div className="flex gap-2 items-center">
         {!runId ? (
           <Button size="sm" variant="primary" onClick={() => void startRun()}>
-            ▶ Run Workflow
+            {t('workflow.run.start')}
           </Button>
         ) : running ? (
           <>
             <span className="text-xs text-yellow-400 flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse inline-block" />
-              Running…
+              {t('workflow.run.runningLabel')}
             </span>
             <Button size="sm" variant="danger" onClick={() => void cancelRun()}>
-              ✕ Cancel
+              {t('workflow.run.cancel')}
             </Button>
           </>
         ) : (
@@ -222,7 +224,7 @@ export function WorkflowRunPanel({
               setRun(null);
             }}
           >
-            ↩ Run Again
+            {t('workflow.run.again')}
           </Button>
         )}
       </div>
@@ -232,7 +234,7 @@ export function WorkflowRunPanel({
         <div className="flex flex-col gap-3">
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">
-              Results
+              {t('workflow.run.results')}
             </span>
             <Badge
               variant={
@@ -269,7 +271,7 @@ export function WorkflowRunPanel({
                 className="rounded-xl bg-slate-900/60 ring-1 ring-slate-700/50 p-4 flex flex-col gap-2"
               >
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-mono text-slate-500">Step {i + 1}</span>
+                  <span className="text-xs font-mono text-slate-500">{t('workflow.run.step', { n: String(i + 1) })}</span>
                   <span className="text-xs text-slate-300">
                     {step?.label ?? agentName(step?.agentId ?? '')}
                   </span>
@@ -294,7 +296,7 @@ export function WorkflowRunPanel({
                 {Object.keys(newVars).length > 0 && (
                   <div className="rounded-lg bg-emerald-950/40 ring-1 ring-emerald-800/40 px-3 py-2 flex flex-col gap-1">
                     <span className="text-[10px] text-emerald-500 font-medium uppercase tracking-wider mb-0.5">
-                      本步赋值变量
+                      {t('workflow.run.stepVars')}
                     </span>
                     {Object.entries(newVars).map(([k, v]) => (
                       <div
@@ -303,7 +305,7 @@ export function WorkflowRunPanel({
                       >
                         <span className="text-emerald-400 shrink-0 whitespace-nowrap">{k}</span>
                         <span className="text-slate-300 break-all">
-                          {v || <span className="text-slate-600 italic">(empty)</span>}
+                          {v || <span className="text-slate-600 italic">{t('workflow.run.empty')}</span>}
                         </span>
                       </div>
                     ))}
@@ -322,7 +324,7 @@ export function WorkflowRunPanel({
             return (
               <div className="rounded-xl bg-slate-800/50 ring-1 ring-slate-700/40 p-4 flex flex-col gap-2">
                 <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">
-                  📦 所有变量 ({Object.keys(latestSnap).length})
+                  {t('workflow.run.allVars', { n: String(Object.keys(latestSnap).length) })}
                 </span>
                 <div className="grid grid-cols-1 gap-1 font-mono">
                   {Object.entries(latestSnap).map(([k, v]) => (
@@ -332,7 +334,7 @@ export function WorkflowRunPanel({
                     >
                       <span className="text-indigo-400 shrink-0 whitespace-nowrap">{k}</span>
                       <span className="text-slate-300 break-all">
-                        {v || <span className="text-slate-600 italic">(empty)</span>}
+                        {v || <span className="text-slate-600 italic">{t('workflow.run.empty')}</span>}
                       </span>
                     </div>
                   ))}

@@ -5,6 +5,7 @@
 import { useState } from 'react';
 import { Badge } from '../components/Badge.js';
 import { Button } from '../components/Button.js';
+import { useLocale } from '../context/i18n.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
 import type { WorkflowDef, WorkflowRunRecord } from '../types.js';
 
@@ -30,6 +31,7 @@ export function WorkflowHistoryPanel({
   agents: { agentId: string; name?: string }[];
   onClose: () => void;
 }) {
+  const { t } = useLocale();
   const { data, loading } = useQuery<{ runs: WorkflowRunRecord[] }>(
     () => rpc<{ runs: WorkflowRunRecord[] }>('workflow.history'),
     [],
@@ -45,18 +47,18 @@ export function WorkflowHistoryPanel({
   return (
     <div className="flex flex-col gap-5">
       <div className="flex items-center justify-between">
-        <h2 className="text-base font-semibold text-slate-100">Run History</h2>
+        <h2 className="text-base font-semibold text-slate-100">{t('workflow.history.title')}</h2>
         <Button size="sm" variant="ghost" onClick={onClose}>
-          ← Back
+          {t('workflow.history.back')}
         </Button>
       </div>
 
-      {loading && <p className="text-xs text-slate-500">Loading…</p>}
+      {loading && <p className="text-xs text-slate-500">{t('workflow.history.loading')}</p>}
 
       {!loading && runs.length === 0 && (
         <div className="rounded-xl bg-slate-800/40 ring-1 ring-slate-700/50 p-8 flex flex-col items-center gap-2">
           <span className="text-3xl">📋</span>
-          <p className="text-slate-500 text-sm">No runs yet.</p>
+          <p className="text-slate-500 text-sm">{t('workflow.history.noRuns')}</p>
         </div>
       )}
 
@@ -104,7 +106,7 @@ export function WorkflowHistoryPanel({
                 <div className="px-4 pb-4 flex flex-col gap-3">
                   {r.input && (
                     <div className="rounded-lg bg-slate-900/60 ring-1 ring-slate-700/40 px-3 py-2">
-                      <span className="text-xs text-slate-500 block mb-1">Input</span>
+                      <span className="text-xs text-slate-500 block mb-1">{t('workflow.history.input')}</span>
                       <p className="text-xs text-slate-300 whitespace-pre-wrap line-clamp-3">
                         {r.input}
                       </p>
@@ -120,7 +122,7 @@ export function WorkflowHistoryPanel({
                         className="rounded-lg bg-slate-900/40 ring-1 ring-slate-700/30 p-3 flex flex-col gap-1.5"
                       >
                         <div className="flex items-center gap-2">
-                          <span className="text-xs font-mono text-slate-600">Step {si + 1}</span>
+                          <span className="text-xs font-mono text-slate-600">{t('workflow.history.step', { n: String(si + 1) })}</span>
                           <span className="text-xs text-slate-400">
                             {step?.label ?? agentName(step?.agentId ?? '')}
                           </span>
@@ -140,7 +142,7 @@ export function WorkflowHistoryPanel({
                         {Object.keys(newVars).length > 0 && (
                           <div className="rounded-md bg-emerald-950/40 ring-1 ring-emerald-800/40 px-2.5 py-2 flex flex-col gap-1">
                             <span className="text-[10px] text-emerald-500 font-medium uppercase tracking-wider mb-0.5">
-                              本步赋值变量
+                              {t('workflow.history.stepVars')}
                             </span>
                             {Object.entries(newVars).map(([k, v]) => (
                               <div
@@ -170,7 +172,7 @@ export function WorkflowHistoryPanel({
                     return (
                       <div className="rounded-lg bg-slate-800/50 ring-1 ring-slate-700/40 px-3 py-2 flex flex-col gap-1.5">
                         <span className="text-[10px] text-slate-500 font-medium uppercase tracking-wider">
-                          📦 全部变量 ({Object.keys(latestSnap).length})
+                          {t('workflow.history.allVars', { n: String(Object.keys(latestSnap).length) })}
                         </span>
                         <div className="flex flex-col gap-1 font-mono">
                           {Object.entries(latestSnap).map(([k, v]) => (

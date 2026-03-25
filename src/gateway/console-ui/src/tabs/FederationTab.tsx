@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Badge } from '../components/Badge.js';
 import { Button } from '../components/Button.js';
+import { useLocale } from '../context/i18n.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
 import type { FederationPeer, FederationStatusResult } from '../types.js';
 
@@ -20,6 +21,7 @@ function statusColor(status: string): 'green' | 'yellow' | 'red' | 'slate' {
 }
 
 export function FederationTab() {
+  const { t } = useLocale();
   const REFRESH_MS = 10_000;
 
   const { data, loading, error, refetch } = useQuery<FederationStatusResult>(
@@ -45,17 +47,17 @@ export function FederationTab() {
       {/* ── Header ────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-base font-semibold text-slate-100">Federation</h1>
+          <h1 className="text-base font-semibold text-slate-100">{t('federation.title')}</h1>
           <p className="text-[13px] text-slate-500 mt-0.5">
-            Connected peers in the AgentFlyer mesh
+            {t('federation.subtitle')}
           </p>
         </div>
         <div className="flex items-center gap-2">
           {data && (
-            <Badge color={enabled ? 'green' : 'slate'}>{enabled ? 'Enabled' : 'Disabled'}</Badge>
+            <Badge color={enabled ? 'green' : 'slate'}>{enabled ? t('federation.enabled') : t('federation.disabled')}</Badge>
           )}
           <Button size="sm" variant="ghost" onClick={refetch}>
-            Refresh
+            {t('federation.refresh')}
           </Button>
         </div>
       </div>
@@ -69,11 +71,10 @@ export function FederationTab() {
       {loading && !data && (
         <div className="flex items-center gap-2 text-sm text-slate-500 px-1">
           <div className="w-3.5 h-3.5 rounded-full border-2 border-indigo-500/30 border-t-indigo-400 animate-spin" />
-          Loading…
+          {t('federation.loading')}
         </div>
       )}
 
-      {/* ── Disabled banner ───────────────────────────────────────────────── */}
       {data && !enabled && (
         <div
           className="rounded-2xl px-5 py-4 flex items-start gap-4"
@@ -98,10 +99,9 @@ export function FederationTab() {
             <line x1="12" y1="16" x2="12.01" y2="16" />
           </svg>
           <div className="flex flex-col gap-1">
-            <p className="text-sm text-slate-300 font-medium">Federation is not enabled</p>
+            <p className="text-sm text-slate-300 font-medium">{t('federation.notEnabled')}</p>
             <p className="text-[13px] text-slate-500">
-              Enable it in <span className="text-indigo-400">Config → federation.enabled</span> and
-              restart the gateway to connect with peer nodes.
+              {t('federation.notEnabledDesc')}
             </p>
           </div>
         </div>
@@ -109,7 +109,7 @@ export function FederationTab() {
 
       {/* ── Peer list ─────────────────────────────────────────────────────── */}
       {enabled && !loading && peers.length === 0 && (
-        <div className="text-sm text-slate-600 px-1">No peers discovered yet.</div>
+        <div className="text-sm text-slate-600 px-1">{t('federation.noPeers')}</div>
       )}
 
       {enabled && peers.length > 0 && (
@@ -125,11 +125,11 @@ export function FederationTab() {
               background: 'rgba(255,255,255,0.02)',
             }}
           >
-            <span>Node ID</span>
-            <span>Address</span>
-            <span>Status</span>
-            <span>Latency</span>
-            <span>Last seen</span>
+            <span>{t('federation.nodeId')}</span>
+            <span>{t('federation.address')}</span>
+            <span>{t('federation.status')}</span>
+            <span>{t('federation.latency')}</span>
+            <span>{t('federation.lastSeen')}</span>
           </div>
 
           {peers.map((peer, i) => (
@@ -157,7 +157,7 @@ export function FederationTab() {
       )}
 
       {/* ── Auto-refresh note ─────────────────────────────────────────────── */}
-      {data && <p className="text-[11px] text-slate-700 px-1">Auto-refreshes every 10 s</p>}
+      {data && <p className="text-[11px] text-slate-700 px-1">{t('federation.autoRefresh')}</p>}
     </div>
   );
 }

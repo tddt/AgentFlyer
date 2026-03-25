@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Badge } from '../components/Badge.js';
+import { useLocale } from '../context/i18n.js';
 import type { LogEntry, LogLevel } from '../types.js';
 
 const ALL_LEVELS: LogLevel[] = ['debug', 'info', 'warn', 'error'];
@@ -43,6 +44,7 @@ function exportAsText(entries: LogEntry[]) {
 }
 
 export function LogsTab() {
+  const { t } = useLocale();
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [levelFilters, setLevelFilters] = useState<Record<LogLevel, boolean>>({
     debug: true,
@@ -100,12 +102,12 @@ export function LogsTab() {
       <div className="flex flex-col gap-3 pb-4 shrink-0">
         <div className="flex items-center gap-3 flex-wrap">
           <div>
-            <h1 className="text-lg font-semibold text-slate-100">Logs</h1>
-            <p className="text-xs text-slate-500 mt-0.5">Live gateway log stream</p>
+            <h1 className="text-lg font-semibold text-slate-100">{t('logs.title')}</h1>
+            <p className="text-xs text-slate-500 mt-0.5">{t('logs.subtitle')}</p>
           </div>
           <div className="ml-auto flex items-center gap-2 flex-wrap">
             <input
-              placeholder="Search…"
+              placeholder={t('logs.search')}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="bg-slate-700 border border-slate-600 text-slate-200 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-36"
@@ -114,27 +116,27 @@ export function LogsTab() {
               onClick={() => setPaused((p) => !p)}
               className={`text-xs px-3 py-1.5 rounded-lg ring-1 transition-colors ${paused ? 'bg-amber-600/30 ring-amber-500/50 text-amber-300' : 'bg-slate-700 ring-slate-600 text-slate-300 hover:bg-slate-600'}`}
             >
-              {paused ? '▶ Resume' : '⏸ Pause'}
+              {paused ? t('logs.resume') : t('logs.pause')}
             </button>
             <button
               onClick={() => exportAsText(filtered)}
               disabled={filtered.length === 0}
               className="text-xs px-3 py-1.5 rounded-lg bg-slate-700 ring-1 ring-slate-600 text-slate-300 hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              ↓ Export
+              {t('logs.export')}
             </button>
             <button
               onClick={() => setEntries([])}
               className="text-xs px-3 py-1.5 rounded-lg bg-slate-700 ring-1 ring-slate-600 text-slate-300 hover:bg-slate-600"
             >
-              Clear
+              {t('logs.clear')}
             </button>
           </div>
         </div>
 
         {/* Per-level chip row — like OpenClaw's chip-row */}
         <div className="flex items-center gap-1.5 flex-wrap">
-          <span className="text-[10px] text-slate-600 uppercase tracking-wide mr-1">Levels</span>
+          <span className="text-[10px] text-slate-600 uppercase tracking-wide mr-1">{t('logs.levels')}</span>
           {ALL_LEVELS.map((level) => {
             const active = levelFilters[level];
             return (
@@ -158,7 +160,7 @@ export function LogsTab() {
       </div>
 
       <div className="flex-1 overflow-y-auto bg-slate-900/60 rounded-xl ring-1 ring-slate-700/50 p-3 font-mono text-xs min-h-0">
-        {filtered.length === 0 && <p className="text-slate-500 text-center py-4">No log entries</p>}
+        {filtered.length === 0 && <p className="text-slate-500 text-center py-4">{t('logs.noEntries')}</p>}
         {filtered.map((entry, i) => (
           <div
             key={i}

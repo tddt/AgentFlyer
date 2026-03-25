@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Button } from '../components/Button.js';
+import { useLocale } from '../context/i18n.js';
 import { rpc } from '../hooks/useRpc.js';
 import { useToast } from '../hooks/useToast.js';
 
@@ -185,6 +186,7 @@ function SelectInput({
 
 function ModelStep({ onNext, onSkip }: { onNext: (modelRef: string) => void; onSkip: () => void }) {
   const { toast } = useToast();
+  const { t } = useLocale();
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<ModelFormState>({
     groupName: 'deepseek',
@@ -215,23 +217,23 @@ function ModelStep({ onNext, onSkip }: { onNext: (modelRef: string) => void; onS
 
   async function save() {
     if (!form.groupName.trim()) {
-      toast('请填写分组名称（Group Name）', 'error');
+      toast(t('setup.model.validGroupName'), 'error');
       return;
     }
     if (!form.modelId.trim()) {
-      toast('请填写模型 ID', 'error');
+      toast(t('setup.model.validModelId'), 'error');
       return;
     }
     if (!form.modelKey.trim()) {
-      toast('请填写模型 Key', 'error');
+      toast(t('setup.model.validModelKey'), 'error');
       return;
     }
     if (hint.needsKey && !form.apiKey.trim()) {
-      toast('此 Provider 需要填写 API Key', 'error');
+      toast(t('setup.model.validApiKey'), 'error');
       return;
     }
     if (hint.needsBase && !form.apiBaseUrl.trim()) {
-      toast('此 Provider 需要填写 API Base URL', 'error');
+      toast(t('setup.model.validApiBaseUrl'), 'error');
       return;
     }
 
@@ -256,10 +258,10 @@ function ModelStep({ onNext, onSkip }: { onNext: (modelRef: string) => void; onS
           model: modelRef,
         },
       });
-      toast('模型分组已保存 ✓', 'success');
+      toast(t('setup.model.saved'), 'success');
       onNext(modelRef);
     } catch (e) {
-      toast(e instanceof Error ? e.message : '保存失败', 'error');
+      toast(e instanceof Error ? e.message : t('common.saveFailed'), 'error');
     } finally {
       setSaving(false);
     }
@@ -268,14 +270,14 @@ function ModelStep({ onNext, onSkip }: { onNext: (modelRef: string) => void; onS
   return (
     <div className="flex flex-col gap-5">
       <div>
-        <h2 className="text-[15px] font-semibold text-slate-100">配置第一个模型</h2>
+        <h2 className="text-[15px] font-semibold text-slate-100">{t('setup.step1.title')}</h2>
         <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-          选择 LLM 服务商并填写认证信息，系统将使用此模型响应 Agent 请求。
+          {t('setup.model.description')}
         </p>
       </div>
 
       <div className="grid gap-3.5">
-        <Field label="LLM 服务商">
+        <Field label={t('setup.model.provider')}>
           <SelectInput
             value={form.provider}
             onChange={(v) => applyProvider(v as ModelProviderKind)}
@@ -284,14 +286,14 @@ function ModelStep({ onNext, onSkip }: { onNext: (modelRef: string) => void; onS
         </Field>
 
         <div className="grid grid-cols-2 gap-3">
-          <Field label="分组名称" hint="引用命名空间，如 deepseek、claude">
+          <Field label={t('setup.model.groupName')} hint={t('setup.model.groupHint')}>
             <TextInput
               value={form.groupName}
               onChange={(v) => setForm({ ...form, groupName: v })}
               placeholder="deepseek"
             />
           </Field>
-          <Field label="模型 Key" hint={modelRef ? `引用格式：${modelRef}` : '组内标识，如 chat'}>
+          <Field label={t('setup.model.modelKey')} hint={modelRef ? t('setup.model.modelRefHint', { ref: modelRef }) : t('setup.model.modelKeyHint')}>
             <TextInput
               value={form.modelKey}
               onChange={(v) => setForm({ ...form, modelKey: v })}
@@ -300,7 +302,7 @@ function ModelStep({ onNext, onSkip }: { onNext: (modelRef: string) => void; onS
           </Field>
         </div>
 
-        <Field label="模型 ID" hint="传给 API 的实际模型名称">
+        <Field label={t('setup.model.modelId')} hint={t('setup.model.modelIdHint')}>
           <TextInput
             value={form.modelId}
             onChange={(v) => setForm({ ...form, modelId: v })}
@@ -309,7 +311,7 @@ function ModelStep({ onNext, onSkip }: { onNext: (modelRef: string) => void; onS
         </Field>
 
         {hint.needsBase && (
-          <Field label="API Base URL">
+          <Field label={t('setup.model.apiBaseUrl')}>
             <TextInput
               value={form.apiBaseUrl}
               onChange={(v) => setForm({ ...form, apiBaseUrl: v })}
@@ -319,7 +321,7 @@ function ModelStep({ onNext, onSkip }: { onNext: (modelRef: string) => void; onS
         )}
 
         {hint.needsKey && (
-          <Field label="API Key">
+          <Field label={t('setup.model.apiKey')}>
             <TextInput
               value={form.apiKey}
               onChange={(v) => setForm({ ...form, apiKey: v })}
@@ -338,20 +340,20 @@ function ModelStep({ onNext, onSkip }: { onNext: (modelRef: string) => void; onS
             border: '1px solid rgba(99,102,241,0.18)',
           }}
         >
-          <span className="text-slate-500">模型引用：</span>
+          <span className="text-slate-500">{t('setup.model.modelRefLabel')}</span>
           <span className="text-indigo-300">{modelRef}</span>
         </div>
       )}
 
       <div className="flex items-center gap-3 pt-1">
         <Button variant="primary" onClick={() => void save()} disabled={saving}>
-          {saving ? '保存中…' : '保存并继续 →'}
+          {saving ? t('setup.saving') : t('setup.save')}
         </Button>
         <button
           onClick={onSkip}
           className="text-xs text-slate-500 hover:text-slate-300 transition-colors"
         >
-          跳过，手动配置
+          {t('setup.model.skip')}
         </button>
       </div>
     </div>
@@ -370,6 +372,7 @@ function AgentStep({
   onBack: () => void;
 }) {
   const { toast } = useToast();
+  const { t } = useLocale();
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<AgentFormState>({
     id: 'main',
@@ -379,7 +382,7 @@ function AgentStep({
 
   async function save() {
     if (!form.id.trim()) {
-      toast('请填写 Agent ID', 'error');
+      toast(t('setup.agent.validId'), 'error');
       return;
     }
 
@@ -409,10 +412,10 @@ function AgentStep({
         idx >= 0 ? agents.map((a, i) => (i === idx ? newAgent : a)) : [...agents, newAgent];
 
       await rpc('config.save', { ...cfg, agents: newAgents });
-      toast('Agent 已创建 ✓', 'success');
+      toast(t('setup.agent.saved'), 'success');
       onNext();
     } catch (e) {
-      toast(e instanceof Error ? e.message : '保存失败', 'error');
+      toast(e instanceof Error ? e.message : t('common.saveFailed'), 'error');
     } finally {
       setSaving(false);
     }
@@ -421,22 +424,22 @@ function AgentStep({
   return (
     <div className="flex flex-col gap-5">
       <div>
-        <h2 className="text-[15px] font-semibold text-slate-100">创建第一个 Agent</h2>
+        <h2 className="text-[15px] font-semibold text-slate-100">{t('setup.step2.title')}</h2>
         <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-          Agent 是 AI 的执行单元，绑定到一个模型并处理传入的消息。
+          {t('setup.agent.description')}
         </p>
       </div>
 
       <div className="grid gap-3.5">
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Agent ID" hint="唯一标识符，字母 + 数字 + 连字符">
+          <Field label={t('setup.agent.agentId')} hint={t('setup.agent.agentIdHint')}>
             <TextInput
               value={form.id}
               onChange={(v) => setForm({ ...form, id: v })}
               placeholder="main"
             />
           </Field>
-          <Field label="Agent 名称">
+          <Field label={t('setup.agent.agentName')}>
             <TextInput
               value={form.name}
               onChange={(v) => setForm({ ...form, name: v })}
@@ -445,7 +448,7 @@ function AgentStep({
           </Field>
         </div>
 
-        <Field label="使用的模型" hint='格式为 "分组/Key"，如 deepseek/chat'>
+        <Field label={t('setup.agent.model')} hint={t('setup.agent.modelHint')}>
           <TextInput
             value={form.model}
             onChange={(v) => setForm({ ...form, model: v })}
@@ -456,10 +459,10 @@ function AgentStep({
 
       <div className="flex items-center gap-3 pt-1">
         <Button variant="ghost" onClick={onBack}>
-          ← 返回
+          {t('setup.back')}
         </Button>
         <Button variant="primary" onClick={() => void save()} disabled={saving}>
-          {saving ? '保存中…' : '保存并继续 →'}
+          {saving ? t('setup.saving') : t('setup.save')}
         </Button>
       </div>
     </div>
@@ -475,6 +478,7 @@ function DoneStep({
   onGoChat: () => void;
   onGoOverview: () => void;
 }) {
+  const { t } = useLocale();
   return (
     <div className="flex flex-col items-center gap-6 py-6 text-center">
       <div
@@ -500,19 +504,18 @@ function DoneStep({
       </div>
 
       <div>
-        <h2 className="text-[15px] font-semibold text-slate-100">基础配置完成！</h2>
+        <h2 className="text-[15px] font-semibold text-slate-100">{t('setup.done.title')}</h2>
         <p className="text-xs text-slate-500 mt-2 max-w-xs leading-relaxed">
-          模型和 Agent 已就绪。前往 <strong className="text-slate-400">Chat</strong>{' '}
-          模块发送一条测试消息，验证 LLM 连通性。
+          {t('setup.done.description', { tab: 'Chat' })}
         </p>
       </div>
 
       <div className="flex items-center gap-3 flex-wrap justify-center">
         <Button variant="primary" onClick={onGoChat}>
-          前往 Chat 测试连通性 →
+          {t('setup.finish')}
         </Button>
         <Button variant="ghost" onClick={onGoOverview}>
-          返回概览
+          {t('setup.goOverview')}
         </Button>
       </div>
     </div>
@@ -524,10 +527,11 @@ function DoneStep({
 export function SetupWizard({ onDone }: { onDone: (goToChat?: boolean) => void }) {
   const [step, setStep] = useState<Step>('model');
   const [modelRef, setModelRef] = useState('');
+  const { t } = useLocale();
 
   const stepIndex = step === 'model' ? 0 : step === 'agent' ? 1 : 2;
 
-  const STEP_LABELS = ['配置模型', '创建 Agent', '连通性验证'];
+  const STEP_LABELS = [t('setup.wizard.stepLabel1'), t('setup.wizard.stepLabel2'), t('setup.wizard.stepLabel3')];
 
   return (
     <div
@@ -564,7 +568,7 @@ export function SetupWizard({ onDone }: { onDone: (goToChat?: boolean) => void }
           </div>
           <div>
             <span className="text-sm font-semibold text-slate-200">AgentFlyer</span>
-            <span className="ml-2 text-xs text-slate-500">初始设置向导</span>
+            <span className="ml-2 text-xs text-slate-500">{t('setup.wizard.subtitle')}</span>
           </div>
         </div>
 
@@ -623,7 +627,7 @@ export function SetupWizard({ onDone }: { onDone: (goToChat?: boolean) => void }
         </div>
 
         <p className="text-center text-[11px] text-slate-600 mt-5">
-          你也可以通过侧边栏的 <span className="text-slate-500">Config</span> 标签页随时修改配置。
+          {t('setup.wizard.footer')}
         </p>
       </div>
     </div>

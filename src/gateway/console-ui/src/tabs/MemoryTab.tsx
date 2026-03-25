@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { Badge } from '../components/Badge.js';
 import { Button } from '../components/Button.js';
+import { useLocale } from '../context/i18n.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
 import { useToast } from '../hooks/useToast.js';
 import type { MemoryEntry, MemorySearchResult } from '../types.js';
@@ -15,6 +16,7 @@ function relDate(ms: number): string {
 
 export function MemoryTab() {
   const { toast } = useToast();
+  const { t } = useLocale();
   const [query, setQuery] = useState('');
   const [submitted, setSubmitted] = useState('');
   const [partition, setPartition] = useState('');
@@ -57,13 +59,13 @@ export function MemoryTab() {
       {/* ── Header ────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-base font-semibold text-slate-100">Memory</h1>
+          <h1 className="text-base font-semibold text-slate-100">{t('memory.title')}</h1>
           <p className="text-[13px] text-slate-500 mt-0.5">
-            Search and manage agent memory entries
+            {t('memory.subtitle')}
           </p>
         </div>
         <Button size="sm" variant="ghost" onClick={refetch}>
-          Refresh
+          {t('memory.refresh')}
         </Button>
       </div>
 
@@ -74,20 +76,20 @@ export function MemoryTab() {
       >
         <input
           className="flex-1 rounded-lg bg-slate-900/70 ring-1 ring-slate-700 px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-indigo-500"
-          placeholder="Search query (leave blank for all)…"
+          placeholder={t('memory.searchPlaceholder')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
         />
         <input
           className="w-40 rounded-lg bg-slate-900/70 ring-1 ring-slate-700 px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-indigo-500"
-          placeholder="Partition…"
+          placeholder={t('memory.partitionPlaceholder')}
           value={partition}
           onChange={(e) => setPartition(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
         />
         <Button size="sm" variant="primary" onClick={handleSearch}>
-          Search
+          {t('memory.search')}
         </Button>
       </div>
 
@@ -101,12 +103,12 @@ export function MemoryTab() {
       {loading && !data && (
         <div className="flex items-center gap-2 text-sm text-slate-500 px-1">
           <div className="w-3.5 h-3.5 rounded-full border-2 border-indigo-500/30 border-t-indigo-400 animate-spin" />
-          Loading…
+          {t('memory.loading')}
         </div>
       )}
 
       {!loading && !error && results.length === 0 && (
-        <div className="text-sm text-slate-600 px-1">No memory entries found.</div>
+        <div className="text-sm text-slate-600 px-1">{t('memory.noEntries')}</div>
       )}
 
       {results.length > 0 && (
@@ -122,10 +124,10 @@ export function MemoryTab() {
               background: 'rgba(255,255,255,0.02)',
             }}
           >
-            <span>Content</span>
-            <span>Partition</span>
-            <span>Importance</span>
-            <span>Created</span>
+            <span>{t('memory.content')}</span>
+            <span>{t('memory.partition')}</span>
+            <span>{t('memory.importance')}</span>
+            <span>{t('memory.created')}</span>
             <span />
           </div>
 
@@ -143,7 +145,7 @@ export function MemoryTab() {
                     score: {entry.score.toFixed(3)}
                   </span>
                 )}
-                {entry.superseded && <Badge color="red">superseded</Badge>}
+                {entry.superseded && <Badge color="red">{t('memory.superseded')}</Badge>}
               </div>
 
               {/* Partition */}
@@ -170,7 +172,7 @@ export function MemoryTab() {
                   onClick={() => void handleDelete(entry.id)}
                   className="text-[11px] text-red-400/60 hover:text-red-400 transition-colors disabled:opacity-50"
                 >
-                  {deleting === entry.id ? '…' : 'Delete'}
+                  {deleting === entry.id ? '…' : t('memory.delete')}
                 </button>
               </div>
             </div>

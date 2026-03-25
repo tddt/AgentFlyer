@@ -2,6 +2,7 @@ import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Badge } from '../components/Badge.js';
 import { Button } from '../components/Button.js';
+import { useLocale } from '../context/i18n.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
 import { useToast } from '../hooks/useToast.js';
 import type {
@@ -92,6 +93,7 @@ function FormModal({
   onSubmit: () => void;
   children: ReactNode;
 }) {
+  const { t } = useLocale();
   return createPortal(
     <div
       className="fixed inset-0 z-[220] flex items-center justify-center bg-black/60 backdrop-blur-sm"
@@ -107,10 +109,10 @@ function FormModal({
         <div className="flex flex-col gap-3">{children}</div>
         <div className="flex justify-end gap-2 pt-2 border-t border-slate-700/50">
           <Button variant="ghost" size="sm" onClick={onClose}>
-            Cancel
+            {t('common.cancel')}
           </Button>
           <Button variant="primary" size="sm" onClick={onSubmit}>
-            Save
+            {t('common.save')}
           </Button>
         </div>
       </div>
@@ -120,6 +122,7 @@ function FormModal({
 }
 
 function ConfirmModal({ state, onClose }: { state: ConfirmState; onClose: () => void }) {
+  const { t } = useLocale();
   return createPortal(
     <div
       className="fixed inset-0 z-[220] flex items-center justify-center bg-black/60 backdrop-blur-sm"
@@ -132,10 +135,10 @@ function ConfirmModal({ state, onClose }: { state: ConfirmState; onClose: () => 
         <p className="text-sm text-slate-400">{state.message}</p>
         <div className="flex justify-end gap-2">
           <Button size="sm" variant="ghost" onClick={onClose}>
-            Cancel
+            {t('common.cancel')}
           </Button>
           <Button size="sm" variant="danger" onClick={() => void state.onConfirm()}>
-            Confirm
+            {t('common.confirm')}
           </Button>
         </div>
       </div>
@@ -166,6 +169,7 @@ function HistoryRecordCard({
   total: number;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const { t } = useLocale();
   const isLong = (r.result ?? '').length > 300;
 
   return (
@@ -213,7 +217,7 @@ function HistoryRecordCard({
                 className="text-[11px] text-indigo-400 hover:text-indigo-300 font-medium transition-colors"
                 onClick={() => setExpanded(true)}
               >
-                Show full result ↓
+                {t('scheduler.showResult')}
               </button>
             </div>
           )}
@@ -226,13 +230,13 @@ function HistoryRecordCard({
                 className="text-[11px] text-slate-500 hover:text-slate-300 font-medium transition-colors"
                 onClick={() => setExpanded(false)}
               >
-                Collapse ↑
+                {t('scheduler.collapseResult')}
               </button>
             </div>
           )}
         </div>
       ) : (
-        <div className="px-4 py-3 text-xs text-slate-600 italic">No output recorded.</div>
+        <div className="px-4 py-3 text-xs text-slate-600 italic">{t('scheduler.historyModal.noOutput')}</div>
       )}
     </div>
   );
@@ -240,6 +244,7 @@ function HistoryRecordCard({
 
 export function SchedulerTab() {
   const { toast } = useToast();
+  const { t } = useLocale();
   const [taskModal, setTaskModal] = useState<TaskModalState | null>(null);
   const [preview, setPreview] = useState<SchedulePreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -489,27 +494,27 @@ export function SchedulerTab() {
   };
 
   if (loading && !schedulerResult)
-    return <div className="text-slate-400 text-sm p-8">Loading…</div>;
+    return <div className="text-slate-400 text-sm p-8">{t('common.loading')}</div>;
   if (error) return <div className="text-red-400 text-sm p-8">Error: {error}</div>;
 
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-semibold text-slate-100">Scheduler</h1>
+          <h1 className="text-lg font-semibold text-slate-100">{t('scheduler.title')}</h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Full visual definition for recurring tasks
+            {t('scheduler.subtitle')}
           </p>
         </div>
         <div className="flex gap-2 items-center">
           <Badge variant="blue">
-            {tasks.length} task{tasks.length !== 1 ? 's' : ''}
+            {t(tasks.length !== 1 ? 'scheduler.tasksPlural' : 'scheduler.tasks', { n: String(tasks.length) })}
           </Badge>
           <Button size="sm" variant="ghost" onClick={refetch}>
-            Refresh
+            {t('scheduler.refresh')}
           </Button>
           <Button size="sm" variant="primary" onClick={openCreate}>
-            + New Task
+            {t('scheduler.newTask')}
           </Button>
         </div>
       </div>
@@ -526,9 +531,9 @@ export function SchedulerTab() {
           >
             <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
             <span className="text-[11px] font-semibold text-indigo-300 uppercase tracking-wider">
-              Running Now
+              {t('scheduler.runningNow')}
             </span>
-            <span className="ml-auto text-xs text-indigo-400">{runningTasks.length} active</span>
+            <span className="ml-auto text-xs text-indigo-400">{t('scheduler.active', { n: String(runningTasks.length) })}</span>
           </div>
           <div
             className="divide-y"
@@ -571,35 +576,35 @@ export function SchedulerTab() {
       )}
 
       {sortedTasks.length === 0 ? (
-        <div className="text-slate-500 text-sm py-4">No scheduled tasks.</div>
+        <div className="text-slate-500 text-sm py-4">{t('scheduler.noTasks')}</div>
       ) : (
         <div className="rounded-xl bg-slate-800/60 ring-1 ring-slate-700/50 overflow-hidden">
           <table className="w-full text-sm">
             <thead className="border-b border-slate-700/50">
               <tr className="text-left">
                 <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">
-                  Task
+                  {t('scheduler.col.task')}
                 </th>
                 <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">
-                  Target
+                  {t('scheduler.col.target')}
                 </th>
                 <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">
-                  Schedule
+                  {t('scheduler.col.schedule')}
                 </th>
                 <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">
-                  Output
+                  {t('scheduler.col.output')}
                 </th>
                 <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">
-                  Status
+                  {t('scheduler.col.status')}
                 </th>
                 <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">
-                  Next
+                  {t('scheduler.col.next')}
                 </th>
                 <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">
-                  Last Result
+                  {t('scheduler.col.lastResult')}
                 </th>
                 <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">
-                  Actions
+                  {t('scheduler.col.actions')}
                 </th>
               </tr>
             </thead>
@@ -649,29 +654,29 @@ export function SchedulerTab() {
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap gap-2">
                       <Button size="sm" variant="ghost" onClick={() => openEdit(task)}>
-                        Edit
+                        {t('scheduler.edit')}
                       </Button>
                       <Button size="sm" variant="ghost" onClick={() => void runNow(task.id)}>
-                        Run Now
+                        {t('scheduler.runNow')}
                       </Button>
                       <Button size="sm" variant="ghost" onClick={() => void openHistory(task)}>
-                        History
+                        {t('scheduler.history')}
                       </Button>
                       <Button size="sm" variant="ghost" onClick={() => void toggleEnabled(task)}>
-                        {task.enabled === false ? 'Enable' : 'Disable'}
+                        {task.enabled === false ? t('scheduler.enable') : t('scheduler.disable')}
                       </Button>
                       <Button
                         size="sm"
                         variant="danger"
                         onClick={() =>
                           setConfirmState({
-                            title: 'Delete Task',
-                            message: `Delete scheduled task "${task.name}"?`,
+                            title: t('scheduler.confirm.deleteTitle'),
+                            message: t('scheduler.confirm.deleteMsg', { name: task.name }),
                             onConfirm: () => removeTask(task.id),
                           })
                         }
                       >
-                        Delete
+                        {t('scheduler.delete')}
                       </Button>
                     </div>
                   </td>
@@ -684,8 +689,8 @@ export function SchedulerTab() {
 
       {taskModal && (
         <FormModal
-          title={taskModal.mode === 'add' ? 'Create Scheduler Task' : 'Edit Scheduler Task'}
-          description="Define execution agent, schedule and task prompt in one visual form."
+          title={taskModal.mode === 'add' ? t('scheduler.modal.createTitle') : t('scheduler.modal.editTitle')}
+          description={t('scheduler.modal.description')}
           onClose={() => setTaskModal(null)}
           onSubmit={() => void submitTask()}
         >
@@ -699,7 +704,7 @@ export function SchedulerTab() {
             />
           </Field>
 
-          <Field label="执行目标类型">
+          <Field label={t('scheduler.modal.targetType')}>
             <div className="flex gap-3">
               <label className="text-xs text-slate-300 inline-flex items-center gap-2">
                 <input
@@ -762,7 +767,7 @@ export function SchedulerTab() {
                 }
                 className="bg-slate-800 border border-slate-600 text-slate-200 text-xs rounded-lg px-2.5 py-2"
               >
-                <option value="">— 选择工作流 —</option>
+                <option value="">{t('scheduler.modal.selectWorkflow')}</option>
                 {workflows.map((w) => (
                   <option key={w.id} value={w.id}>
                     {w.name}
@@ -944,11 +949,11 @@ export function SchedulerTab() {
                 style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}
               >
                 <div>
-                  <h3 className="text-base font-semibold text-slate-100">Run History</h3>
+                  <h3 className="text-base font-semibold text-slate-100">{t('scheduler.historyModal.title')}</h3>
                   <p className="text-xs text-slate-400 mt-0.5">{historyModal.task.name}</p>
                 </div>
                 <Button size="sm" variant="ghost" onClick={() => setHistoryModal(null)}>
-                  Close
+                  {t('common.close')}
                 </Button>
               </div>
 
@@ -957,13 +962,13 @@ export function SchedulerTab() {
                 {historyModal.loading && (
                   <div className="flex items-center gap-2 text-sm text-slate-400 py-6">
                     <div className="w-3.5 h-3.5 rounded-full border-2 border-indigo-500/30 border-t-indigo-400 animate-spin" />
-                    Loading history…
+                    {t('scheduler.historyModal.loading')}
                   </div>
                 )}
 
                 {!historyModal.loading && historyModal.records.length === 0 && (
                   <div className="text-slate-500 text-sm py-6">
-                    No run records yet. Run the task at least once to see history.
+                    {t('scheduler.historyModal.noRecords')}
                   </div>
                 )}
 

@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useState } from 'react';
 import { Sidebar } from './components/Sidebar.js';
 import { Toast } from './components/Toast.js';
+import { LocaleProvider } from './context/i18n.js';
 import { WorkflowRunProvider } from './context/workflow-run.js';
 import { rpc } from './hooks/useRpc.js';
 import { ToastContext, useToastState } from './hooks/useToast.js';
@@ -95,8 +96,9 @@ export function App() {
   }
 
   return (
-    <WorkflowRunProvider>
-      <ToastContext.Provider value={toastState}>
+    <LocaleProvider>
+      <WorkflowRunProvider>
+        <ToastContext.Provider value={toastState}>
         {/* First-run setup wizard — shown full-page when models/agents are not yet configured */}
         {setupChecked && needsSetup ? (
           <SetupWizard onDone={handleSetupDone} />
@@ -126,5 +128,6 @@ export function App() {
         <Toast toasts={toastState.toasts} />
       </ToastContext.Provider>
     </WorkflowRunProvider>
+    </LocaleProvider>
   );
 }

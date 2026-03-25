@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '../components/Button.js';
 import { CopyButton } from '../components/CopyButton.js';
+import { useLocale } from '../context/i18n.js';
 import { MarkdownView } from '../components/MarkdownView.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
 import type {
@@ -48,6 +49,7 @@ function timeAgo(ms: number): string {
 }
 
 function AgentPanel({ agent }: AgentPanelProps) {
+  const { t } = useLocale();
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
@@ -304,12 +306,12 @@ function AgentPanel({ agent }: AgentPanelProps) {
                 void refetchSessions();
               }}
             >
-              🗂 Sessions ({agentSessions.length})
+              {t('chat.sessions', { n: agentSessions.length })}
             </Button>
             {showSessions && (
               <div className="absolute right-0 top-full mt-1 w-80 bg-slate-900 ring-1 ring-slate-700 rounded-xl shadow-2xl z-50 overflow-hidden">
                 <div className="px-3 py-2 border-b border-slate-700/60 flex items-center justify-between">
-                  <span className="text-xs font-medium text-slate-300">Select Thread</span>
+                  <span className="text-xs font-medium text-slate-300">{t('chat.selectThread')}</span>
                   <button
                     onClick={() => setShowSessions(false)}
                     className="text-slate-500 hover:text-slate-300 text-xs"
@@ -323,10 +325,10 @@ function AgentPanel({ agent }: AgentPanelProps) {
                     className="w-full px-3 py-2.5 text-left hover:bg-slate-700/50 border-b border-slate-700/40 flex items-center gap-2"
                   >
                     <span className="text-emerald-400 text-xs">＋</span>
-                    <span className="text-xs text-slate-300">New Thread</span>
+                    <span className="text-xs text-slate-300">{t('chat.newThread')}</span>
                   </button>
                   {agentSessions.length === 0 && (
-                    <p className="text-xs text-slate-500 px-3 py-3">No sessions yet.</p>
+                    <p className="text-xs text-slate-500 px-3 py-3">{t('chat.noSessionsYet')}</p>
                   )}
                   {agentSessions.map((s) => (
                     <button
@@ -341,7 +343,7 @@ function AgentPanel({ agent }: AgentPanelProps) {
                           {s.threadKey}
                         </span>
                         {s.threadKey === currentThread && (
-                          <span className="text-[10px] text-indigo-400 ml-1 shrink-0">active</span>
+                          <span className="text-[10px] text-indigo-400 ml-1 shrink-0">{t('chat.active')}</span>
                         )}
                       </div>
                       <div className="flex items-center gap-2 text-[10px] text-slate-500">
@@ -363,17 +365,15 @@ function AgentPanel({ agent }: AgentPanelProps) {
               void rpc('session.clear', { sessionKey: `agent:${agent.agentId}:${currentThread}` });
             }}
           >
-            Clear
+            {t('common.clear')}
           </Button>
         </div>
       </div>
 
-      {/* Messages */}
       <div className="flex-1 overflow-y-auto flex flex-col gap-4 pr-1 min-h-0 pt-3">
         {messages.length === 0 && (
           <div className="text-center text-slate-500 text-sm mt-12">
-            Start a conversation with{' '}
-            <span className="text-slate-300">{agent.name ?? agent.agentId}</span>…
+            {t('chat.startConversation', { name: agent.name ?? agent.agentId })}
           </div>
         )}
         {messages.map((msg, i) => (
@@ -389,7 +389,7 @@ function AgentPanel({ agent }: AgentPanelProps) {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
+            placeholder={t('chat.inputPlaceholder')}
             rows={2}
             disabled={busy}
             className="flex-1 bg-transparent text-slate-200 text-sm placeholder:text-slate-500 resize-none focus:outline-none min-h-10"
@@ -400,7 +400,7 @@ function AgentPanel({ agent }: AgentPanelProps) {
             onClick={() => void sendMessage()}
             disabled={busy || !input.trim()}
           >
-            {busy ? '…' : 'Send'}
+            {busy ? '…' : t('chat.send')}
           </Button>
         </div>
       </div>
@@ -411,6 +411,7 @@ function AgentPanel({ agent }: AgentPanelProps) {
 // ── Main ChatTab: left sidebar agent list + right panel ──────────────────────
 
 export function ChatTab() {
+  const { t } = useLocale();
   const [activeAgentId, setActiveAgentId] = useState<string>('');
 
   const { data: agentsResult, refetch } = useQuery<AgentListResult>(
@@ -435,13 +436,13 @@ export function ChatTab() {
       {/* Left: agent list sidebar */}
       <div className="w-48 shrink-0 flex flex-col border-r border-slate-700/50 pr-2 mr-3">
         <div className="flex items-center justify-between pb-3 shrink-0">
-          <h1 className="text-sm font-semibold text-slate-100">Chat</h1>
+          <h1 className="text-sm font-semibold text-slate-100">{t('chat.title')}</h1>
           <Button size="sm" variant="ghost" onClick={refetch}>
             ↺
           </Button>
         </div>
         <div className="flex flex-col gap-1 flex-1 overflow-y-auto">
-          {agents.length === 0 && <p className="text-xs text-slate-500 pt-2">No agents running.</p>}
+          {agents.length === 0 && <p className="text-xs text-slate-500 pt-2">{t('chat.noAgents')}</p>}
           {agents.map((a) => {
             const active = a.agentId === effectiveActiveId;
             return (
@@ -470,7 +471,7 @@ export function ChatTab() {
       <div className="flex-1 min-w-0 relative overflow-hidden">
         {agents.length === 0 ? (
           <div className="flex items-center justify-center h-full text-slate-500 text-sm">
-            No agents available. Start a gateway first.
+            {t('chat.noAgentsAvailable')}
           </div>
         ) : (
           (() => {
@@ -486,6 +487,7 @@ export function ChatTab() {
 }
 
 function ThinkingBubble({ msg }: { msg: Message }) {
+  const { t } = useLocale();
   const [open, setOpen] = useState(false);
   return (
     <div className="text-xs bg-slate-800/30 rounded-lg ring-1 ring-slate-700/30 overflow-hidden">
@@ -496,9 +498,9 @@ function ThinkingBubble({ msg }: { msg: Message }) {
         <span className="text-[10px] leading-none">{open ? '▾' : '▸'}</span>
         <span className="italic">
           {msg.streaming ? (
-            <span className="animate-pulse">Thinking…</span>
+            <span className="animate-pulse">{t('chat.thinking')}</span>
           ) : (
-            `Reasoning (${msg.content.length} chars)`
+            t('chat.reasoning', { n: msg.content.length })
           )}
         </span>
       </button>

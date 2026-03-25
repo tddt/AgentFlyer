@@ -1,3 +1,4 @@
+import { useLocale } from '../context/i18n.js';
 import { useQuery } from '../hooks/useRpc.js';
 import { rpc } from '../hooks/useRpc.js';
 import type { GatewayStatus } from '../types.js';
@@ -15,6 +16,7 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 }
 
 export function AboutTab() {
+  const { t } = useLocale();
   const { data } = useQuery<GatewayStatus>(() => rpc<GatewayStatus>('gateway.status'), []);
 
   return (
@@ -44,7 +46,7 @@ export function AboutTab() {
         <div>
           <h1 className="text-lg font-semibold text-slate-100 tracking-tight">AgentFlyer</h1>
           <p className="text-[13px] text-slate-500">
-            Decentralized, cross-platform, multi-host federated AI Agent framework
+            {t('about.tagline')}
           </p>
         </div>
       </div>
@@ -56,14 +58,14 @@ export function AboutTab() {
       >
         <div className="pt-2.5 pb-1">
           <h2 className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">
-            Runtime
+            {t('about.runtime')}
           </h2>
         </div>
         {data ? (
           <>
-            <InfoRow label="Version" value={data.version ?? '—'} />
+            <InfoRow label={t('about.version')} value={data.version ?? '—'} />
             <InfoRow
-              label="Uptime"
+              label={t('about.uptime')}
               value={
                 data.uptime != null
                   ? (() => {
@@ -76,11 +78,11 @@ export function AboutTab() {
                   : '—'
               }
             />
-            <InfoRow label="Active agents" value={String(data.activeAgents ?? '—')} />
-            <InfoRow label="Running tasks" value={String(data.runningTasks ?? '—')} />
+            <InfoRow label={t('about.activeAgents')} value={String(data.activeAgents ?? '—')} />
+            <InfoRow label={t('about.runningTasks')} value={String(data.runningTasks ?? '—')} />
           </>
         ) : (
-          <div className="py-3 text-[13px] text-slate-600">Fetching status…</div>
+          <div className="py-3 text-[13px] text-slate-600">{t('about.fetchingStatus')}</div>
         )}
       </div>
 
@@ -117,10 +119,10 @@ export function AboutTab() {
         style={{ border: '1px solid rgba(255,255,255,0.07)', background: 'rgba(255,255,255,0.02)' }}
       >
         <h2 className="text-[11px] font-medium text-slate-500 uppercase tracking-wider mb-2">
-          License
+          {t('about.license')}
         </h2>
         <p className="text-[13px] text-slate-400 leading-relaxed">
-          MIT License — Copyright © AgentFlyer contributors
+          {t('about.licenseText')}
         </p>
       </div>
     </div>
