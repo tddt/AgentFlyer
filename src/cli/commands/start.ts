@@ -1,13 +1,28 @@
+import { spawn } from 'node:child_process';
 import { unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { intro, note, spinner } from '@clack/prompts';
 import chalk from 'chalk';
 import { defineCommand } from 'citty';
-import { loadConfig } from '../../core/config/loader.js';
-import { getDefaultConfigDir } from '../../core/config/loader.js';
+import { getDefaultConfigDir, loadConfig, saveConfig } from '../../core/config/loader.js';
 import { setLogLevel } from '../../core/logger.js';
 import { freePortSync } from '../../core/process/port-cleanup.js';
 import { isGatewayRunning, startGateway } from '../../gateway/lifecycle.js';
+
+/** Open a URL in the system default browser (macOS / Windows / Linux). */
+function openBrowser(url: string): void {
+  try {
+    if (process.platform === 'darwin') {
+      spawn('open', [url], { detached: true, stdio: 'ignore' }).unref();
+    } else if (process.platform === 'win32') {
+      spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore' }).unref();
+    } else {
+      spawn('xdg-open', [url], { detached: true, stdio: 'ignore' }).unref();
+    }
+  } catch {
+    // Non-fatal — browser open is best-effort
+  }
+}
 
 export const startCommand = defineCommand({
   meta: {
@@ -90,21 +105,39 @@ export const startCommand = defineCommand({
 
     s.start('Starting gateway');
     try {
+      const hadToken = !!config.gateway.auth?.token;
       const instance = await startGateway(config, dataDir);
       s.stop(`Gateway running on port ${config.gateway.port}`);
 
+      // Persist the auto-generated token so it survives restarts
+      if (!hadToken) {
+        const updated = {
+          ...config,
+          gateway: {
+            ...config.gateway,
+            auth: { ...config.gateway.auth, token: instance.state.authToken },
+          },
+        };
+        await saveConfig(updated, args.config as string | undefined).catch(() => undefined);
+      }
+
       const tokenHint = `${instance.state.authToken.slice(0, 8)}...`;
+      const consoleUrl = `http://localhost:${config.gateway.port}/console?token=${instance.state.authToken}`;
       note(
         [
           `Port:  ${chalk.green(config.gateway.port)}`,
           `Token: ${chalk.yellow(tokenHint)} (see ${dataDir}/agentflyer.json)`,
           `Agents: ${chalk.cyan(config.agents.map((a) => a.id).join(', '))}`,
           '',
+          `Console: ${chalk.cyan(consoleUrl)}`,
           `Run ${chalk.bold('agentflyer chat')} in another terminal to start chatting.`,
           'Press Ctrl-C to stop.',
         ].join('\n'),
         'Gateway ready',
       );
+
+      // Open the console in the system browser
+      openBrowser(consoleUrl);
     } catch (err) {
       s.stop(chalk.red('Failed to start gateway'));
       note(String(err), 'Error');
