@@ -46,7 +46,7 @@ import { MemoryStore } from '../memory/store.js';
 import { CronScheduler } from '../scheduler/cron.js';
 import { filterSkillsForAgent } from '../skills/filter.js';
 import { buildSkillsDirectory } from '../skills/format.js';
-import { buildRegistry } from '../skills/registry.js';
+import { buildRegistry, scanSkillsDir } from '../skills/registry.js';
 import { createSkillTools } from '../skills/skill-tools.js';
 import { generateToken } from './auth.js';
 import { ContentStore } from './content-store.js';
@@ -417,7 +417,24 @@ export async function startGateway(
   // Build a runner for each agent
   for (const agentCfg of config.agents) {
     try {
-      const agentSkills = filterSkillsForAgent(globalSkillRegistry.list(), agentCfg.skills ?? []);
+      // 1. Skills explicitly selected from the global pool
+      const explicitSkills = filterSkillsForAgent(globalSkillRegistry.list(), agentCfg.skills ?? []);
+
+      // 2. Auto-merge per-agent workspace skills (<workspace>/skills/)
+      // RATIONALE: agents can drop SKILL.md files in their own workspace without
+      // touching the global config — they are always included automatically.
+      const workspaceSkills = [];
+      if (agentCfg.workspace) {
+        const explicitIds = new Set(explicitSkills.map((s) => s.id));
+        for (const s of scanSkillsDir(
+          join(agentCfg.workspace, 'skills'),
+          config.skills.summaryLength ?? 60,
+        )) {
+          if (!explicitIds.has(s.id)) workspaceSkills.push({ ...s, source: 'workspace' as const });
+        }
+      }
+
+      const agentSkills = [...explicitSkills, ...workspaceSkills];
       const agentSkillsText = buildSkillsDirectory(agentSkills, config.skills.compact ?? true);
       if (agentSkills.length > 0) {
         logger.info('Skills loaded for agent', {
@@ -481,7 +498,25 @@ export async function startGateway(
     const reloaded: string[] = [];
     for (const agentCfg of toReload) {
       try {
-        const agentSkills = filterSkillsForAgent(globalSkillRegistry.list(), agentCfg.skills ?? []);
+        // 1. Skills explicitly selected from the global pool
+        const explicitSkills = filterSkillsForAgent(
+          globalSkillRegistry.list(),
+          agentCfg.skills ?? [],
+        );
+
+        // 2. Auto-merge per-agent workspace skills (<workspace>/skills/)
+        const workspaceSkills = [];
+        if (agentCfg.workspace) {
+          const explicitIds = new Set(explicitSkills.map((s) => s.id));
+          for (const s of scanSkillsDir(
+            join(agentCfg.workspace, 'skills'),
+            newConfig.skills.summaryLength ?? 60,
+          )) {
+            if (!explicitIds.has(s.id)) workspaceSkills.push({ ...s, source: 'workspace' as const });
+          }
+        }
+
+        const agentSkills = [...explicitSkills, ...workspaceSkills];
         const agentSkillsText = buildSkillsDirectory(agentSkills, newConfig.skills.compact ?? true);
         const agentSkillRegistry = new (await import('../skills/registry.js')).SkillRegistry();
         for (const s of agentSkills) agentSkillRegistry.register(s);

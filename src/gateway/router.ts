@@ -63,6 +63,22 @@ export async function routeRequest(
   const url = req.url ?? '/';
   const method = req.method?.toUpperCase() ?? 'GET';
 
+  // ── CORS: allow localhost / 127.0.0.1 origins (console dev + same-host) ─
+  // localhost and 127.0.0.1 are different browser origins even on the same port.
+  const origin = (req.headers['origin'] as string) ?? '';
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    res.setHeader('Vary', 'Origin');
+  }
+  // Handle preflight before any auth or routing logic.
+  if (method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return true;
+  }
+
   // ── Health check (no auth) ─────────────────────────────────────────────
   if (url === '/health' && method === 'GET') {
     json(res, 200, { ok: true });

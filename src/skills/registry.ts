@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import matter from 'gray-matter';
 import type { Config } from '../core/config/schema.js';
 import { createLogger } from '../core/logger.js';
@@ -15,6 +16,8 @@ export interface SkillCommand {
   args?: string[];
 }
 
+export type SkillSource = 'builtin' | 'user-global' | 'workspace' | 'extra';
+
 export interface SkillMeta {
   id: SkillId;
   name: string;
@@ -27,6 +30,8 @@ export interface SkillMeta {
   filePath: string;
   cachedAt: number;
   contentHash: string;
+  /** Where this skill came from — used for display labels in the console UI */
+  source?: SkillSource;
 }
 
 export class SkillRegistry {
@@ -149,34 +154,50 @@ function truncateToSentence(text: string, maxLen: number): string {
   return `${slice.slice(0, cut).trimEnd()}…`;
 }
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
 /**
  * Build a SkillRegistry from all skill directories:
- * 1. Built-in skills (bundled with AgentFlyer)
+ * 1. Built-in skills (bundled with AgentFlyer — src/skills/builtin/)
  * 2. User-global skills (~/.agentflyer/skills/)
  * 3. Workspace-level skills (workspace/skills/)
  * 4. Extra dirs from config
+ *
+ * NOTE: Per-agent workspace scanning (layer 3 in the 3-layer model) is done
+ * in lifecycle.ts after per-agent skill filtering, so each agent can auto-merge
+ * its own <workspace>/skills/ directory regardless of explicit skill selection.
  */
 export function buildRegistry(config: Config, workspaceDir?: string): SkillRegistry {
   const registry = new SkillRegistry();
   const shortDescLen = config.skills.summaryLength ?? 60;
 
-  const dirs: string[] = [];
-
-  // User-global
-  dirs.push(join(homedir(), '.agentflyer', 'skills'));
-
-  // Workspace level
-  if (workspaceDir) {
-    dirs.push(join(workspaceDir, 'skills'));
+  // 1. Built-in skills (shipped with AgentFlyer)
+  const builtinDir = join(__dirname, 'builtin');
+  for (const meta of scanSkillsDir(builtinDir, shortDescLen)) {
+    registry.register({ ...meta, source: 'builtin' });
   }
 
-  // Extra dirs from config
-  dirs.push(...(config.skills.dirs ?? []));
+  // 2. User-global (~/.agentflyer/skills/)
+  const globalDir = join(homedir(), '.agentflyer', 'skills');
+  for (const meta of scanSkillsDir(globalDir, shortDescLen)) {
+    registry.register({ ...meta, source: 'user-global' });
+  }
 
-  for (const dir of dirs) {
-    const found = scanSkillsDir(dir, shortDescLen);
-    for (const meta of found) {
-      registry.register(meta);
+  // 3. Default workspace-level skills (config.defaults.workspace/skills/)
+  // RATIONALE: This covers the global default workspace only. Per-agent workspace
+  // skill merging happens in lifecycle.ts so each agent also gets its own workspace skills.
+  if (workspaceDir) {
+    const wsDir = join(workspaceDir, 'skills');
+    for (const meta of scanSkillsDir(wsDir, shortDescLen)) {
+      registry.register({ ...meta, source: 'workspace' });
+    }
+  }
+
+  // 4. Extra dirs from config
+  for (const dir of config.skills.dirs ?? []) {
+    for (const meta of scanSkillsDir(dir, shortDescLen)) {
+      registry.register({ ...meta, source: 'extra' });
     }
   }
 

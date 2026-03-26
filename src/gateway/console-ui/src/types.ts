@@ -84,6 +84,7 @@ export interface SkillInfo {
   shortDesc: string;
   tags: string[];
   apiKeyRequired: boolean;
+  source?: 'builtin' | 'user-global' | 'workspace' | 'extra';
 }
 
 export interface SkillListResult {

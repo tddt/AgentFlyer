@@ -1970,11 +1970,28 @@ function SkillsPanel({
                   <span className="text-sm font-medium text-slate-200">{sk.name}</span>
                   <span className="text-xs text-slate-500 ml-2">{sk.shortDesc}</span>
                 </div>
-                {sk.apiKeyRequired && (
-                  <span className="text-xs text-amber-400 shrink-0 bg-amber-400/10 px-1.5 py-0.5 rounded">
-                    key req'd
-                  </span>
-                )}
+                <div className="flex items-center gap-1 shrink-0">
+                  {sk.source === 'builtin' && (
+                    <span className="text-xs text-indigo-400 bg-indigo-400/10 px-1.5 py-0.5 rounded">
+                      built-in
+                    </span>
+                  )}
+                  {sk.source === 'workspace' && (
+                    <span className="text-xs text-emerald-400 bg-emerald-400/10 px-1.5 py-0.5 rounded">
+                      workspace
+                    </span>
+                  )}
+                  {sk.source === 'user-global' && (
+                    <span className="text-xs text-sky-400 bg-sky-400/10 px-1.5 py-0.5 rounded">
+                      global
+                    </span>
+                  )}
+                  {sk.apiKeyRequired && (
+                    <span className="text-xs text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded">
+                      key req'd
+                    </span>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -2817,8 +2834,25 @@ export function ConfigTab() {
                         }}
                         className="mt-0.5 accent-indigo-500 shrink-0"
                       />
-                      <span className="flex flex-col gap-0.5">
-                        <span className="font-medium">{sk.name}</span>
+                      <span className="flex flex-col gap-0.5 flex-1 min-w-0">
+                        <span className="font-medium flex items-center gap-1.5">
+                          {sk.name}
+                          {sk.source === 'builtin' && (
+                            <span className="text-xs text-indigo-400 bg-indigo-400/10 px-1 py-0.5 rounded leading-none">
+                              built-in
+                            </span>
+                          )}
+                          {sk.source === 'workspace' && (
+                            <span className="text-xs text-emerald-400 bg-emerald-400/10 px-1 py-0.5 rounded leading-none">
+                              workspace
+                            </span>
+                          )}
+                          {sk.source === 'user-global' && (
+                            <span className="text-xs text-sky-400 bg-sky-400/10 px-1 py-0.5 rounded leading-none">
+                              global
+                            </span>
+                          )}
+                        </span>
                         <span className="text-xs text-slate-500">{sk.shortDesc}</span>
                       </span>
                     </label>
