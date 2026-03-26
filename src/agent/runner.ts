@@ -200,6 +200,10 @@ export class AgentRunner {
   // RATIONALE: cache read-only tool results within a thread to avoid
   // redundant I/O calls on repeated reads of the same file/query.
   private toolResultCache = new Map<string, unknown>();
+  // RATIONALE: prevent concurrent turns from corrupting shared instance state
+  // (threadKey, sessionKey, promptLayerHashes, toolResultCache). A single runner
+  // processes one turn at a time; callers should check isRunning before calling.
+  private _running = false;
 
   constructor(
     private readonly config: AgentConfig,
@@ -223,6 +227,24 @@ export class AgentRunner {
     return this.sessionKey;
   }
 
+  /** True while a `turn()` is actively running. Check this before dispatching a new task. */
+  get isRunning(): boolean {
+    return this._running;
+  }
+
+  /**
+   * Force-clear the busy flag after an orphaned turn (e.g. LLM provider unreachable).
+   * Only call when you are certain the previous turn will never complete.
+   */
+  forceReset(): void {
+    if (this._running) {
+      logger.warn('AgentRunner.forceReset(): clearing orphaned running flag', {
+        agentId: this.agentId,
+      });
+      this._running = false;
+    }
+  }
+
   /**
    * Run one conversational turn.
    * Yields StreamChunk objects and resolves to a TurnResult when done.
@@ -231,302 +253,310 @@ export class AgentRunner {
     userMessage: string,
     opts: RunnerOptions = {},
   ): AsyncGenerator<StreamChunk, TurnResult> {
-    const { provider, toolRegistry, sessionStore, metaStore, approvalHandler } = this.deps;
-    const model =
-      opts.model ?? this.deps.resolvedModel?.id ?? this.config.model ?? 'claude-haiku-3-5';
-    const maxTokens = opts.maxTokens ?? this.deps.resolvedModel?.maxTokens ?? 8192;
-
-    // ── 1. Build system prompt ──────────────────────────────────────────────
-    const agentName = this.config.name ?? this.agentId;
-    const workspace = this.config.workspace;
-
-    let workspaceDoc: string | null = null;
-    if (workspace) {
-      workspaceDoc = await readWorkspaceDocCached(workspace).catch(() => null);
+    if (this._running) {
+      throw new Error(`Agent '${this.agentId}' is already processing a turn`);
     }
+    this._running = true;
+    try {
+      const { provider, toolRegistry, sessionStore, metaStore, approvalHandler } = this.deps;
+      const model =
+        opts.model ?? this.deps.resolvedModel?.id ?? this.config.model ?? 'claude-haiku-3-5';
+      const maxTokens = opts.maxTokens ?? this.deps.resolvedModel?.maxTokens ?? 8192;
 
-    // Build base layers once; hash their content to detect changes between
-    // turns. If all hashes match and there is no per-turn taskContext, reuse
-    // the cached systemPrompt to skip the trimming pass in buildSystemPrompt.
-    const baseLayers = [
-      layer0Identity(
-        agentName,
-        this.agentId,
-        this.config.mesh?.role,
-        buildPersonaContent(this.config),
-      ),
-      layer1Workspace(workspaceDoc ?? ''),
-      layer2Skills(opts.skillsText ?? this.deps.skillsText ?? ''),
-      layer3Memory(opts.memoryText ?? ''),
-    ];
-    const newLayerHashes = baseLayers.map((l) =>
-      createHash('sha256').update(l.content).digest('hex').slice(0, 16),
-    );
-    const allBaseUnchanged =
-      !opts.taskContext &&
-      this.cachedSystemPrompt !== null &&
-      newLayerHashes.every((h, i) => this.promptLayerHashes.get(i) === h);
+      // ── 1. Build system prompt ──────────────────────────────────────────────
+      const agentName = this.config.name ?? this.agentId;
+      const workspace = this.config.workspace;
 
-    let systemPrompt: string;
-    if (allBaseUnchanged) {
-      systemPrompt = this.cachedSystemPrompt!;
-    } else {
-      ({ systemPrompt } = buildSystemPrompt(
-        [
-          ...baseLayers,
-          ...(opts.taskContext
-            ? [
-                {
-                  id: 4 as const,
-                  name: 'task',
-                  content: opts.taskContext,
-                  estimatedTokens: 0,
-                  trimable: true,
-                },
-              ]
-            : []),
-        ],
-        this.deps.systemPromptMaxTokens,
-      ));
-      newLayerHashes.forEach((h, i) => this.promptLayerHashes.set(i, h));
-      this.cachedSystemPrompt = systemPrompt;
-    }
+      let workspaceDoc: string | null = null;
+      if (workspace) {
+        workspaceDoc = await readWorkspaceDocCached(workspace).catch(() => null);
+      }
 
-    // ── 2. Load conversation history ────────────────────────────────────────
-    const history = await sessionStore.readAll(this.sessionKey);
-    let messages: Message[] = sanitizeMessages(
-      history.map((s) => ({ role: s.role, content: s.content })),
-    );
-
-    // Append the new user message
-    const userMsg: StoredMessage = {
-      id: ulid(),
-      sessionKey: this.sessionKey,
-      role: 'user',
-      content: userMessage,
-      timestamp: Date.now(),
-    };
-    await sessionStore.append(this.sessionKey, userMsg);
-    messages = [...messages, { role: 'user', content: userMessage }];
-
-    // Check compaction
-    const compactionCheck = checkCompactionNeeded(messages, { model });
-    if (compactionCheck.shouldCompact) {
-      logger.info('Compacting conversation', { sessionKey: this.sessionKey });
-      const compacted = await runCompaction(messages, async (prompt) => {
-        let text = '';
-        for await (const chunk of provider.run({
-          model,
-          systemPrompt: '',
-          messages: [{ role: 'user', content: prompt }],
-          tools: [],
-          maxTokens: 2048,
-        })) {
-          if (chunk.type === 'text_delta') text += chunk.text;
-        }
-        return text;
-      });
-      messages = [compacted.summaryMessage, ...compacted.keptMessages];
-      await metaStore.update(this.sessionKey, {
-        compactionCount: ((await metaStore.get(this.sessionKey))?.compactionCount ?? 0) + 1,
-        lastCompactionAt: Date.now(),
-      });
-    }
-
-    // ── 3. Main agentic loop ────────────────────────────────────────────────
-    let totalInputTokens = 0;
-    let totalOutputTokens = 0;
-    let totalText = '';
-
-    const MAX_TOOL_ROUNDS = 20; // safety cap
-    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-      const allToolsWithCategory = toolRegistry.list();
-      // Pre-filter by policy so the LLM only sees tools it is allowed to call.
-      // Without this, blocked tools appear in the schema and the model tries to
-      // invoke them, which just returns a policy-error tool_result.
-      // RATIONALE: skill-category tools (skill_list, skill_read) are exempt from
-      // the allowlist — they're already scoped to this agent's assigned skills and
-      // must always be visible when skills are configured. They remain subject to
-      // the denylist.
-      const agentPolicy: ToolPolicy = {
-        allowlist: this.config.tools.allow,
-        denylist: this.config.tools.deny,
-        requireApproval: this.config.tools.approval,
-      };
-      const permittedNames = new Set(
-        allToolsWithCategory
-          .filter((t) => {
-            if (t.category === 'skill') {
-              // Skill tools: only subject to denylist, not allowlist
-              return !agentPolicy.denylist.includes(t.definition.name);
-            }
-            return filterAllowedTools([t.definition.name], agentPolicy).length > 0;
-          })
-          .map((t) => t.definition.name),
+      // Build base layers once; hash their content to detect changes between
+      // turns. If all hashes match and there is no per-turn taskContext, reuse
+      // the cached systemPrompt to skip the trimming pass in buildSystemPrompt.
+      const baseLayers = [
+        layer0Identity(
+          agentName,
+          this.agentId,
+          this.config.mesh?.role,
+          buildPersonaContent(this.config),
+        ),
+        layer1Workspace(workspaceDoc ?? ''),
+        layer2Skills(opts.skillsText ?? this.deps.skillsText ?? ''),
+        layer3Memory(opts.memoryText ?? ''),
+      ];
+      const newLayerHashes = baseLayers.map((l) =>
+        createHash('sha256').update(l.content).digest('hex').slice(0, 16),
       );
-      const toolDefs = allToolsWithCategory
-        .map((t) => t.definition)
-        .filter((d) => permittedNames.has(d.name));
+      const allBaseUnchanged =
+        !opts.taskContext &&
+        this.cachedSystemPrompt !== null &&
+        newLayerHashes.every((h, i) => this.promptLayerHashes.get(i) === h);
 
-      // Accumulate tool calls from streaming
-      const toolCallMap = new Map<string, { name: string; inputJson: string }>();
-      let accText = '';
-      let stopReason: 'end_turn' | 'tool_use' | 'max_tokens' | 'stop_sequence' = 'end_turn';
-      let _doneEmitted = false;
-
-      // Track ids by index (OpenAI sends partial ids per index)
-      const indexToId = new Map<string, string>();
-
-      for await (const chunk of provider.run({
-        model,
-        systemPrompt,
-        messages,
-        tools: toolDefs,
-        maxTokens,
-        temperature: this.deps.resolvedModel?.temperature,
-      })) {
-        yield chunk;
-
-        if (chunk.type === 'text_delta') {
-          accText += chunk.text;
-        } else if (chunk.type === 'tool_use_delta') {
-          const id = chunk.id || indexToId.get(chunk.name) || chunk.name;
-          if (chunk.id) indexToId.set(chunk.name, chunk.id);
-          const existing = toolCallMap.get(id) ?? { name: chunk.name, inputJson: '' };
-          if (chunk.name && !existing.name) existing.name = chunk.name;
-          existing.inputJson += chunk.inputJson;
-          toolCallMap.set(id, existing);
-        } else if (chunk.type === 'done') {
-          totalInputTokens += chunk.inputTokens;
-          totalOutputTokens += chunk.outputTokens;
-          stopReason = chunk.stopReason;
-          _doneEmitted = true;
-        } else if (chunk.type === 'error') {
-          logger.error('LLM error', { message: chunk.message });
-          // Clear accumulated tool calls so we never persist an orphaned
-          // assistant message (tool_calls without tool_results).
-          toolCallMap.clear();
-          accText = '';
-          break;
-        }
+      let systemPrompt: string;
+      if (allBaseUnchanged) {
+        systemPrompt = this.cachedSystemPrompt!;
+      } else {
+        ({ systemPrompt } = buildSystemPrompt(
+          [
+            ...baseLayers,
+            ...(opts.taskContext
+              ? [
+                  {
+                    id: 4 as const,
+                    name: 'task',
+                    content: opts.taskContext,
+                    estimatedTokens: 0,
+                    trimable: true,
+                  },
+                ]
+              : []),
+          ],
+          this.deps.systemPromptMaxTokens,
+        ));
+        newLayerHashes.forEach((h, i) => this.promptLayerHashes.set(i, h));
+        this.cachedSystemPrompt = systemPrompt;
       }
 
-      totalText += accText;
+      // ── 2. Load conversation history ────────────────────────────────────────
+      const history = await sessionStore.readAll(this.sessionKey);
+      let messages: Message[] = sanitizeMessages(
+        history.map((s) => ({ role: s.role, content: s.content })),
+      );
 
-      // Persist assistant message
-      const assistantToolUse: ToolUseContent[] = [];
-      for (const [id, tc] of toolCallMap) {
-        let parsedInput: unknown = {};
-        try {
-          parsedInput = JSON.parse(tc.inputJson || '{}');
-        } catch {
-          /* use empty object on bad JSON */
-        }
-        assistantToolUse.push({ type: 'tool_use', id, name: tc.name, input: parsedInput });
-      }
-
-      const assistantContent =
-        assistantToolUse.length > 0
-          ? [...(accText ? [{ type: 'text' as const, text: accText }] : []), ...assistantToolUse]
-          : accText;
-
-      const assistantMsg: StoredMessage = {
-        id: ulid(),
-        sessionKey: this.sessionKey,
-        role: 'assistant',
-        content: assistantContent,
-        timestamp: Date.now(),
-      };
-      await sessionStore.append(this.sessionKey, assistantMsg);
-      messages = [...messages, { role: 'assistant', content: assistantContent }];
-
-      // ── No more tool calls — done ────────────────────────────────────────
-      if (stopReason !== 'tool_use' || toolCallMap.size === 0) break;
-
-      // ── Execute tool calls ───────────────────────────────────────────────
-      const toolResults: ToolResultContent[] = [];
-
-      for (const [id, tc] of toolCallMap) {
-        let parsedInput: unknown = {};
-        try {
-          parsedInput = JSON.parse(tc.inputJson || '{}');
-        } catch {
-          /* ignore */
-        }
-
-        const tools = this.config.tools;
-        // Skill-category tools are exempt from the allowlist (they're scoped to
-        // the agent's own skills already); build an effective policy accordingly.
-        const isSkillTool = toolRegistry.get(tc.name)?.category === 'skill';
-        const effectiveAllowlist = isSkillTool ? undefined : tools.allow;
-        const policyResult = checkPolicy(tc.name, {
-          allowlist: effectiveAllowlist,
-          denylist: tools.deny,
-          requireApproval: tools.approval,
-        });
-
-        let callResult: ToolCallResult;
-        if (!policyResult.allowed) {
-          callResult = policyBlockedResult(policyResult.reason ?? 'blocked');
-        } else if (policyResult.requiresApproval && approvalHandler) {
-          const approved = await approvalHandler(tc.name, parsedInput);
-          callResult = approved
-            ? await toolRegistry.execute(tc.name, parsedInput)
-            : policyBlockedResult('User declined approval');
-        } else {
-          // Check read-only cache; populate cache after success.
-          const cacheKey = `${tc.name}|${tc.inputJson}`;
-          const cachedResult = READ_ONLY_TOOLS.has(tc.name)
-            ? (this.toolResultCache.get(cacheKey) as ToolCallResult | undefined)
-            : undefined;
-          if (cachedResult !== undefined) {
-            callResult = cachedResult;
-          } else {
-            callResult = await toolRegistry.execute(tc.name, parsedInput);
-            if (READ_ONLY_TOOLS.has(tc.name) && !callResult.isError) {
-              this.toolResultCache.set(cacheKey, callResult);
-            }
-            if (MUTATION_TOOLS.has(tc.name)) {
-              this.toolResultCache.clear();
-            }
-          }
-        }
-
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: id,
-          content: callResult.content,
-          is_error: callResult.isError,
-        });
-      }
-
-      // Persist tool results as user message
-      const toolResultMsg: StoredMessage = {
+      // Append the new user message
+      const userMsg: StoredMessage = {
         id: ulid(),
         sessionKey: this.sessionKey,
         role: 'user',
-        content: toolResults,
+        content: userMessage,
         timestamp: Date.now(),
       };
-      await sessionStore.append(this.sessionKey, toolResultMsg);
-      messages = [...messages, { role: 'user', content: toolResults }];
+      await sessionStore.append(this.sessionKey, userMsg);
+      messages = [...messages, { role: 'user', content: userMessage }];
+
+      // Check compaction
+      const compactionCheck = checkCompactionNeeded(messages, { model });
+      if (compactionCheck.shouldCompact) {
+        logger.info('Compacting conversation', { sessionKey: this.sessionKey });
+        const compacted = await runCompaction(messages, async (prompt) => {
+          let text = '';
+          for await (const chunk of provider.run({
+            model,
+            systemPrompt: '',
+            messages: [{ role: 'user', content: prompt }],
+            tools: [],
+            maxTokens: 2048,
+          })) {
+            if (chunk.type === 'text_delta') text += chunk.text;
+          }
+          return text;
+        });
+        messages = [compacted.summaryMessage, ...compacted.keptMessages];
+        await metaStore.update(this.sessionKey, {
+          compactionCount: ((await metaStore.get(this.sessionKey))?.compactionCount ?? 0) + 1,
+          lastCompactionAt: Date.now(),
+        });
+      }
+
+      // ── 3. Main agentic loop ────────────────────────────────────────────────
+      let totalInputTokens = 0;
+      let totalOutputTokens = 0;
+      let totalText = '';
+
+      const MAX_TOOL_ROUNDS = 20; // safety cap
+      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+        const allToolsWithCategory = toolRegistry.list();
+        // Pre-filter by policy so the LLM only sees tools it is allowed to call.
+        // Without this, blocked tools appear in the schema and the model tries to
+        // invoke them, which just returns a policy-error tool_result.
+        // RATIONALE: skill-category tools (skill_list, skill_read) are exempt from
+        // the allowlist — they're already scoped to this agent's assigned skills and
+        // must always be visible when skills are configured. They remain subject to
+        // the denylist.
+        const agentPolicy: ToolPolicy = {
+          allowlist: this.config.tools.allow,
+          denylist: this.config.tools.deny,
+          requireApproval: this.config.tools.approval,
+        };
+        const permittedNames = new Set(
+          allToolsWithCategory
+            .filter((t) => {
+              if (t.category === 'skill') {
+                // Skill tools: only subject to denylist, not allowlist
+                return !agentPolicy.denylist.includes(t.definition.name);
+              }
+              return filterAllowedTools([t.definition.name], agentPolicy).length > 0;
+            })
+            .map((t) => t.definition.name),
+        );
+        const toolDefs = allToolsWithCategory
+          .map((t) => t.definition)
+          .filter((d) => permittedNames.has(d.name));
+
+        // Accumulate tool calls from streaming
+        const toolCallMap = new Map<string, { name: string; inputJson: string }>();
+        let accText = '';
+        let stopReason: 'end_turn' | 'tool_use' | 'max_tokens' | 'stop_sequence' = 'end_turn';
+        let _doneEmitted = false;
+
+        // Track ids by index (OpenAI sends partial ids per index)
+        const indexToId = new Map<string, string>();
+
+        for await (const chunk of provider.run({
+          model,
+          systemPrompt,
+          messages,
+          tools: toolDefs,
+          maxTokens,
+          temperature: this.deps.resolvedModel?.temperature,
+        })) {
+          yield chunk;
+
+          if (chunk.type === 'text_delta') {
+            accText += chunk.text;
+          } else if (chunk.type === 'tool_use_delta') {
+            const id = chunk.id || indexToId.get(chunk.name) || chunk.name;
+            if (chunk.id) indexToId.set(chunk.name, chunk.id);
+            const existing = toolCallMap.get(id) ?? { name: chunk.name, inputJson: '' };
+            if (chunk.name && !existing.name) existing.name = chunk.name;
+            existing.inputJson += chunk.inputJson;
+            toolCallMap.set(id, existing);
+          } else if (chunk.type === 'done') {
+            totalInputTokens += chunk.inputTokens;
+            totalOutputTokens += chunk.outputTokens;
+            stopReason = chunk.stopReason;
+            _doneEmitted = true;
+          } else if (chunk.type === 'error') {
+            logger.error('LLM error', { message: chunk.message });
+            // Clear accumulated tool calls so we never persist an orphaned
+            // assistant message (tool_calls without tool_results).
+            toolCallMap.clear();
+            accText = '';
+            break;
+          }
+        }
+
+        totalText += accText;
+
+        // Persist assistant message
+        const assistantToolUse: ToolUseContent[] = [];
+        for (const [id, tc] of toolCallMap) {
+          let parsedInput: unknown = {};
+          try {
+            parsedInput = JSON.parse(tc.inputJson || '{}');
+          } catch {
+            /* use empty object on bad JSON */
+          }
+          assistantToolUse.push({ type: 'tool_use', id, name: tc.name, input: parsedInput });
+        }
+
+        const assistantContent =
+          assistantToolUse.length > 0
+            ? [...(accText ? [{ type: 'text' as const, text: accText }] : []), ...assistantToolUse]
+            : accText;
+
+        const assistantMsg: StoredMessage = {
+          id: ulid(),
+          sessionKey: this.sessionKey,
+          role: 'assistant',
+          content: assistantContent,
+          timestamp: Date.now(),
+        };
+        await sessionStore.append(this.sessionKey, assistantMsg);
+        messages = [...messages, { role: 'assistant', content: assistantContent }];
+
+        // ── No more tool calls — done ────────────────────────────────────────
+        if (stopReason !== 'tool_use' || toolCallMap.size === 0) break;
+
+        // ── Execute tool calls ───────────────────────────────────────────────
+        const toolResults: ToolResultContent[] = [];
+
+        for (const [id, tc] of toolCallMap) {
+          let parsedInput: unknown = {};
+          try {
+            parsedInput = JSON.parse(tc.inputJson || '{}');
+          } catch {
+            /* ignore */
+          }
+
+          const tools = this.config.tools;
+          // Skill-category tools are exempt from the allowlist (they're scoped to
+          // the agent's own skills already); build an effective policy accordingly.
+          const isSkillTool = toolRegistry.get(tc.name)?.category === 'skill';
+          const effectiveAllowlist = isSkillTool ? undefined : tools.allow;
+          const policyResult = checkPolicy(tc.name, {
+            allowlist: effectiveAllowlist,
+            denylist: tools.deny,
+            requireApproval: tools.approval,
+          });
+
+          let callResult: ToolCallResult;
+          if (!policyResult.allowed) {
+            callResult = policyBlockedResult(policyResult.reason ?? 'blocked');
+          } else if (policyResult.requiresApproval && approvalHandler) {
+            const approved = await approvalHandler(tc.name, parsedInput);
+            callResult = approved
+              ? await toolRegistry.execute(tc.name, parsedInput)
+              : policyBlockedResult('User declined approval');
+          } else {
+            // Check read-only cache; populate cache after success.
+            const cacheKey = `${tc.name}|${tc.inputJson}`;
+            const cachedResult = READ_ONLY_TOOLS.has(tc.name)
+              ? (this.toolResultCache.get(cacheKey) as ToolCallResult | undefined)
+              : undefined;
+            if (cachedResult !== undefined) {
+              callResult = cachedResult;
+            } else {
+              callResult = await toolRegistry.execute(tc.name, parsedInput);
+              if (READ_ONLY_TOOLS.has(tc.name) && !callResult.isError) {
+                this.toolResultCache.set(cacheKey, callResult);
+              }
+              if (MUTATION_TOOLS.has(tc.name)) {
+                this.toolResultCache.clear();
+              }
+            }
+          }
+
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: id,
+            content: callResult.content,
+            is_error: callResult.isError,
+          });
+        }
+
+        // Persist tool results as user message
+        const toolResultMsg: StoredMessage = {
+          id: ulid(),
+          sessionKey: this.sessionKey,
+          role: 'user',
+          content: toolResults,
+          timestamp: Date.now(),
+        };
+        await sessionStore.append(this.sessionKey, toolResultMsg);
+        messages = [...messages, { role: 'user', content: toolResults }];
+      }
+
+      // ── 4. Update session meta ──────────────────────────────────────────────
+      await metaStore.update(this.sessionKey, {
+        agentId: this.agentId,
+        threadKey: this.threadKey,
+        status: 'idle',
+        lastActivity: Date.now(),
+        contextTokensEstimate: totalInputTokens,
+      });
+
+      return {
+        sessionKey: this.sessionKey,
+        text: totalText,
+        inputTokens: totalInputTokens,
+        outputTokens: totalOutputTokens,
+      };
+    } finally {
+      this._running = false;
     }
-
-    // ── 4. Update session meta ──────────────────────────────────────────────
-    await metaStore.update(this.sessionKey, {
-      agentId: this.agentId,
-      threadKey: this.threadKey,
-      status: 'idle',
-      lastActivity: Date.now(),
-      contextTokensEstimate: totalInputTokens,
-    });
-
-    return {
-      sessionKey: this.sessionKey,
-      text: totalText,
-      inputTokens: totalInputTokens,
-      outputTokens: totalOutputTokens,
-    };
   }
 
   /** Convenience: run a turn and collect all output into a string (non-streaming). */

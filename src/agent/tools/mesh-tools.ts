@@ -7,14 +7,46 @@ import type { RegisteredTool } from './registry.js';
 
 const logger = createLogger('tools:mesh');
 
+// RATIONALE: default per-turn timeout caps how long a caller blocks waiting for
+// a remote agent turn. 5 min is generous for agentic tasks; callers may pass
+// timeout_s to mesh_send/mesh_spawn to override.
+const DEFAULT_TASK_TIMEOUT_MS = 5 * 60 * 1_000; // 5 minutes
+
+/**
+ * Race `promise` against a deadline.  Rejects with a timeout error if
+ * `ms` elapses first.  The original promise continues running in the
+ * background — callers should treat timeout as "give up waiting", not
+ * "work cancelled".
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${label}: timed out after ${Math.round(ms / 1000)}s`)),
+      ms,
+    );
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e as Error);
+      },
+    );
+  });
+}
+
 // ── Async task store (in-process) ──────────────────────────────────────────
 
 interface TaskEntry {
-  status: 'pending' | 'running' | 'done' | 'error';
+  status: 'pending' | 'running' | 'done' | 'error' | 'cancelled';
   result?: string;
   error?: string;
   startedAt: number;
   doneAt?: number;
+  /** Milliseconds after which a still-running task is auto-expired. */
+  timeoutMs: number;
 }
 
 const taskStore = new Map<string, TaskEntry>();
@@ -48,9 +80,11 @@ export function createMeshTools(
       }
       const lines = Array.from(runners.keys()).map((id) => {
         const cfg = configMap.get(id);
+        const runner = runners.get(id);
         const name = cfg?.name ? ` | name: "${cfg.name}"` : '';
         const role = cfg?.mesh?.role ?? 'worker';
-        return `- id: ${id}${name} | role: ${role}`;
+        const status = runner?.isRunning ? ' | status: busy' : ' | status: idle';
+        return `- id: ${id}${name} | role: ${role}${status}`;
       });
       return {
         isError: false,
@@ -67,7 +101,8 @@ export function createMeshTools(
       name: 'mesh_send',
       description:
         'Delegate a task to a specific agent and wait for its response. ' +
-        'Use mesh_list first to discover available agent IDs.',
+        'Use mesh_list first to discover available agent IDs. ' +
+        'Returns an error immediately if the target agent is busy.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -83,15 +118,20 @@ export function createMeshTools(
             type: 'string',
             description: 'Optional thread key for session continuity (default: auto-generated)',
           },
+          timeout_s: {
+            type: 'number',
+            description: `Seconds to wait before giving up (default: ${DEFAULT_TASK_TIMEOUT_MS / 1000})`,
+          },
         },
         required: ['agent_id', 'message'],
       },
     },
     async handler(input) {
-      const { agent_id, message, thread } = input as {
+      const { agent_id, message, thread, timeout_s } = input as {
         agent_id: string;
         message: string;
         thread?: string;
+        timeout_s?: number;
       };
 
       const runner = runners.get(agent_id);
@@ -103,35 +143,46 @@ export function createMeshTools(
         };
       }
 
+      // Immediately reject if the agent is already processing a turn.
+      // This prevents the calling agent from blocking forever on a busy peer.
+      if (runner.isRunning) {
+        return {
+          isError: true,
+          content: `Agent '${agent_id}' is busy. Use mesh_list to check status, then retry or use mesh_spawn for non-blocking dispatch.`,
+        };
+      }
+
+      const timeoutMs = typeof timeout_s === 'number' ? timeout_s * 1_000 : DEFAULT_TASK_TIMEOUT_MS;
+
       // Use an isolated thread so delegated tasks don't pollute the worker's main history.
       const taskThread = thread ?? `mesh-task-${ulid()}`;
       const prevThread = runner.currentSessionKey;
       runner.setThread(taskThread);
 
-      logger.info('mesh_send: delegating task', { agent_id, taskThread });
+      logger.info('mesh_send: delegating task', { agent_id, taskThread, timeoutMs });
 
       try {
-        let output = '';
-        const gen = runner.turn(message);
-        let next = await gen.next();
-        while (!next.done) {
-          const chunk = next.value;
-          if (chunk.type === 'text_delta') output += chunk.text;
-          next = await gen.next();
-        }
-        const result = next.value;
-        output = result.text || output;
-        logger.info('mesh_send: task complete', {
-          agent_id,
-          inputTokens: result.inputTokens,
-          outputTokens: result.outputTokens,
-        });
+        const turnPromise = (async () => {
+          let output = '';
+          const gen = runner.turn(message);
+          let next = await gen.next();
+          while (!next.done) {
+            const chunk = next.value;
+            if (chunk.type === 'text_delta') output += chunk.text;
+            next = await gen.next();
+          }
+          const result = next.value;
+          return result.text || output;
+        })();
+
+        const output = await withTimeout(turnPromise, timeoutMs, `mesh_send to ${agent_id}`);
+        logger.info('mesh_send: task complete', { agent_id });
         return { isError: false, content: output || '(agent returned no output)' };
       } catch (err) {
         logger.error('mesh_send: task failed', { agent_id, error: String(err) });
         return { isError: true, content: `Agent '${agent_id}' error: ${String(err)}` };
       } finally {
-        // Restore the worker's original thread context
+        // Restore the worker's original thread context regardless of success/timeout/error.
         const parsed = parseSessionKey(prevThread);
         if (parsed) runner.setThread(parsed.threadKey);
       }
@@ -152,12 +203,20 @@ export function createMeshTools(
         properties: {
           agent_id: { type: 'string', description: 'Target agent ID' },
           message: { type: 'string', description: 'Instruction or task to send' },
+          timeout_s: {
+            type: 'number',
+            description: `Seconds before the task is auto-expired (default: ${DEFAULT_TASK_TIMEOUT_MS / 1000})`,
+          },
         },
         required: ['agent_id', 'message'],
       },
     },
     async handler(input) {
-      const { agent_id, message } = input as { agent_id: string; message: string };
+      const { agent_id, message, timeout_s } = input as {
+        agent_id: string;
+        message: string;
+        timeout_s?: number;
+      };
       const runner = runners.get(agent_id);
       if (!runner) {
         const available = Array.from(runners.keys()).join(', ');
@@ -167,28 +226,43 @@ export function createMeshTools(
         };
       }
 
+      // Reject immediately if agent is busy; caller can retry or poll with mesh_status.
+      if (runner.isRunning) {
+        return {
+          isError: true,
+          content: `Agent '${agent_id}' is busy. Retry after the current task finishes (check mesh_list for status).`,
+        };
+      }
+
+      const timeoutMs = typeof timeout_s === 'number' ? timeout_s * 1_000 : DEFAULT_TASK_TIMEOUT_MS;
       const taskId = ulid();
       const taskThread = `mesh-spawn-${taskId}`;
-      taskStore.set(taskId, { status: 'pending', startedAt: Date.now() });
+      taskStore.set(taskId, { status: 'pending', startedAt: Date.now(), timeoutMs });
 
       // Run asynchronously — do NOT await
       (async () => {
-        const entry = taskStore.get(taskId)!;
+        const entry = taskStore.get(taskId);
+        if (!entry) return;
         entry.status = 'running';
         const prevThread = runner.currentSessionKey;
         runner.setThread(taskThread);
         try {
-          let output = '';
-          const gen = runner.turn(message);
-          let next = await gen.next();
-          while (!next.done) {
-            const chunk = next.value;
-            if (chunk.type === 'text_delta') output += chunk.text;
-            next = await gen.next();
-          }
-          const result = next.value;
+          const turnPromise = (async () => {
+            let output = '';
+            const gen = runner.turn(message);
+            let next = await gen.next();
+            while (!next.done) {
+              const chunk = next.value;
+              if (chunk.type === 'text_delta') output += chunk.text;
+              next = await gen.next();
+            }
+            const result = next.value;
+            return result.text || output;
+          })();
+
+          const output = await withTimeout(turnPromise, timeoutMs, `mesh_spawn ${taskId}`);
           entry.status = 'done';
-          entry.result = result.text || output || '(no output)';
+          entry.result = output || '(no output)';
           entry.doneAt = Date.now();
           logger.info('mesh_spawn: task done', { taskId, agent_id });
         } catch (err) {
@@ -229,12 +303,27 @@ export function createMeshTools(
       if (!entry) {
         return { isError: true, content: `Task '${task_id}' not found.` };
       }
+
+      // Auto-expire tasks stuck in running state beyond their timeout.
+      if (entry.status === 'running') {
+        const elapsed = Date.now() - entry.startedAt;
+        if (elapsed > entry.timeoutMs) {
+          entry.status = 'error';
+          entry.error = `Task timed out after ${Math.round(elapsed / 1000)}s (limit: ${Math.round(entry.timeoutMs / 1000)}s). The agent may still be processing in the background.`;
+          entry.doneAt = Date.now();
+          logger.warn('mesh_status: auto-expired stuck task', { task_id, elapsed });
+        }
+      }
+
       const elapsed = Math.round(((entry.doneAt ?? Date.now()) - entry.startedAt) / 1000);
       if (entry.status === 'done') {
         return { isError: false, content: `Status: done (${elapsed}s)\n\n${entry.result}` };
       }
       if (entry.status === 'error') {
         return { isError: true, content: `Status: error (${elapsed}s)\n${entry.error}` };
+      }
+      if (entry.status === 'cancelled') {
+        return { isError: false, content: `Status: cancelled (${elapsed}s elapsed)` };
       }
       return { isError: false, content: `Status: ${entry.status} (${elapsed}s elapsed)` };
     },
@@ -304,19 +393,31 @@ export function createMeshTools(
       const jobs = targets.map(async (agentId) => {
         const runner = runners.get(agentId);
         if (!runner) return { agentId, ok: false, output: 'Agent not found' };
+        // Skip busy agents rather than blocking all others.
+        if (runner.isRunning) {
+          return { agentId, ok: false, output: 'Agent busy — skipped' };
+        }
         const prevThread = runner.currentSessionKey;
         runner.setThread(`${broadcastThread}-${agentId}`);
         try {
-          let output = '';
-          const gen = runner.turn(message);
-          let next = await gen.next();
-          while (!next.done) {
-            const chunk = next.value;
-            if (chunk.type === 'text_delta') output += chunk.text;
-            next = await gen.next();
-          }
-          const result = next.value;
-          return { agentId, ok: true, output: result.text || output || '(no output)' };
+          const turnPromise = (async () => {
+            let output = '';
+            const gen = runner.turn(message);
+            let next = await gen.next();
+            while (!next.done) {
+              const chunk = next.value;
+              if (chunk.type === 'text_delta') output += chunk.text;
+              next = await gen.next();
+            }
+            const result = next.value;
+            return result.text || output || '(no output)';
+          })();
+          const output = await withTimeout(
+            turnPromise,
+            DEFAULT_TASK_TIMEOUT_MS,
+            `mesh_broadcast to ${agentId}`,
+          );
+          return { agentId, ok: true, output };
         } catch (err) {
           return { agentId, ok: false, output: `Error: ${String(err)}` };
         } finally {
@@ -400,6 +501,13 @@ export function createMeshTools(
             transcript.push(`**${agentId}**: (not available)`);
             continue;
           }
+          // Skip busy agents rather than blocking the discussion indefinitely.
+          if (runner.isRunning) {
+            const entry = `**${agentId}** (Round ${round + 1}): (busy — skipped)`;
+            transcript.push(entry);
+            context = `${context}\n\n${entry}`;
+            continue;
+          }
 
           const prompt = [
             `You are participating in a group discussion. Topic:\n${topic}`,
@@ -413,16 +521,23 @@ export function createMeshTools(
           const prevThread = runner.currentSessionKey;
           runner.setThread(`${discussThread}-${agentId}-r${round}`);
           try {
-            let output = '';
-            const gen = runner.turn(prompt);
-            let next = await gen.next();
-            while (!next.done) {
-              const chunk = next.value;
-              if (chunk.type === 'text_delta') output += chunk.text;
-              next = await gen.next();
-            }
-            const result = next.value;
-            const reply = result.text || output || '(no response)';
+            const turnPromise = (async () => {
+              let output = '';
+              const gen = runner.turn(prompt);
+              let next = await gen.next();
+              while (!next.done) {
+                const chunk = next.value;
+                if (chunk.type === 'text_delta') output += chunk.text;
+                next = await gen.next();
+              }
+              const result = next.value;
+              return result.text || output || '(no response)';
+            })();
+            const reply = await withTimeout(
+              turnPromise,
+              DEFAULT_TASK_TIMEOUT_MS,
+              `mesh_discuss turn for ${agentId}`,
+            );
             const cfg = configMap.get(agentId);
             const displayName = cfg?.name ?? agentId;
             const entry = `**${displayName}** (Round ${round + 1}):\n${reply}`;
@@ -443,7 +558,74 @@ export function createMeshTools(
     },
   };
 
-  return [meshList, meshSend, meshSpawn, meshStatus, meshBroadcast, meshDiscuss];
+  // ── mesh_cancel ──────────────────────────────────────────────────────────
+  // Cancel a spawned task and optionally force-reset a stuck runner.
+  const meshCancel: RegisteredTool = {
+    category: 'mesh',
+    definition: {
+      name: 'mesh_cancel',
+      description:
+        'Cancel a pending or stuck task created by mesh_spawn, and optionally force-reset ' +
+        "the agent's runner if it's permanently stuck (e.g. LLM provider unreachable). " +
+        'Use this to break out of a deadlocked state.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          task_id: {
+            type: 'string',
+            description: 'Task ID to cancel (from mesh_spawn)',
+          },
+          force_reset_agent: {
+            type: 'string',
+            description:
+              'Optional: agent ID whose runner should be force-reset (clears busy flag). ' +
+              'Only use when you are sure the previous turn will never complete.',
+          },
+        },
+        required: ['task_id'],
+      },
+    },
+    async handler(input) {
+      const { task_id, force_reset_agent } = input as {
+        task_id: string;
+        force_reset_agent?: string;
+      };
+
+      const parts: string[] = [];
+
+      // Cancel the task record
+      const entry = taskStore.get(task_id);
+      if (!entry) {
+        parts.push(`Task '${task_id}' not found.`);
+      } else if (entry.status === 'done' || entry.status === 'error') {
+        parts.push(`Task '${task_id}' already finished (status: ${entry.status}).`);
+      } else {
+        entry.status = 'cancelled';
+        entry.doneAt = Date.now();
+        logger.info('mesh_cancel: task cancelled', { task_id });
+        parts.push(`Task '${task_id}' cancelled.`);
+      }
+
+      // Optionally force-reset a stuck runner
+      if (force_reset_agent) {
+        const runner = runners.get(force_reset_agent);
+        if (!runner) {
+          parts.push(`Agent '${force_reset_agent}' not found.`);
+        } else if (!runner.isRunning) {
+          parts.push(`Agent '${force_reset_agent}' is not busy — no reset needed.`);
+        } else {
+          runner.forceReset();
+          parts.push(
+            `Agent '${force_reset_agent}' runner force-reset. The orphaned turn may still complete in the background.`,
+          );
+        }
+      }
+
+      return { isError: false, content: parts.join('\n') };
+    },
+  };
+
+  return [meshList, meshSend, meshSpawn, meshStatus, meshBroadcast, meshDiscuss, meshCancel];
 }
 
 /**
@@ -470,5 +652,9 @@ export function createMeshToolStubs(): RegisteredTool[] {
     stub('mesh_status', 'Query the status of a previously spawned mesh task.'),
     stub('mesh_broadcast', 'Broadcast a message to all agents in parallel and collect responses.'),
     stub('mesh_discuss', 'Run a structured multi-turn discussion between multiple agents.'),
+    stub(
+      'mesh_cancel',
+      'Cancel a pending or stuck mesh task and optionally force-reset the agent runner.',
+    ),
   ];
 }
