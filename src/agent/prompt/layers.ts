@@ -92,6 +92,9 @@ export function layer0Identity(
       '- Never fabricate file contents or command outputs.',
       '- Never perform destructive operations without user confirmation.',
       '- If uncertain, ask; do not guess on behalf of the user.',
+      '- **After completing any task** (especially after tool calls or skill execution), always send a',
+      '  final text reply to the user — even if the result is already visible in tool output.',
+      '  Briefly confirm what was done, highlight key results, and note any caveats or next steps.',
       ...meshLines,
     ].join('\n'),
     estimatedTokens: 0,
@@ -126,6 +129,8 @@ export function layer2Skills(skillsText: string): PromptLayer {
         '> 1. Call `skill_list` to confirm the skill ID.',
         '> 2. Call `skill_read` with the skill ID to get the full step-by-step instructions.',
         '> 3. Follow the instructions in the SKILL.md — they tell you exactly what commands/scripts to run.',
+        '> 4. After completing all skill steps, **always reply to the user** with a summary of what was',
+        '>    done, key results or outputs, and any errors or follow-up actions needed.',
         '> Do NOT search the file system for skills; use `skill_list` and `skill_read` instead.',
       ].join('\n')
     : '';

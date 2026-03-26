@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { AnthropicProvider } from '../agent/llm/anthropic.js';
 import { OpenAIProvider, createCompatProvider } from '../agent/llm/openai.js';
 import { createProviderRegistry } from '../agent/llm/provider.js';
-import { generateSoulMd } from '../agent/prompt/soul.js';
+import { syncSoulMd } from '../agent/prompt/soul.js';
 import { AgentRunner } from '../agent/runner.js';
 import { createBashTool } from '../agent/tools/builtin/bash.js';
 import { createChannelTools } from '../agent/tools/builtin/channel-tools.js';
@@ -203,12 +203,19 @@ function buildRunner(
   if (agentCfg.workspace) {
     mkdirSync(join(agentCfg.workspace, 'output'), { recursive: true });
     mkdirSync(join(agentCfg.workspace, 'skills'), { recursive: true });
-    // Generate a SOUL.md template if one hasn't been created yet.
-    // The agent picks it up via layer1Workspace, and users can edit it freely.
+    // Always re-sync SOUL.md so machine-managed sections (Capabilities, Assigned
+    // Skills, Mesh, Tool Access, footer) reflect the current config.
+    // User-edited sections (Description, Personality & Style, Heartbeat Triggers)
+    // are preserved from the existing file when present.
     const soulPath = join(agentCfg.workspace, 'SOUL.md');
-    if (!existsSync(soulPath)) {
-      writeFileSync(soulPath, generateSoulMd(agentCfg));
-      logger.info('Generated SOUL.md', { agentId: agentCfg.id, soulPath });
+    const existingSoul = existsSync(soulPath) ? readFileSync(soulPath, 'utf8') : null;
+    const freshSoul = syncSoulMd(agentCfg, existingSoul);
+    if (existingSoul !== freshSoul) {
+      writeFileSync(soulPath, freshSoul);
+      logger.info(existingSoul ? 'Synced SOUL.md' : 'Generated SOUL.md', {
+        agentId: agentCfg.id,
+        soulPath,
+      });
     }
     logger.debug('Workspace ready', { agentId: agentCfg.id, workspaceDir: agentCfg.workspace });
   }
