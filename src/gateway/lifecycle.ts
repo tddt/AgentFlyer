@@ -418,7 +418,10 @@ export async function startGateway(
   for (const agentCfg of config.agents) {
     try {
       // 1. Skills explicitly selected from the global pool
-      const explicitSkills = filterSkillsForAgent(globalSkillRegistry.list(), agentCfg.skills ?? []);
+      const explicitSkills = filterSkillsForAgent(
+        globalSkillRegistry.list(),
+        agentCfg.skills ?? [],
+      );
 
       // 2. Auto-merge per-agent workspace skills (<workspace>/skills/)
       // RATIONALE: agents can drop SKILL.md files in their own workspace without
@@ -512,7 +515,8 @@ export async function startGateway(
             join(agentCfg.workspace, 'skills'),
             newConfig.skills.summaryLength ?? 60,
           )) {
-            if (!explicitIds.has(s.id)) workspaceSkills.push({ ...s, source: 'workspace' as const });
+            if (!explicitIds.has(s.id))
+              workspaceSkills.push({ ...s, source: 'workspace' as const });
           }
         }
 

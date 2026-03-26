@@ -65,7 +65,7 @@ export async function routeRequest(
 
   // ── CORS: allow localhost / 127.0.0.1 origins (console dev + same-host) ─
   // localhost and 127.0.0.1 are different browser origins even on the same port.
-  const origin = (req.headers['origin'] as string) ?? '';
+  const origin = (req.headers.origin as string) ?? '';
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
