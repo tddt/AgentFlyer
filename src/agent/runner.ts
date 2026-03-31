@@ -329,7 +329,9 @@ export class AgentRunner {
       // ── 2. Load conversation history ────────────────────────────────────────
       const history = await sessionStore.readAll(this.sessionKey);
       let messages: Message[] = sanitizeMessages(
-        history.map((s) => ({ role: s.role, content: s.content })),
+        history
+          .filter((s) => s.content != null)
+          .map((s) => ({ role: s.role, content: s.content })),
       );
 
       // Append the new user message

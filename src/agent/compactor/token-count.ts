@@ -28,14 +28,15 @@ async function getTiktoken(): Promise<typeof tiktokenMod> {
 }
 
 /** Fast synchronous estimate (never touches I/O). */
-export function estimateTokens(text: string): number {
+export function estimateTokens(text: string | undefined | null): number {
+  if (!text) return 0;
   return Math.ceil(text.length / CHARS_PER_TOKEN);
 }
 
 /** Estimate total tokens across all messages (fast, no I/O). */
 export function estimateMessagesTokens(messages: Message[]): number {
   return messages.reduce((sum, m) => {
-    const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+    const content = typeof m.content === 'string' ? m.content : (JSON.stringify(m.content) ?? '');
     return sum + estimateTokens(content) + 4; // per-message overhead
   }, 0);
 }
