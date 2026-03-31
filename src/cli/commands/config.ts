@@ -157,18 +157,21 @@ export const configCommand = defineCommand({
 
           // ── 5. Agents: model reference and workspace ─────────────────────
           for (const agent of cfg.agents) {
-            const modelRef = agent.model ?? cfg.defaults.model;
+            const rawModelRef = agent.model ?? cfg.defaults.model;
+            // Model may be an object { primary, fallback } — validate only the primary key.
+            const modelRef =
+              rawModelRef && typeof rawModelRef === 'object' ? rawModelRef.primary : rawModelRef;
             // Support "group/modelKey" format (e.g. "deepseek/chat") as well as
             // flat group-only references (e.g. "deepseek").
-            const slashIdx = modelRef.indexOf('/');
+            const slashIdx = modelRef?.indexOf('/');
             let modelValid: boolean;
-            if (slashIdx !== -1) {
+            if (slashIdx !== undefined && slashIdx !== -1 && modelRef) {
               const groupKey = modelRef.slice(0, slashIdx);
               const modelKey = modelRef.slice(slashIdx + 1);
               const group = cfg.models[groupKey];
               modelValid = group !== undefined && modelKey in group.models;
             } else {
-              modelValid = modelRef in cfg.models;
+              modelValid = modelRef !== undefined && modelRef in cfg.models;
             }
             if (!modelValid) {
               fail(`Agent "${agent.id}": model "${modelRef}" not found in models`);

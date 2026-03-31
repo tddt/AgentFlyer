@@ -3,6 +3,7 @@ import { createLogger } from '../core/logger.js';
 import type { StreamChunk } from '../core/types.js';
 import { validateToken } from './auth.js';
 import { buildConsoleHtml } from './console/index.js';
+import type { IntentRouter } from './intent-router.js';
 import type { LogBroadcaster } from './log-buffer.js';
 import { type RpcContext, dispatchRpc } from './rpc.js';
 
@@ -19,6 +20,12 @@ export interface RouterOptions {
    * These are registered by the lifecycle when webhook-based channels (Feishu, QQ) are active.
    */
   webhookHandlers?: Map<string, (req: IncomingMessage, res: ServerResponse) => Promise<void>>;
+  /**
+   * Optional intent router. When present and the request body omits `agentId`,
+   * the router applies regex rules against the message text to pick an agent
+   * automatically (E6 intent-aware routing).
+   */
+  intentRouter?: IntentRouter;
 }
 
 /** Parse request body as JSON (resolves null on empty body). */
@@ -167,15 +174,32 @@ export async function routeRequest(
       json(res, 400, { error: 'Invalid JSON' });
       return true;
     }
-    const { agentId, message, thread } = (body ?? {}) as {
+    const {
+      agentId: rawAgentId,
+      message,
+      thread,
+    } = (body ?? {}) as {
       agentId?: string;
       message?: string;
       thread?: string;
     };
-    if (!agentId || !message) {
-      json(res, 400, { error: 'agentId and message are required' });
+    if (!message) {
+      json(res, 400, { error: 'message is required' });
       return true;
     }
+
+    // E6: if agentId omitted, use intent router (falls back to 'main' if no rule matches).
+    let agentId = rawAgentId;
+    if (!agentId && opts.intentRouter) {
+      const routed = opts.intentRouter.routeWithFallback(message);
+      agentId = opts.rpcContext.runners.has(routed.agent) ? routed.agent : routed.fallback;
+      logger.debug('Intent router selected agent', { agentId, message: message.slice(0, 60) });
+    }
+    if (!agentId) {
+      json(res, 400, { error: 'agentId is required' });
+      return true;
+    }
+
     const runner = opts.rpcContext.runners.get(agentId);
     if (!runner) {
       json(res, 404, { error: `Agent not found: ${agentId}` });

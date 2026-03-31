@@ -118,13 +118,37 @@ const ToolsConfigSchema = z.object({
 
 // ─── Agent ───────────────────────────────────────────────────────────────────
 
+// ─── Agent model config (supports string key or failover object) ─────────────
+
+const AgentModelRoutingSchema = z.object({
+  /** Use a cheaper model for short / simple messages. */
+  simpleQueries: z.string().optional(),
+  /** Use a larger-context model when token count is high. */
+  longContext: z.string().optional(),
+});
+
+/** Agent's model field: a plain registry key OR a failover configuration object. */
+const AgentModelConfigSchema = z.union([
+  z.string(),
+  z.object({
+    /** Primary model registry key. */
+    primary: z.string(),
+    /** Ordered fallback model keys to try when primary fails. */
+    fallback: z.array(z.string()).default([]),
+    /** Optional per-complexity routing hints (Phase 2). */
+    routing: AgentModelRoutingSchema.optional(),
+  }),
+]);
+
+export type AgentModelConfig = z.infer<typeof AgentModelConfigSchema>;
+
 export const AgentConfigSchema = z.object({
   id: z.string(),
   name: z.string().optional(),
   workspace: z.string().optional(),
   skills: z.array(z.string()).default([]),
-  /** Key into the models registry. Falls back to defaults.model when absent. */
-  model: z.string().optional(),
+  /** Key into the models registry (string), or a failover config object. Falls back to defaults.model when absent. */
+  model: AgentModelConfigSchema.optional(),
   mesh: AgentMeshConfigSchema.default({}),
   owners: z.array(z.string()).default([]),
   tools: ToolsConfigSchema.default({}),
@@ -266,6 +290,31 @@ const LogConfigSchema = z.object({
   format: z.enum(['json', 'pretty']).default('json'),
 });
 
+// ─── Routing (E6 intent-aware routing) ───────────────────────────────────────
+
+const RoutingRuleSchema = z.object({
+  /** Regex pattern tested against the incoming message text (case-insensitive). */
+  pattern: z.string(),
+  /** Agent ID to route to when the pattern matches. */
+  agent: z.string(),
+  /** Fallback agent ID when the matched agent is unavailable. Defaults to defaultAgent. */
+  fallback: z.string().optional(),
+});
+
+const RoutingConfigSchema = z.object({
+  /**
+   * Routing mode:
+   * - simple     — regex/keyword pattern matching only (default, no LLM call)
+   * - capability — semantic capability-vector matching (Phase 2, falls back to simple)
+   * - llm        — full LLM-classification (Phase 2, falls back to simple)
+   */
+  mode: z.enum(['simple', 'capability', 'llm']).default('simple'),
+  /** Agent ID used when no rule matches. */
+  defaultAgent: z.string().default('main'),
+  /** Ordered list of routing rules evaluated top-to-bottom (first match wins). */
+  rules: z.array(RoutingRuleSchema).default([]),
+});
+
 // ─── Channels ────────────────────────────────────────────────────────────────
 
 const ChannelKindSchema = z.enum(['logs', 'cli', 'web', 'telegram', 'discord', 'feishu', 'qq']);
@@ -387,6 +436,7 @@ export const ConfigSchema = z.object({
   search: SearchConfigSchema.default({}),
   federation: FederationConfigSchema.default({}),
   channels: ChannelsConfigSchema.default({}),
+  routing: RoutingConfigSchema.default({}),
   log: LogConfigSchema.default({}),
 });
 
@@ -405,4 +455,5 @@ export type ToolsConfig = z.infer<typeof ToolsConfigSchema>;
 export type FederationConfig = z.infer<typeof FederationConfigSchema>;
 export type MemoryConfig = z.infer<typeof MemoryConfigSchema>;
 export type ChannelsConfig = z.infer<typeof ChannelsConfigSchema>;
+export type RoutingConfig = z.infer<typeof RoutingConfigSchema>;
 export type LogConfig = z.infer<typeof LogConfigSchema>;

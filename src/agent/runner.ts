@@ -15,12 +15,14 @@ import type {
   ToolUseContent,
 } from '../core/types.js';
 import { makeSessionKey } from '../core/types.js';
+import type { MemoryOrganizer } from '../memory/organizer.js';
 import { checkCompactionNeeded, runCompaction } from './compactor/index.js';
 import type { LLMProvider } from './llm/provider.js';
 import { buildSystemPrompt } from './prompt/builder.js';
 import { layer0Identity, layer1Workspace, layer2Skills, layer3Memory } from './prompt/layers.js';
 import { buildPersonaContent } from './prompt/soul.js';
 import { readWorkspaceDocCached } from './prompt/workspace.js';
+import { recordTokenBill } from './stats.js';
 import {
   type ApprovalHandler,
   type ToolPolicy,
@@ -161,6 +163,10 @@ export interface RunnerDeps {
   skillsText?: string;
   /** Max tokens for the system prompt (from config.context.systemPrompt.maxTokens). */
   systemPromptMaxTokens?: number;
+  /** Path to the ~/.agentflyer data directory for TokenBill stats (optional). */
+  dataDir?: string;
+  /** Optional memory organizer — called once per turn to trigger periodic consolidation (E3.2). */
+  memoryOrganizer?: MemoryOrganizer;
 }
 
 export interface RunnerOptions {
@@ -259,8 +265,9 @@ export class AgentRunner {
     this._running = true;
     try {
       const { provider, toolRegistry, sessionStore, metaStore, approvalHandler } = this.deps;
-      const model =
-        opts.model ?? this.deps.resolvedModel?.id ?? this.config.model ?? 'claude-haiku-3-5';
+      const configModel =
+        typeof this.config.model === 'object' ? this.config.model.primary : this.config.model;
+      const model = opts.model ?? this.deps.resolvedModel?.id ?? configModel ?? 'claude-haiku-3-5';
       const maxTokens = opts.maxTokens ?? this.deps.resolvedModel?.maxTokens ?? 8192;
 
       // ── 1. Build system prompt ──────────────────────────────────────────────
@@ -363,6 +370,7 @@ export class AgentRunner {
       // ── 3. Main agentic loop ────────────────────────────────────────────────
       let totalInputTokens = 0;
       let totalOutputTokens = 0;
+      let totalCacheReadTokens = 0;
       let totalText = '';
 
       const MAX_TOOL_ROUNDS = 20; // safety cap
@@ -426,6 +434,7 @@ export class AgentRunner {
           } else if (chunk.type === 'done') {
             totalInputTokens += chunk.inputTokens;
             totalOutputTokens += chunk.outputTokens;
+            totalCacheReadTokens += chunk.cacheReadTokens ?? 0;
             stopReason = chunk.stopReason;
             _doneEmitted = true;
           } else if (chunk.type === 'error') {
@@ -547,6 +556,22 @@ export class AgentRunner {
         lastActivity: Date.now(),
         contextTokensEstimate: totalInputTokens,
       });
+
+      // ── 5. Record token bill (fire-and-forget; never throws) ───────────────
+      if (this.deps.dataDir) {
+        void recordTokenBill(this.deps.dataDir, {
+          ts: new Date().toISOString(),
+          agentId: this.agentId,
+          model,
+          inputTokens: totalInputTokens,
+          outputTokens: totalOutputTokens,
+          cacheReadTokens: totalCacheReadTokens,
+          totalTokens: totalInputTokens + totalOutputTokens,
+        });
+      }
+
+      // ── 6. Trigger memory organization (E3.2, fire-and-forget) ────────────
+      void this.deps.memoryOrganizer?.maybeOrganize();
 
       return {
         sessionKey: this.sessionKey,

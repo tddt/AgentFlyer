@@ -59,6 +59,7 @@ export type RpcMethod =
   | 'content.share'
   | 'memory.search'
   | 'memory.delete'
+  | 'stats.get'
   | 'mesh.status'
   | 'federation.peers'
   | 'docs.list'
@@ -862,6 +863,20 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         if (!ctx.memoryStore) return buildErrorResponse(id, 503, 'Memory store not available');
         ctx.memoryStore.delete(entryId as import('../core/types.js').MemoryEntryId);
         return { id, result: { deleted: true, entryId } };
+      }
+
+      case 'stats.get': {
+        const { agentId: statsAgent, days } = (params ?? {}) as {
+          agentId?: string;
+          days?: number;
+        };
+        const { loadStats } = await import('../agent/stats.js');
+        const rows = await loadStats(
+          ctx.dataDir,
+          statsAgent as import('../core/types.js').AgentId | undefined,
+          days ?? 30,
+        );
+        return { id, result: { rows } };
       }
 
       case 'mesh.status': {

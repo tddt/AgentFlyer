@@ -625,7 +625,165 @@ export function createMeshTools(
     },
   };
 
-  return [meshList, meshSend, meshSpawn, meshStatus, meshBroadcast, meshDiscuss, meshCancel];
+  // ── mesh_plan ────────────────────────────────────────────────────────────
+  // Parallel (or serial) multi-agent task orchestration with optional aggregation.
+  const meshPlan: RegisteredTool = {
+    category: 'mesh',
+    definition: {
+      name: 'mesh_plan',
+      description:
+        'Execute a structured plan of sub-tasks across multiple agents, then optionally ' +
+        'aggregate the results. Tasks may run in parallel (default) or serially. ' +
+        'Use this for divide-and-conquer workflows where you want to split a goal ' +
+        'into independent sub-tasks and collect all outputs.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          goal: {
+            type: 'string',
+            description: 'High-level goal description (informational, included in output header).',
+          },
+          tasks: {
+            type: 'array',
+            description: 'List of sub-tasks to execute.',
+            items: {
+              type: 'object',
+              properties: {
+                agent_id: { type: 'string', description: 'Target agent ID (from mesh_list).' },
+                instruction: { type: 'string', description: 'Task instruction for the agent.' },
+              },
+              required: ['agent_id', 'instruction'],
+            },
+          },
+          parallel: {
+            type: 'boolean',
+            description:
+              'Run all tasks in parallel (default: true). Set false for serial execution.',
+          },
+          timeout_s: {
+            type: 'number',
+            description: `Per-task timeout in seconds (default: ${DEFAULT_TASK_TIMEOUT_MS / 1000}).`,
+          },
+          aggregation_prompt: {
+            type: 'string',
+            description:
+              'If provided, ask the calling agent to synthesize all task results ' +
+              'into a single answer using this prompt as context prefix.',
+          },
+        },
+        required: ['goal', 'tasks'],
+      },
+    },
+    async handler(input) {
+      const {
+        goal,
+        tasks,
+        parallel = true,
+        timeout_s,
+        aggregation_prompt,
+      } = input as {
+        goal: string;
+        tasks: Array<{ agent_id: string; instruction: string }>;
+        parallel?: boolean;
+        timeout_s?: number;
+        aggregation_prompt?: string;
+      };
+
+      if (!Array.isArray(tasks) || tasks.length === 0) {
+        return { isError: true, content: 'mesh_plan requires at least one task.' };
+      }
+
+      const timeoutMs = typeof timeout_s === 'number' ? timeout_s * 1_000 : DEFAULT_TASK_TIMEOUT_MS;
+      const planId = ulid();
+      logger.info('mesh_plan: starting', { goal, taskCount: tasks.length, parallel, planId });
+
+      type TaskOutcome = { agentId: string; instruction: string; ok: boolean; output: string };
+
+      async function runOne(agentId: string, instruction: string): Promise<TaskOutcome> {
+        const runner = runners.get(agentId);
+        if (!runner) {
+          return { agentId, instruction, ok: false, output: `Agent '${agentId}' not found.` };
+        }
+        if (runner.isRunning) {
+          return {
+            agentId,
+            instruction,
+            ok: false,
+            output: `Agent '${agentId}' is busy — skipped.`,
+          };
+        }
+        const taskThread = `mesh-plan-${planId}-${agentId}-${ulid()}`;
+        const prevThread = runner.currentSessionKey;
+        runner.setThread(taskThread);
+        try {
+          const turnPromise = (async () => {
+            let output = '';
+            const gen = runner.turn(instruction);
+            let next = await gen.next();
+            while (!next.done) {
+              const chunk = next.value;
+              if (chunk.type === 'text_delta') output += chunk.text;
+              next = await gen.next();
+            }
+            const result = next.value;
+            return result.text || output || '(no output)';
+          })();
+          const output = await withTimeout(turnPromise, timeoutMs, `mesh_plan task for ${agentId}`);
+          return { agentId, instruction, ok: true, output };
+        } catch (err) {
+          return { agentId, instruction, ok: false, output: `Error: ${String(err)}` };
+        } finally {
+          const parsed = parseSessionKey(prevThread);
+          if (parsed) runner.setThread(parsed.threadKey);
+        }
+      }
+
+      let outcomes: TaskOutcome[];
+      if (parallel) {
+        outcomes = await Promise.all(tasks.map((t) => runOne(t.agent_id, t.instruction)));
+      } else {
+        outcomes = [];
+        for (const t of tasks) {
+          outcomes.push(await runOne(t.agent_id, t.instruction));
+        }
+      }
+
+      const successCount = outcomes.filter((o) => o.ok).length;
+      logger.info('mesh_plan: all tasks settled', { planId, successCount, total: tasks.length });
+
+      const resultSections = outcomes.map((o, i) => {
+        const cfg = configMap.get(o.agentId);
+        const name = cfg?.name ?? o.agentId;
+        const status = o.ok ? 'OK' : 'ERROR';
+        return `### Task ${i + 1} — ${name} (${status})\nInstruction: ${o.instruction}\n\n${o.output}`;
+      });
+
+      const header = `## Plan: ${goal}\n${successCount}/${tasks.length} tasks succeeded.\n\n`;
+      const body = resultSections.join('\n\n---\n\n');
+      const content = header + body;
+
+      // Append aggregation prompt as a tail note so the LLM calling mesh_plan
+      // can use it to synthesize the results in its next turn.
+      if (aggregation_prompt) {
+        return {
+          isError: false,
+          content: `${content}\n\n---\n\n## Aggregation Prompt\n${aggregation_prompt}`,
+        };
+      }
+      return { isError: false, content };
+    },
+  };
+
+  return [
+    meshList,
+    meshSend,
+    meshSpawn,
+    meshStatus,
+    meshBroadcast,
+    meshDiscuss,
+    meshCancel,
+    meshPlan,
+  ];
 }
 
 /**

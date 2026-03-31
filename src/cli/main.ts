@@ -18,6 +18,7 @@ import { reloadCommand } from './commands/reload.js';
 import { sessionsCommand } from './commands/sessions.js';
 import { skillsCommand } from './commands/skills.js';
 import { startCommand } from './commands/start.js';
+import { statsCommand } from './commands/stats.js';
 import { webCommand } from './commands/web.js';
 
 const main = defineCommand({
@@ -43,6 +44,7 @@ const main = defineCommand({
     skills: skillsCommand,
     memory: memoryCommand,
     federation: federationCommand,
+    stats: statsCommand,
   },
   run() {
     process.stdout.write(
@@ -62,6 +64,7 @@ const main = defineCommand({
         '  agentflyer skills              — List skills',
         '  agentflyer memory              — Manage agent memory',
         '  agentflyer federation          — Federation status',
+        '  agentflyer stats               — Token usage statistics',
         '',
         '  Shortcuts: agentflyer start | stop | status | reload | web | chat',
         '',

@@ -1,6 +1,7 @@
 import * as http from 'node:http';
 import type * as net from 'node:net';
 import { createLogger } from '../core/logger.js';
+import type { IntentRouter } from './intent-router.js';
 import type { LogBroadcaster } from './log-buffer.js';
 import { routeRequest } from './router.js';
 import type { RouterOptions } from './router.js';
@@ -16,6 +17,8 @@ export interface GatewayServerOptions {
   logBroadcaster: LogBroadcaster;
   /** Webhook endpoint handlers for webhook-based channels (Feishu, QQ, etc.). */
   webhookHandlers?: RouterOptions['webhookHandlers'];
+  /** Optional E6 intent router for automatic agent selection. */
+  intentRouter?: IntentRouter;
 }
 
 function bindAddress(mode: GatewayServerOptions['bind']): string {
@@ -37,6 +40,7 @@ export function createGatewayServer(opts: GatewayServerOptions): GatewayServer {
     logBroadcaster: opts.logBroadcaster,
     port: opts.port,
     webhookHandlers: opts.webhookHandlers,
+    intentRouter: opts.intentRouter,
   };
 
   const server = http.createServer(async (req, res) => {

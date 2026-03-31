@@ -1,5 +1,5 @@
 import { access, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { createLogger } from '../../../core/logger.js';
 import type { RegisteredTool } from '../registry.js';
 
@@ -26,15 +26,26 @@ async function listRecursive(dir: string, maxDepth: number, depth = 0): Promise<
 export function createFsTools(workspaceDir: string, allowedDirs: string[] = []): RegisteredTool[] {
   // Resolve workspace dir once for path validation
   const wsResolved = resolve(workspaceDir);
+  // RATIONALE: Windows paths are case-insensitive; lowercase both sides before comparison.
+  // Append sep so that /workspace does not incorrectly match /workspace-extra.
+  const wsNorm = wsResolved.toLowerCase() + sep;
   // Additional read-allowed dirs (e.g. skill directories)
   const allowedResolved = allowedDirs.map((d) => resolve(d));
 
   function safeResolve(p: string, writeOp = false): string {
     // Absolute paths are used as-is (skill dirs pass absolute paths)
     const abs = resolve(wsResolved, p);
-    if (abs.startsWith(wsResolved)) return abs;
+    const absLower = abs.toLowerCase();
+    if (absLower === wsResolved.toLowerCase() || absLower.startsWith(wsNorm)) return abs;
     // For read-only ops, also allow configured extra dirs
-    if (!writeOp && allowedResolved.some((d) => abs.startsWith(d))) return abs;
+    if (
+      !writeOp &&
+      allowedResolved.some((d) => {
+        const dNorm = d.toLowerCase() + sep;
+        return absLower === d.toLowerCase() || absLower.startsWith(dNorm);
+      })
+    )
+      return abs;
     throw new Error(`Path escapes workspace: ${p}`);
   }
 

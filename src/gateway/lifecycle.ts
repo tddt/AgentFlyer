@@ -3,6 +3,7 @@ import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AnthropicProvider } from '../agent/llm/anthropic.js';
+import { FailoverProvider } from '../agent/llm/failover.js';
 import { OpenAIProvider, createCompatProvider } from '../agent/llm/openai.js';
 import { createProviderRegistry } from '../agent/llm/provider.js';
 import { syncSoulMd } from '../agent/prompt/soul.js';
@@ -42,6 +43,7 @@ import { SessionMetaStore } from '../core/session/meta.js';
 import { SessionStore } from '../core/session/store.js';
 import type { AgentId } from '../core/types.js';
 import { FederationNode } from '../federation/node.js';
+import { MemoryOrganizer } from '../memory/organizer.js';
 import { MemoryStore } from '../memory/store.js';
 import { CronScheduler } from '../scheduler/cron.js';
 import { filterSkillsForAgent } from '../skills/filter.js';
@@ -51,6 +53,7 @@ import { createSkillTools } from '../skills/skill-tools.js';
 import { generateToken } from './auth.js';
 import { ContentStore } from './content-store.js';
 import { HookRegistry } from './hooks.js';
+import { IntentRouter } from './intent-router.js';
 import { logBroadcaster } from './log-buffer.js';
 import type { RpcContext } from './rpc.js';
 import { type GatewayServer, createGatewayServer } from './server.js';
@@ -224,9 +227,12 @@ function buildRunner(
   const metaStore = new SessionMetaStore(sessionsDir);
   const memoryStore = new MemoryStore(dataDir);
 
-  // Resolve model: agent.model (alias key) → models registry → defaults
+  // Resolve model: agent.model can be a string key or a failover-config object.
   // Supports both grouped "group/modelKey" and legacy flat "fast" formats.
-  const modelKey = agentCfg.model ?? config.defaults.model;
+  const rawModel = agentCfg.model ?? config.defaults.model;
+  const modelCfg =
+    rawModel && typeof rawModel === 'object' ? rawModel : { primary: rawModel, fallback: [] };
+  const modelKey = modelCfg.primary;
   const modelEntry = resolveModelEntry(config.models as Record<string, unknown>, modelKey);
   const primaryModelId = modelEntry?.id ?? modelKey;
 
@@ -287,7 +293,22 @@ function buildRunner(
   // Generic OpenAIProvider as fallback for gpt-*/o1/o3/o4 models
   providerReg.register(new OpenAIProvider());
 
-  const provider = providerReg.forModel(primaryModelId);
+  // Build the active provider, wrapping with FailoverProvider when fallback models are configured.
+  const primaryProvider = providerReg.forModel(primaryModelId);
+  const provider =
+    modelCfg.fallback.length > 0
+      ? new FailoverProvider({
+          primary: primaryProvider,
+          // RATIONALE: Use first fallback model on the same registry (covers same-provider
+          // cheaper/larger model scenarios). Multi-hop fallback (>1 entry) is Phase 2.
+          fallbackModel: (() => {
+            const fbKey = modelCfg.fallback[0] as string;
+            const fbEntry = resolveModelEntry(config.models as Record<string, unknown>, fbKey);
+            return fbEntry?.id ?? fbKey;
+          })(),
+          maxRetries: 1,
+        })
+      : primaryProvider;
 
   // Tool registry
   const tools = new ToolRegistry();
@@ -376,6 +397,8 @@ function buildRunner(
     metaStore,
     skillsText,
     systemPromptMaxTokens: config.context?.systemPrompt?.maxTokens,
+    dataDir,
+    memoryOrganizer: new MemoryOrganizer(memoryStore, provider, agentCfg.id as AgentId),
     resolvedModel: {
       id: primaryModelId,
       maxTokens: modelEntry?.maxTokens ?? 8192,
@@ -456,8 +479,12 @@ export async function startGateway(
       const agentSkillRegistry = new (await import('../skills/registry.js')).SkillRegistry();
       for (const s of agentSkills) agentSkillRegistry.register(s);
       runners.set(agentCfg.id, buildRunner(agentCfg, state, agentSkillsText, agentSkillRegistry));
-      const modelKey = agentCfg.model ?? config.defaults.model;
-      logger.info('Agent registered', { agentId: agentCfg.id, model: modelKey });
+      const rawModelForLog = agentCfg.model ?? config.defaults.model;
+      const modelKeyForLog =
+        rawModelForLog && typeof rawModelForLog === 'object'
+          ? rawModelForLog.primary
+          : rawModelForLog;
+      logger.info('Agent registered', { agentId: agentCfg.id, model: modelKeyForLog });
       await hooks.emit('agent:registered', { agentId: agentCfg.id, runners });
     } catch (err) {
       logger.error('Failed to build runner for agent', {
@@ -777,6 +804,7 @@ export async function startGateway(
     rpcContext,
     logBroadcaster,
     webhookHandlers: webhookHandlers.size > 0 ? webhookHandlers : undefined,
+    intentRouter: config.routing.rules.length > 0 ? new IntentRouter(config.routing) : undefined,
   });
 
   const { port, address } = await _server.start();
