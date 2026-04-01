@@ -89,11 +89,13 @@ export const en: Record<string, string> = {
   'agents.editModal.name': 'Name',
   'agents.editModal.model': 'Model',
   'agents.editModal.workspace': 'Workspace',
-  'agents.editModal.persona': 'Persona',
+  'agents.editModal.personaLanguage': 'Persona language',
+  'agents.editModal.personaOutputDir': 'Default output dir',
   'agents.editModal.namePlaceholder': 'Display name',
   'agents.editModal.modelPlaceholder': 'e.g. claude-3-5-sonnet-20241022',
   'agents.editModal.workspacePlaceholder': 'Group label (optional)',
-  'agents.editModal.personaPlaceholder': 'System prompt / persona…',
+  'agents.editModal.personaLanguagePlaceholder': 'e.g. zh-CN',
+  'agents.editModal.personaOutputDirPlaceholder': 'e.g. output',
 
   // ── Chat tab ─────────────────────────────────────────────────────────────
   'chat.title': 'Chat',

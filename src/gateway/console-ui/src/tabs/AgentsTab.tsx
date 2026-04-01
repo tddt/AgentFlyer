@@ -9,7 +9,8 @@ import type { AgentConfig, AgentInfo, AgentListResult, SessionListResult } from 
 interface EditForm {
   name: string;
   model: string;
-  persona: string;
+  personaLanguage: string;
+  personaOutputDir: string;
   workspace: string;
 }
 
@@ -29,7 +30,8 @@ function EditModal({
   const [form, setForm] = useState<EditForm>({
     name: current.name ?? '',
     model: current.model ?? '',
-    persona: current.persona ?? '',
+    personaLanguage: current.persona?.language ?? '',
+    personaOutputDir: current.persona?.outputDir ?? '',
     workspace: current.workspace ?? '',
   });
   const [saving, setSaving] = useState(false);
@@ -39,20 +41,36 @@ function EditModal({
     try {
       const fullConfig = await rpc<Record<string, unknown>>('config.get');
       const agents = fullConfig.agents as Record<string, AgentConfig> | AgentConfig[] | undefined;
-      let updated: Record<string, AgentConfig> = {};
-      if (Array.isArray(agents)) {
-        for (const a of agents) updated[a.id] = a;
-      } else if (agents) {
-        updated = { ...agents };
-      }
-      updated[agentId] = {
-        ...updated[agentId],
+      const nextAgent: AgentConfig = {
+        ...(current ?? { id: agentId }),
         id: agentId,
         name: form.name || undefined,
         model: form.model || undefined,
-        persona: form.persona || undefined,
         workspace: form.workspace || undefined,
+        persona:
+          form.personaLanguage || form.personaOutputDir
+            ? {
+                language: form.personaLanguage || undefined,
+                outputDir: form.personaOutputDir || undefined,
+              }
+            : undefined,
       };
+
+      let updated: Record<string, AgentConfig> | AgentConfig[] = {};
+      if (Array.isArray(agents)) {
+        let found = false;
+        updated = agents.map((agent) => {
+          if (agent.id !== agentId) return agent;
+          found = true;
+          return nextAgent;
+        });
+        if (!found) updated.push(nextAgent);
+      } else if (agents) {
+        updated = { ...agents, [agentId]: nextAgent };
+      } else {
+        updated = { [agentId]: nextAgent };
+      }
+
       await rpc('config.save', { ...fullConfig, agents: updated });
       toast(`Agent ${agentId} saved`, 'success');
       onSaved();
@@ -87,16 +105,16 @@ function EditModal({
           {field(t('agents.editModal.name'), 'name', t('agents.editModal.namePlaceholder'))}
           {field(t('agents.editModal.model'), 'model', t('agents.editModal.modelPlaceholder'))}
           {field(t('agents.editModal.workspace'), 'workspace', t('agents.editModal.workspacePlaceholder'))}
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-400">{t('agents.editModal.persona')}</label>
-            <textarea
-              rows={4}
-              className="rounded-lg bg-slate-900/70 ring-1 ring-slate-700 px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-indigo-500 resize-none"
-              value={form.persona}
-              placeholder={t('agents.editModal.personaPlaceholder')}
-              onChange={(e) => setForm((f) => ({ ...f, persona: e.target.value }))}
-            />
-          </div>
+          {field(
+            t('agents.editModal.personaLanguage'),
+            'personaLanguage',
+            t('agents.editModal.personaLanguagePlaceholder'),
+          )}
+          {field(
+            t('agents.editModal.personaOutputDir'),
+            'personaOutputDir',
+            t('agents.editModal.personaOutputDirPlaceholder'),
+          )}
         </div>
         <div className="flex items-center justify-end gap-2 pt-1">
           <Button size="sm" variant="ghost" onClick={onClose}>

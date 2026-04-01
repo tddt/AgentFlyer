@@ -89,11 +89,13 @@ export const zh: Record<string, string> = {
   'agents.editModal.name': '名称',
   'agents.editModal.model': '模型',
   'agents.editModal.workspace': '工作区',
-  'agents.editModal.persona': '角色设定',
+  'agents.editModal.personaLanguage': '角色语言',
+  'agents.editModal.personaOutputDir': '默认输出目录',
   'agents.editModal.namePlaceholder': '显示名称',
   'agents.editModal.modelPlaceholder': '例如 claude-3-5-sonnet-20241022',
   'agents.editModal.workspacePlaceholder': '分组标签（可选）',
-  'agents.editModal.personaPlaceholder': '系统提示词 / 角色设定…',
+  'agents.editModal.personaLanguagePlaceholder': '例如 zh-CN',
+  'agents.editModal.personaOutputDirPlaceholder': '例如 output',
 
   // ── Chat tab ─────────────────────────────────────────────────────────────
   'chat.title': '对话',

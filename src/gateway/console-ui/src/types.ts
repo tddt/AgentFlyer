@@ -18,7 +18,10 @@ export interface AgentConfig {
   model?: string;
   workspace?: string;
   mesh?: Record<string, unknown>;
-  persona?: string;
+  persona?: {
+    language?: string;
+    outputDir?: string;
+  };
 }
 
 export interface GatewayStatus {
