@@ -354,6 +354,12 @@ const ChannelsConfigSchema = z.object({
       allowedChatIds: z.array(z.number()).default([]),
       /** Polling interval in ms (default 2000) */
       pollIntervalMs: z.number().int().positive().default(2000),
+      /**
+       * Sender-level allowlist (usernames or numeric user IDs as strings).
+       * When non-empty, only messages from listed senders are processed.
+       * Example: ["alice", "123456789"]
+       */
+      allowFrom: z.array(z.string()).default([]),
     })
     .default({}),
   discord: z
@@ -367,6 +373,12 @@ const ChannelsConfigSchema = z.object({
       allowedChannelIds: z.array(z.string()).default([]),
       /** Command prefix for bot trigger (default '!agent') */
       commandPrefix: z.string().default('!agent'),
+      /**
+       * Sender-level allowlist (Discord user IDs or usernames).
+       * When non-empty, only messages from listed senders are processed.
+       * Example: ["123456789012345678", "alice"]
+       */
+      allowFrom: z.array(z.string()).default([]),
     })
     .default({}),
   feishu: z
@@ -391,6 +403,12 @@ const ChannelsConfigSchema = z.object({
        * Example: { "工人": "worker-1", "主控": "main" }
        */
       agentMappings: z.record(z.string()).optional().default({}),
+      /**
+       * Sender-level allowlist (Feishu open_id values).
+       * When non-empty, only messages from listed sender open_ids are processed.
+       * Example: ["ou_abc123def456"]
+       */
+      allowFrom: z.array(z.string()).default([]),
     })
     .default({}),
   qq: z
@@ -404,6 +422,12 @@ const ChannelsConfigSchema = z.object({
       defaultAgentId: z.string().default('main'),
       /** Restrict to these group openids (empty = allow all) */
       allowedGroupIds: z.array(z.string()).default([]),
+      /**
+       * Sender-level allowlist (QQ member_openid or user_openid values).
+       * When non-empty, only messages from listed senders are processed.
+       * Example: ["abc123", "def456"]
+       */
+      allowFrom: z.array(z.string()).default([]),
     })
     .default({}),
 });

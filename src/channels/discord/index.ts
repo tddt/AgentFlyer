@@ -299,6 +299,18 @@ export class DiscordChannel implements Channel {
     await this.sendToChannel(channelId, text);
   }
 
+  /** Sends a typing indicator to the Discord channel for this thread. */
+  async sendTyping(threadKey: ThreadKey): Promise<void> {
+    const channelId = this.threadChannelMap.get(threadKey);
+    if (!channelId) return;
+    // Discord typing indicator lasts 10s; we pulse every 3s for safety.
+    // Errors are intentionally swallowed — typing failures must never crash the agent.
+    await fetch(`${DISCORD_API}/channels/${channelId}/typing`, {
+      method: 'POST',
+      headers: { Authorization: `Bot ${this.opts.botToken}` },
+    }).catch(() => undefined);
+  }
+
   /** Low-level send to a Discord text channel, splitting >2000 char messages. */
   async sendToChannel(channelId: string, text: string): Promise<void> {
     // Discord max message length is 2000 chars

@@ -16,6 +16,7 @@ import type {
 } from '../core/types.js';
 import { makeSessionKey } from '../core/types.js';
 import type { MemoryOrganizer } from '../memory/organizer.js';
+import type { MemoryStore } from '../memory/store.js';
 import { checkCompactionNeeded, runCompaction } from './compactor/index.js';
 import type { LLMProvider } from './llm/provider.js';
 import { buildSystemPrompt } from './prompt/builder.js';
@@ -167,6 +168,12 @@ export interface RunnerDeps {
   dataDir?: string;
   /** Optional memory organizer — called once per turn to trigger periodic consolidation (E3.2). */
   memoryOrganizer?: MemoryOrganizer;
+  /**
+   * Memory store — used to auto-fetch relevant context before each turn.
+   * RATIONALE: runners hold a direct store reference so they can BM25-search
+   * without going through the tool layer (which requires an LLM call).
+   */
+  memoryStore?: MemoryStore;
 }
 
 export interface RunnerOptions {
@@ -248,6 +255,27 @@ export class AgentRunner {
         agentId: this.agentId,
       });
       this._running = false;
+    }
+  }
+
+  /**
+   * BM25-search the agent's memory store for context relevant to the query.
+   * Returns a newline-joined text block ready for injection as `memoryText`.
+   * Returns an empty string if no store is configured or no results found.
+   *
+   * RATIONALE: called before each turn so the runner can inject relevant
+   * memories into the system prompt's Layer 3 without requiring an LLM round-trip.
+   */
+  async searchMemory(query: string, limit = 5): Promise<string> {
+    const store = this.deps.memoryStore;
+    if (!store) return '';
+    try {
+      const results = store.searchFts(query, undefined, limit);
+      if (results.length === 0) return '';
+      return results.map((e, i) => `[${i + 1}] ${e.content}`).join('\n\n');
+    } catch (err) {
+      logger.debug('Memory search failed (non-fatal)', { error: String(err) });
+      return '';
     }
   }
 
@@ -374,6 +402,7 @@ export class AgentRunner {
       let totalOutputTokens = 0;
       let totalCacheReadTokens = 0;
       let totalText = '';
+      let toolRounds = 0; // rounds that actually invoked tools
 
       const MAX_TOOL_ROUNDS = 20; // safety cap
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
@@ -481,6 +510,7 @@ export class AgentRunner {
         // ── No more tool calls — done ────────────────────────────────────────
         if (stopReason !== 'tool_use' || toolCallMap.size === 0) break;
 
+        toolRounds++;
         // ── Execute tool calls ───────────────────────────────────────────────
         const toolResults: ToolResultContent[] = [];
 
@@ -548,6 +578,25 @@ export class AgentRunner {
         };
         await sessionStore.append(this.sessionKey, toolResultMsg);
         messages = [...messages, { role: 'user', content: toolResults }];
+      }
+
+      // ── 3.5. Closing message if agent produced no text output ──────────────
+      // When a task is completed entirely through tool calls and the final LLM
+      // response contains no text, channel sendStream() receives no text_delta
+      // chunks and sends nothing to the user.  Yield a brief notice so every
+      // channel always delivers a visible completion signal.
+      if (!totalText && toolRounds > 0) {
+        const closingText = '✅ 任务执行完毕。';
+        yield { type: 'text_delta' as const, text: closingText };
+        totalText = closingText;
+        const closingMsg: StoredMessage = {
+          id: ulid(),
+          sessionKey: this.sessionKey,
+          role: 'assistant',
+          content: closingText,
+          timestamp: Date.now(),
+        };
+        await sessionStore.append(this.sessionKey, closingMsg);
       }
 
       // ── 4. Update session meta ──────────────────────────────────────────────

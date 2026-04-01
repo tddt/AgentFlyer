@@ -28,6 +28,7 @@ import { FeishuChannel } from '../channels/feishu/index.js';
 import { QQChannel } from '../channels/qq/index.js';
 import { TelegramChannel } from '../channels/telegram/index.js';
 import type { Channel } from '../channels/types.js';
+import { WebChannel } from '../channels/web/index.js';
 import {
   type ConfigWatcher,
   getDefaultConfigPath,
@@ -41,7 +42,7 @@ import type { AgentConfig } from '../core/config/schema.js';
 import { createLogger } from '../core/logger.js';
 import { SessionMetaStore } from '../core/session/meta.js';
 import { SessionStore } from '../core/session/store.js';
-import type { AgentId } from '../core/types.js';
+import type { AgentId, ThreadKey } from '../core/types.js';
 import { FederationNode } from '../federation/node.js';
 import { MemoryOrganizer } from '../memory/organizer.js';
 import { MemoryStore } from '../memory/store.js';
@@ -50,7 +51,11 @@ import { filterSkillsForAgent } from '../skills/filter.js';
 import { buildSkillsDirectory } from '../skills/format.js';
 import { buildRegistry, scanSkillsDir } from '../skills/registry.js';
 import { createSkillTools } from '../skills/skill-tools.js';
+import type { WebSocket as WsWebSocket } from 'ws';
+import { TypingKeepAlive } from '../channels/typing.js';
+import { AgentQueueRegistry } from './agent-queue.js';
 import { generateToken } from './auth.js';
+import { SenderRateLimiter } from './rate-limiter.js';
 import { ContentStore } from './content-store.js';
 import { HookRegistry } from './hooks.js';
 import { IntentRouter } from './intent-router.js';
@@ -399,6 +404,7 @@ function buildRunner(
     systemPromptMaxTokens: config.context?.systemPrompt?.maxTokens,
     dataDir,
     memoryOrganizer: new MemoryOrganizer(memoryStore, provider, agentCfg.id as AgentId),
+    memoryStore,
     resolvedModel: {
       id: primaryModelId,
       maxTokens: modelEntry?.maxTokens ?? 8192,
@@ -612,6 +618,22 @@ export async function startGateway(
   ) => Promise<void>;
   const webhookHandlers = new Map<string, WebhookHandler>();
 
+  // WebChannel is always instantiated — WS binds happen on demand.
+  const webChannel = new WebChannel();
+
+  // RATIONALE: A single queue registry ensures concurrent messages for the same
+  // agent are processed in FIFO order — prevents setThread()+turn() race conditions.
+  const agentQueues = new AgentQueueRegistry();
+
+  // RATIONALE: one rate limiter shared across all channels so a sender cannot
+  // circumvent limits by alternating between Telegram and Discord (same identity
+  // key is used — username / userId / senderId per channel).
+  const rateLimiter = new SenderRateLimiter({
+    maxRequests: 20,
+    windowMs: 60_000,
+  });
+  rateLimiter.startCleanup();
+
   async function startExternalChannels(): Promise<void> {
     const channelsCfg = config.channels;
     // Default agent: first configured agent, or 'main' as fallback
@@ -628,20 +650,42 @@ export async function startGateway(
           pollIntervalMs: tgCfg.pollIntervalMs,
         });
         await tg.start(async (msg) => {
+          // Sender allowlist — reject messages from users not in allowFrom
+          if (tgCfg.allowFrom.length > 0) {
+            const ident = String(msg.meta?.username ?? msg.meta?.chatId ?? '');
+            if (!ident || !tgCfg.allowFrom.includes(ident)) {
+              logger.debug('Telegram: sender not in allowFrom, ignoring', { ident });
+              return;
+            }
+          }
+          // Rate limit — drop if sender exceeds burst threshold
+          const rlKey = `tg:${String(msg.meta?.chatId ?? msg.meta?.username ?? 'unknown')}`;
+          if (!rateLimiter.check(rlKey)) {
+            logger.warn('Telegram: rate limit exceeded, dropping message', { rlKey });
+            return;
+          }
           const runner = runners.get(msg.agentId);
           if (!runner) {
             logger.warn('Telegram: no runner for agent', { agentId: msg.agentId });
             await tg.sendToChat(msg.meta?.chatId as number, `⚠️ Agent "${msg.agentId}" not found.`);
             return;
           }
-          try {
-            runner.setThread(msg.threadKey);
-            const stream = runner.turn(msg.text);
-            await tg.sendStream({ agentId: msg.agentId, threadKey: msg.threadKey }, stream);
-          } catch (err: unknown) {
-            logger.error('Telegram agent run error', { error: String(err) });
-            await tg.sendToChat(msg.meta?.chatId as number, `❌ Error: ${String(err)}`);
-          }
+          // RATIONALE: queue ensures sequential processing per agent (no concurrent turns)
+          await agentQueues.for(msg.agentId).enqueue(async () => {
+            const typing = new TypingKeepAlive();
+            typing.start(() => tg.sendTyping(msg.threadKey));
+            try {
+              runner.setThread(msg.threadKey);
+              const memoryText = await runner.searchMemory(msg.text);
+              const stream = runner.turn(msg.text, { memoryText: memoryText || undefined });
+              await tg.sendStream({ agentId: msg.agentId, threadKey: msg.threadKey }, stream);
+            } catch (err: unknown) {
+              logger.error('Telegram agent run error', { error: String(err) });
+              await tg.sendToChat(msg.meta?.chatId as number, `❌ Error: ${String(err)}`);
+            } finally {
+              typing.stop();
+            }
+          });
         });
         activeChannels.push(tg);
         sharedChannels.set('telegram', tg as unknown as Channel);
@@ -664,6 +708,19 @@ export async function startGateway(
           commandPrefix: dcCfg.commandPrefix,
         });
         await dc.start(async (msg) => {
+          // Sender allowlist — reject messages from users not in allowFrom
+          if (dcCfg.allowFrom.length > 0) {
+            const ident = String(msg.meta?.authorId ?? msg.meta?.username ?? '');
+            if (!ident || !dcCfg.allowFrom.includes(ident)) {
+              logger.debug('Discord: sender not in allowFrom, ignoring', { ident });
+              return;
+            }
+          }
+          const rlKeyDc = `dc:${String(msg.meta?.authorId ?? msg.meta?.username ?? 'unknown')}`;
+          if (!rateLimiter.check(rlKeyDc)) {
+            logger.warn('Discord: rate limit exceeded, dropping message', { rlKey: rlKeyDc });
+            return;
+          }
           const runner = runners.get(msg.agentId);
           if (!runner) {
             logger.warn('Discord: no runner for agent', { agentId: msg.agentId });
@@ -673,17 +730,24 @@ export async function startGateway(
             );
             return;
           }
-          try {
-            runner.setThread(msg.threadKey);
-            const stream = runner.turn(msg.text);
-            await dc.sendStream({ agentId: msg.agentId, threadKey: msg.threadKey }, stream);
-          } catch (err: unknown) {
-            logger.error('Discord agent run error', { error: String(err) });
-            await dc.sendToChannel(
-              msg.meta?.discordChannelId as string,
-              `❌ Error: ${String(err)}`,
-            );
-          }
+          await agentQueues.for(msg.agentId).enqueue(async () => {
+            const typing = new TypingKeepAlive();
+            typing.start(() => dc.sendTyping(msg.threadKey));
+            try {
+              runner.setThread(msg.threadKey);
+              const memoryText = await runner.searchMemory(msg.text);
+              const stream = runner.turn(msg.text, { memoryText: memoryText || undefined });
+              await dc.sendStream({ agentId: msg.agentId, threadKey: msg.threadKey }, stream);
+            } catch (err: unknown) {
+              logger.error('Discord agent run error', { error: String(err) });
+              await dc.sendToChannel(
+                msg.meta?.discordChannelId as string,
+                `❌ Error: ${String(err)}`,
+              );
+            } finally {
+              typing.stop();
+            }
+          });
         });
         activeChannels.push(dc);
         sharedChannels.set('discord', dc as unknown as Channel);
@@ -710,20 +774,36 @@ export async function startGateway(
           knownAgentIds: [...runners.keys()],
         });
         await feishu.start(async (msg) => {
+          // Sender allowlist — reject messages from users not in allowFrom
+          if (feishuCfg.allowFrom.length > 0) {
+            const ident = String(msg.meta?.senderId ?? '');
+            if (!ident || !feishuCfg.allowFrom.includes(ident)) {
+              logger.debug('Feishu: sender not in allowFrom, ignoring', { ident });
+              return;
+            }
+          }
+          const rlKeyFei = `feishu:${String(msg.meta?.senderId ?? 'unknown')}`;
+          if (!rateLimiter.check(rlKeyFei)) {
+            logger.warn('Feishu: rate limit exceeded, dropping message', { rlKey: rlKeyFei });
+            return;
+          }
           const runner = runners.get(msg.agentId);
           if (!runner) {
             logger.warn('Feishu: no runner for agent', { agentId: msg.agentId });
             await feishu.sendToChat(msg.threadKey, `⚠️ Agent "${msg.agentId}" not found.`);
             return;
           }
-          try {
-            runner.setThread(msg.threadKey);
-            const stream = runner.turn(msg.text);
-            await feishu.sendStream({ agentId: msg.agentId, threadKey: msg.threadKey }, stream);
-          } catch (err: unknown) {
-            logger.error('Feishu agent run error', { error: String(err) });
-            await feishu.sendToChat(msg.threadKey, `❌ Error: ${String(err)}`);
-          }
+          await agentQueues.for(msg.agentId).enqueue(async () => {
+            try {
+              runner.setThread(msg.threadKey);
+              const memoryText = await runner.searchMemory(msg.text);
+              const stream = runner.turn(msg.text, { memoryText: memoryText || undefined });
+              await feishu.sendStream({ agentId: msg.agentId, threadKey: msg.threadKey }, stream);
+            } catch (err: unknown) {
+              logger.error('Feishu agent run error', { error: String(err) });
+              await feishu.sendToChat(msg.threadKey, `❌ Error: ${String(err)}`);
+            }
+          });
         });
         // WebSocket mode: no webhook handler needed — events arrive via WSClient
         activeChannels.push(feishu);
@@ -749,20 +829,36 @@ export async function startGateway(
           allowedGroupIds: qqCfg.allowedGroupIds,
         });
         await qq.start(async (msg) => {
+          // Sender allowlist — reject messages from users not in allowFrom
+          if (qqCfg.allowFrom.length > 0) {
+            const ident = String(msg.meta?.openid ?? '');
+            if (!ident || !qqCfg.allowFrom.includes(ident)) {
+              logger.debug('QQ: sender not in allowFrom, ignoring', { ident });
+              return;
+            }
+          }
+          const rlKeyQq = `qq:${String(msg.meta?.openid ?? 'unknown')}`;
+          if (!rateLimiter.check(rlKeyQq)) {
+            logger.warn('QQ: rate limit exceeded, dropping message', { rlKey: rlKeyQq });
+            return;
+          }
           const runner = runners.get(msg.agentId);
           if (!runner) {
             logger.warn('QQ: no runner for agent', { agentId: msg.agentId });
             await qq.sendToThread(msg.threadKey, `⚠️ Agent "${msg.agentId}" not found.`);
             return;
           }
-          try {
-            runner.setThread(msg.threadKey);
-            const stream = runner.turn(msg.text);
-            await qq.sendStream({ agentId: msg.agentId, threadKey: msg.threadKey }, stream);
-          } catch (err: unknown) {
-            logger.error('QQ agent run error', { error: String(err) });
-            await qq.sendToThread(msg.threadKey, `❌ Error: ${String(err)}`);
-          }
+          await agentQueues.for(msg.agentId).enqueue(async () => {
+            try {
+              runner.setThread(msg.threadKey);
+              const memoryText = await runner.searchMemory(msg.text);
+              const stream = runner.turn(msg.text, { memoryText: memoryText || undefined });
+              await qq.sendStream({ agentId: msg.agentId, threadKey: msg.threadKey }, stream);
+            } catch (err: unknown) {
+              logger.error('QQ agent run error', { error: String(err) });
+              await qq.sendToThread(msg.threadKey, `❌ Error: ${String(err)}`);
+            }
+          });
         });
         webhookHandlers.set('/channels/qq/event', qq.getWebhookHandler());
         activeChannels.push(qq);
@@ -774,9 +870,52 @@ export async function startGateway(
         });
       }
     }
+
+    // ── WebChannel (WS) ─────────────────────────────────────────────────────
+    // RATIONALE: WebChannel is always started — it only costs a handler registration.
+    // Actual WS connections arrive via the gateway's /ws/chat upgrade path.
+    await webChannel.start(async (msg) => {
+      const rlKeyWs = `ws:${String(msg.meta?.connectionKey ?? 'unknown')}`;
+      if (!rateLimiter.check(rlKeyWs)) {
+        logger.warn('WebChannel: rate limit exceeded, dropping message', { rlKey: rlKeyWs });
+        return;
+      }
+      const runner = runners.get(msg.agentId);
+      if (!runner) {
+        logger.warn('WebChannel: no runner for agent', { agentId: msg.agentId });
+        return;
+      }
+      await agentQueues.for(msg.agentId).enqueue(async () => {
+        try {
+          runner.setThread(msg.threadKey);
+          const memoryText = await runner.searchMemory(msg.text);
+          const stream = runner.turn(msg.text, { memoryText: memoryText || undefined });
+          await webChannel.sendStream({ agentId: msg.agentId, threadKey: msg.threadKey }, stream);
+        } catch (err: unknown) {
+          logger.error('WebChannel agent run error', { error: String(err) });
+        }
+      });
+    });
+    activeChannels.push(webChannel);
+    sharedChannels.set('web', webChannel as unknown as Channel);
+    logger.info('Web channel active (WS endpoint: /ws/chat)');
   }
 
   await startExternalChannels();
+
+  // ── WS upgrade handler — authenticates and binds each connection to WebChannel ──
+  const wsHandler = (ws: WsWebSocket, req: import('node:http').IncomingMessage): void => {
+    const qs = (req.url ?? '').split('?')[1] ?? '';
+    const params = new URLSearchParams(qs);
+    const wsToken = params.get('token') ?? '';
+    if (wsToken !== authToken) {
+      ws.close(4401, 'Unauthorized');
+      return;
+    }
+    const agentId = (params.get('agentId') ?? config.agents[0]?.id ?? 'main') as AgentId;
+    const threadKey = (params.get('threadKey') ?? `ws-${Date.now()}`) as ThreadKey;
+    webChannel.bindWebSocket(ws, agentId, threadKey);
+  };
 
   // ── Step 11: Federation node (optional) ─────────────────────────────────
   let federationNode: FederationNode | null = null;
@@ -805,6 +944,7 @@ export async function startGateway(
     logBroadcaster,
     webhookHandlers: webhookHandlers.size > 0 ? webhookHandlers : undefined,
     intentRouter: config.routing.rules.length > 0 ? new IntentRouter(config.routing) : undefined,
+    wsHandler,
   });
 
   const { port, address } = await _server.start();
@@ -836,6 +976,7 @@ export async function startGateway(
   async function cleanup(): Promise<void> {
     logger.info('Gateway shutting down...');
     await hooks.emit('before:stop', { runners });
+    rateLimiter.stop();
     state.configWatcher?.stop();
     state.scheduler.stopAll();
     await federationNode?.stop().catch(() => undefined);

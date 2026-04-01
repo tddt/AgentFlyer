@@ -2,7 +2,7 @@
 // All Bun-specific API calls should go through this module.
 
 import { createHash } from 'node:crypto';
-import { readFile as fsReadFile, writeFile as fsWriteFile } from 'node:fs/promises';
+import { readFile as fsReadFile, rename, writeFile as fsWriteFile } from 'node:fs/promises';
 
 /** True when running inside Bun runtime (main thread or worker threads) */
 export const isBun: boolean =
@@ -41,6 +41,28 @@ export async function readFileText(path: string): Promise<string> {
 
 export async function writeFileText(path: string, content: string): Promise<void> {
   await fsWriteFile(path, content, 'utf-8');
+}
+
+/**
+ * Write `content` to `path` atomically by first writing to a `.tmp` sibling
+ * and then renaming it into place.
+ *
+ * RATIONALE: A direct write can leave a truncated file if the process is killed
+ * mid-write. On POSIX, `rename()` is atomic; on Windows it is best-effort but
+ * still safer than an in-place overwrite because readers either see the old or
+ * the new content, never a partial write.
+ */
+export async function atomicWriteFile(
+  path: string,
+  content: string | Buffer,
+): Promise<void> {
+  const tmp = `${path}.tmp`;
+  if (typeof content === 'string') {
+    await fsWriteFile(tmp, content, 'utf-8');
+  } else {
+    await fsWriteFile(tmp, content);
+  }
+  await rename(tmp, path);
 }
 
 // ─── SQLite factory ───────────────────────────────────────────────────────────

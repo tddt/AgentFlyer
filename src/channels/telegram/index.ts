@@ -206,6 +206,16 @@ export class TelegramChannel implements Channel {
     await this.sendToChat(chatId, text);
   }
 
+  /** Sends a typing indicator for the given thread (fires-and-forgets on error). */
+  async sendTyping(threadKey: ThreadKey): Promise<void> {
+    const chatId = this.threadChatMap.get(threadKey);
+    if (chatId === undefined) return;
+    // Errors are intentionally swallowed — typing failures must never crash the agent.
+    await this.apiPost('sendChatAction', { chat_id: chatId, action: 'typing' }).catch(
+      () => undefined,
+    );
+  }
+
   /** Send a raw message to a specific Telegram chat ID. */
   async sendToChat(chatId: number, text: string): Promise<void> {
     // Telegram's message limit is 4096 chars; split if needed

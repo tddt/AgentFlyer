@@ -69,4 +69,12 @@ export interface Channel {
     target: { agentId: AgentId; threadKey: ThreadKey },
     attachment: ContentAttachment,
   ): Promise<void>;
+
+  /**
+   * Send a typing indicator to the thread.
+   * Optional — channels that do not expose a typing API may leave this undefined.
+   * Intended to be called repeatedly (e.g. via TypingKeepAlive) while the agent
+   * is processing, so the user sees "typing…" until the reply arrives.
+   */
+  sendTyping?(threadKey: ThreadKey): Promise<void>;
 }
