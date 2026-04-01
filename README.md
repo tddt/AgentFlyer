@@ -21,6 +21,7 @@ AgentFlyer is an AI Agent runtime with multi-host federation, inspired by Opencl
 - [Skills System](#skills-system)
 - [Console UI](#console-ui)
 - [CLI Commands](#cli-commands)
+- [API Reference](#api-reference)
 - [Directory Structure](#directory-structure)
 - [Development Guide](#development-guide)
 
@@ -33,11 +34,11 @@ AgentFlyer is an AI Agent runtime with multi-host federation, inspired by Opencl
 | # | Feature | Description |
 |---|---------|-------------|
 | F1 | **Config System** | JSON5 format, multi-profile support, named model group registry (`group/model` reference style) |
-| F2 | **Multi-LLM Support** | Anthropic Claude, OpenAI GPT, Gemini, Ollama local models, OpenAI-compatible APIs (DeepSeek, etc.) via unified interface |
-| F3 | **Token Metering** | Exact counting + fast estimation, unified measurement across providers |
-| F4 | **Messaging Channels** | Telegram, Discord, Feishu (Lark), QQ, Web (with WebSocket real-time streaming) |
-| F5 | **Agent Execution Engine** | Tool-call loop, context compaction, subagent scheduling |
-| F6 | **Session Persistence** | JSONL format, per channel+key files, incremental append |
+| F2 | **Multi-LLM Support** | Anthropic Claude, OpenAI GPT, Ollama local models, and OpenAI-compatible APIs (DeepSeek, Qwen, etc.) via a unified interface |
+| F3 | **Token Metering** | Exact counting + fast estimation, per-agent daily billing, `GET /api/stats` API |
+| F4 | **Messaging Channels** | Telegram, Discord, Feishu (Lark), QQ, Web (`/ws/chat` WebSocket + `/chat` SSE + `/v1/chat/completions`) |
+| F5 | **Agent Execution Engine** | Tool-call loop, context compaction, per-agent FIFO queue, LLM failover |
+| F6 | **Session Persistence** | JSONL format, per channel+key files, incremental append, atomic writes |
 | F7 | **Skills System** | SKILL.md-driven, injected on demand, minimal system prompt footprint |
 | F8 | **Memory System** | SQLite + BM25 full-text search + vector semantic search, partitioned by agent |
 | F9 | **Cron Scheduler** | Scheduled tasks with cron expressions and channel routing |
@@ -51,12 +52,12 @@ AgentFlyer is an AI Agent runtime with multi-host federation, inspired by Opencl
 |---|---------|-------------|
 | E1 | **Agent Mesh** | Agents within the same instance can discover and delegate tasks to each other, breaking the hierarchy constraint |
 | E2 | **Collaborative Skills** | Cross-agent capability labels, on-demand composition |
-| E3 | **Federated Memory** | Memory sync across instances, importance decay, vector search |
+| E3 | **Memory Auto-Fetch** | BM25 full-text search runs automatically before every turn; top-k memories injected as context |
 | E4 | **Decentralized Federation** | Ed25519 identity, AES-GCM encrypted communication, multiple discovery modes |
 | E5 | **PoTC Proof of Work** | Token consumption proof + FlyCredit compute exchange |
-| E6 | **Remote Task Routing** | Automatically routes to federated nodes when local agent capabilities are insufficient |
-| E7 | **Dual Ledger** | Local ledger + peer reconciliation to prevent fraud |
-| E8 | **User Authorization Control** | Federation network participation requires explicit user opt-in |
+| E6 | **Intent-Aware Routing** | Message text matched against regex rules to select the target agent; per-channel `allowFrom` allowlists |
+| E7 | **Rate Limiting** | Fixed-window per-sender rate limiter shared across all channels (default: 20 req / 60 s) |
+| E8 | **API Key Rotation** | Automatic LLM key rotation per model group with configurable usage caps per key |
 
 ---
 
@@ -230,6 +231,7 @@ The config file lives at `~/.agentflyer/agentflyer.json` in JSON5 format.
         "deny": [],
         "approval": ["bash", "read_file"]   // tools requiring user approval
       },
+      "allowFrom": [],
       "persona": {
         "language": "en-US",
         "outputDir": "output"
@@ -245,10 +247,48 @@ The config file lives at `~/.agentflyer/agentflyer.json` in JSON5 format.
     },
     "cli":      { "enabled": true },
     "web":      { "enabled": true },
-    "telegram": { "enabled": false, "botToken": "" },
-    "discord":  { "enabled": false, "botToken": "" },
-    "feishu":   { "enabled": false, "appId": "", "appSecret": "" },
-    "qq":       { "enabled": false, "appId": "", "clientSecret": "" }
+    "telegram": {
+      "enabled": false,
+      "botToken": "",
+      "defaultAgentId": "main",
+      "allowedChatIds": [],
+      "allowFrom": []
+    },
+    "discord":  {
+      "enabled": false,
+      "botToken": "",
+      "defaultAgentId": "main",
+      "allowedChannelIds": [],
+      "allowFrom": []
+    },
+    "feishu":   {
+      "enabled": false,
+      "appId": "",
+      "appSecret": "",
+      "defaultAgentId": "main",
+      "allowedChatIds": [],
+      "allowFrom": []
+    },
+    "qq":       {
+      "enabled": false,
+      "appId": "",
+      "clientSecret": "",
+      "defaultAgentId": "main",
+      "allowedGroupIds": [],
+      "allowFrom": []
+    }
+  },
+
+  // Memory config
+  "memory": {
+    "enabled": true,
+    "autoFetch": true,
+    "autoFetchLimit": 5,
+    "decay": {
+      "enabled": true,
+      "halfLifeDays": 30
+    },
+    "maxEntries": 10000
   },
 
   // Federation config (optional, see "Federation" section)
@@ -266,7 +306,6 @@ The config file lives at `~/.agentflyer/agentflyer.json` in JSON5 format.
 |----------|---------------|-------|
 | `anthropic` | claude-haiku-3-5, claude-opus-4-5 | Requires `apiKey` |
 | `openai` | gpt-4o, gpt-4o-mini | Requires `apiKey` |
-| `google` | gemini-1.5-pro | Requires `apiKey` |
 | `ollama` | qwen2.5:7b, llama3.2 | Local runtime, set `apiBaseUrl` |
 | `openai-compat` | deepseek-chat, other compatible models | Set `apiBaseUrl` + `apiKey` |
 
@@ -282,6 +321,7 @@ The config file lives at `~/.agentflyer/agentflyer.json` in JSON5 format.
   "botToken": "YOUR_BOT_TOKEN",
   "defaultAgentId": "main",
   "allowedChatIds": [],      // empty = no restriction
+  "allowFrom": [],           // Telegram @usernames; empty = allow all
   "pollIntervalMs": 2000
 }
 ```
@@ -294,6 +334,7 @@ The config file lives at `~/.agentflyer/agentflyer.json` in JSON5 format.
   "botToken": "YOUR_BOT_TOKEN",
   "defaultAgentId": "main",
   "allowedChannelIds": [],
+  "allowFrom": [],           // Discord user IDs; empty = allow all
   "commandPrefix": "!agent"
 }
 ```
@@ -312,6 +353,7 @@ After creating an app on the Feishu Open Platform, set the event subscription UR
   "encryptKey": "",            // Feishu message encryption key (optional)
   "defaultAgentId": "main",
   "allowedChatIds": [],        // empty = no restriction
+  "allowFrom": [],             // Feishu sender IDs; empty = allow all
   "agentMappings": {           // Feishu group name/user nickname -> agent ID mapping
     "Main Control": "main",
     "Worker One": "worker-1"
@@ -327,13 +369,33 @@ After creating an app on the Feishu Open Platform, set the event subscription UR
   "appId": "YOUR_APP_ID",
   "clientSecret": "YOUR_CLIENT_SECRET",
   "defaultAgentId": "main",
-  "allowedGroupIds": []
+  "allowedGroupIds": [],
+  "allowFrom": []            // QQ user openid list; empty = allow all
 }
 ```
 
 ### Web (built-in)
 
-Visit `http://localhost:19789` to open the Console UI and use the built-in **Chat** tab for real-time conversation with WebSocket streaming.
+The Web channel is always active. Connect with a WebSocket client or use the built-in **Chat** tab in the Console UI.
+
+**WebSocket endpoint:**
+```
+ws://localhost:19789/ws/chat?token=<authToken>&agentId=<agentId>&threadKey=<threadKey>
+```
+
+| Frame | Direction | Payload |
+|-------|-----------|--------|
+| `{ type: 'connected', agentId, threadKey }` | server → client | Handshake on successful connection |
+| `{ text: '...' }` | client → server | Send a message to the agent |
+| `{ type: 'chunk', delta: '...' }` | server → client | Streaming text delta during a turn |
+| `{ type: 'done' }` | server → client | Turn completed |
+| `{ type: 'error', message: '...' }` | server → client | Error during turn |
+
+You can also send chat messages with the REST SSE endpoint — see [API Reference](#api-reference).
+
+### Channel Safety
+
+All messaging channels share a single **rate limiter** (20 requests / 60 s per sender by default). Messages are processed through a **per-agent FIFO queue**, ensuring no concurrent turn races even when multiple channels are active simultaneously. Set `allowFrom` on any channel to restrict which senders can interact with agents.
 
 ---
 
@@ -411,6 +473,8 @@ After verifying the receipt, the receiver updates the local **FlyCredit (FC)** l
 
 AgentFlyer uses SQLite to store memory entries, supporting BM25 full-text search and vector semantic search.
 
+Before every turn, AgentFlyer can automatically search the memory store and inject the top relevant entries into the model context. This behavior is controlled by `memory.autoFetch` and `memory.autoFetchLimit`.
+
 ```
 ~/.agentflyer/
   memory/
@@ -435,10 +499,8 @@ memory_forget({ id: 'mem_01J...' })
 ```jsonc
 "memory": {
   "enabled": true,
-  "embed": {
-    "provider": "local",
-    "model": "Xenova/all-MiniLM-L6-v2"   // local vector embedding, no API needed
-  },
+  "autoFetch": true,
+  "autoFetchLimit": 5,
   "decay": {
     "enabled": true,
     "halfLifeDays": 30   // memory importance half-life
@@ -502,6 +564,7 @@ Built-in web dashboard at `http://localhost:19789` (Bearer Token authentication 
 | **Workflow** | Workflow definition and execution management |
 | **Memory** | Memory entry search, view, and management |
 | **Federation** | Federated peer status, peer connection management |
+| **Stats** | Per-agent token usage and daily rollups |
 | **Guide** | Project usage guide (this document) |
 | **About** | Runtime version and license info |
 
@@ -512,8 +575,8 @@ Built-in web dashboard at `http://localhost:19789` (Bearer Token authentication 
 ```bash
 # -- Gateway management -----------------------------------------------
 agentflyer start [--port 19789] [--bind loopback]
-agentflyer gateway stop
-agentflyer gateway status
+agentflyer stop
+agentflyer status
 
 # -- Agent management -------------------------------------------------
 agentflyer agent list
@@ -533,7 +596,9 @@ agentflyer chat [--agent main]
 # -- Config management ------------------------------------------------
 agentflyer config show
 agentflyer config set <key> <value>
-agentflyer config edit         # open system editor
+agentflyer config validate
+agentflyer config doctor
+agentflyer config migrate [--from <path>] [--output <path>] [--dry]
 
 # -- Skills management ------------------------------------------------
 agentflyer skills list
@@ -543,6 +608,9 @@ agentflyer memory search <query>
 agentflyer memory list [--agent <id>] [--limit 20]
 agentflyer memory delete <id>
 
+# -- Token usage stats ------------------------------------------------
+agentflyer stats [--agent <id>] [--days 30]
+
 # -- Federation management --------------------------------------------
 agentflyer federation status
 agentflyer federation peers
@@ -550,8 +618,41 @@ agentflyer federation trust <nodeId>
 
 # -- Shortcuts --------------------------------------------------------
 agentflyer reload     # alias for agent reload
+agentflyer stats      # print recent token usage stats
 agentflyer web        # open Console UI in browser
 ```
+
+---
+
+## API Reference
+
+The gateway exposes HTTP, SSE, and WebSocket interfaces. All authenticated HTTP routes use `Authorization: Bearer <token>`, except the Console UI and log stream which also accept `?token=` in the query string.
+
+### HTTP Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Health check, no authentication required |
+| `GET` | `/console` | Console UI HTML, supports `?token=` |
+| `GET` | `/api/logs` | SSE log stream, supports `?token=` |
+| `POST` | `/chat` | SSE streaming chat with `{ agentId, message, thread? }` |
+| `POST` | `/rpc` | JSON-RPC endpoint used by the Console UI |
+| `GET` | `/v1/models` | OpenAI-compatible model list |
+| `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions, supports streaming |
+| `POST` | `/hooks/trigger` | Webhook trigger with `{ agentId, message }` |
+| `GET` | `/api/stats` | Token usage stats, accepts `agentId` and `days` query params |
+| `POST` | `/channels/feishu/event` | Feishu webhook endpoint |
+| `POST` | `/channels/qq/event` | QQ webhook endpoint |
+
+### WebSocket Endpoint
+
+Connect with:
+
+```text
+ws://host:port/ws/chat?token=<authToken>&agentId=<agentId>&threadKey=<threadKey>
+```
+
+The server emits streaming frames documented in [Messaging Channels](#messaging-channels), and clients send plain JSON messages like `{ "text": "hello" }`.
 
 ---
 
@@ -584,6 +685,10 @@ agentflyer/
 |   |   +-- web/
 |   +-- gateway/       # HTTP + WS entry point
 |   |   +-- server.ts  # server startup
+|   |   +-- router.ts  # REST, SSE, OpenAI-compat, webhook routes
+|   |   +-- lifecycle.ts # startup, hot reload, channel wiring
+|   |   +-- agent-queue.ts # per-agent FIFO queue
+|   |   +-- rate-limiter.ts # per-sender fixed-window rate limiter
 |   |   +-- rpc.ts     # RPC interface (used by Console UI)
 |   |   +-- console-ui/# React dashboard frontend
 |   +-- scheduler/     # Cron scheduler
@@ -604,8 +709,10 @@ agentflyer/
 ~/.agentflyer/
 +-- agentflyer.json        # main config file
 +-- credentials/           # encrypted API keys (AES-256-GCM)
++-- gateway.pid            # active gateway PID + port metadata
 +-- sessions/              # session logs (JSONL)
 +-- memory/                # memory database
++-- stats/                 # daily token usage records
 +-- workspace/             # agent default workspace
 +-- skills/                # user-defined skills
 ```

@@ -24,6 +24,7 @@ AgentFlyer 是一个类Openclaw的支持多主机联邦协作的 AI Agent 运行
 - [技能系统（Skills）](#技能系统skills)
 - [Console UI](#console-ui)
 - [CLI 命令](#cli-命令)
+- [HTTP 与 WebSocket API](#http-与-websocket-api)
 - [目录结构](#目录结构)
 - [开发指南](#开发指南)
 
@@ -36,17 +37,17 @@ AgentFlyer 是一个类Openclaw的支持多主机联邦协作的 AI Agent 运行
 | # | 特性 | 说明 |
 |---|------|------|
 | F1 | **配置系统** | JSON5 格式，支持多 profile，命名模型分组注册表（`分组/模型` 引用方式）|
-| F2 | **多 LLM 支持** | Anthropic Claude、OpenAI GPT、Gemini、Ollama 本地模型、OpenAI 兼容接口（DeepSeek 等），统一接口 |
-| F3 | **Token 计量** | 精确计数 + 快速估算，跨 provider 统一度量 |
-| F4 | **消息渠道** | Telegram、Discord、飞书（Feishu）、QQ、Web（含 WebSocket 实时流式回复）|
-| F5 | **Agent 执行引擎** | 工具调用循环、上下文压缩、Subagent 调度 |
-| F6 | **会话持久化** | JSONL 格式，按 channel+key 分文件，增量写入 |
+| F2 | **多 LLM 支持** | Anthropic Claude、OpenAI GPT、Ollama 本地模型、OpenAI 兼容接口（DeepSeek、Qwen 等），统一接口 |
+| F3 | **Token 计量** | 精确计数 + 快速估算，支持按 Agent 的日统计与 `GET /api/stats` 查询 |
+| F4 | **消息渠道** | Telegram、Discord、飞书（Feishu）、QQ、Web（`/ws/chat` WebSocket、`/chat` SSE、`/v1/chat/completions`） |
+| F5 | **Agent 执行引擎** | 工具调用循环、上下文压缩、每 Agent FIFO 队列、LLM 故障切换 |
+| F6 | **会话持久化** | JSONL 格式，按 channel+key 分文件，增量写入，原子落盘 |
 | F7 | **技能系统** | SKILL.md 驱动，按需注入，最小 System Prompt |
 | F8 | **记忆系统** | SQLite + BM25 全文检索 + 向量语义检索，支持分区 |
 | F9 | **Cron 调度** | 定时任务，支持 cron 表达式和频道路由 |
 | F10 | **工作区** | Agent 独立文件操作沙箱，路径安全校验 |
 | F11 | **Console UI** | 内置 Web 控制台，实时监控、配置管理、会话查看、工作流管理 |
-| F12 | **CLI** | `agentflyer gateway/agent/message/sessions/chat/config/skills/memory/federation` 命令集 |
+| F12 | **CLI** | `agentflyer start/stop/status/agent/message/sessions/chat/config/skills/memory/stats/federation` 命令集 |
 
 ### 增强特性（E1–E8）
 
@@ -54,12 +55,12 @@ AgentFlyer 是一个类Openclaw的支持多主机联邦协作的 AI Agent 运行
 |---|------|------|
 | E1 | **Agent 网格（Mesh）** | 实例内 Agent 可相互发现、委托任务，突破树形限制 |
 | E2 | **协作技能** | 跨 Agent 能力标签，按需组合 |
-| E3 | **联邦记忆** | 记忆跨实例同步，重要度衰减，向量检索 |
+| E3 | **记忆自动检索** | 每轮对话前自动执行 BM25 检索，并将 Top-K 记忆注入上下文 |
 | E4 | **去中心化联邦** | Ed25519 身份、AES-GCM 加密通信、多种发现模式 |
 | E5 | **PoTC 工作证明** | Token 消耗证明 + FlyCredit 算力互换 |
-| E6 | **远程任务路由** | 本地 Agent 能力不足时自动路由到联邦节点 |
-| E7 | **双边账本** | 本地账本 + 对端对账，防止作弊 |
-| E8 | **用户授权控制** | 联邦网络参与必须用户明确 opt-in |
+| E6 | **意图感知路由** | 按消息文本规则选择目标 Agent，并支持各渠道 `allowFrom` 白名单 |
+| E7 | **限流保护** | 全渠道共享的按发送者固定窗口限流（默认 20 请求 / 60 秒） |
+| E8 | **API Key 轮转** | 按模型分组自动轮转多个 Key，并支持每个 Key 的使用上限 |
 
 ---
 
@@ -231,6 +232,7 @@ agentflyer chat
         "deny": [],
         "approval": ["bash", "read_file"]   // 需要用户审批的工具
       },
+      "allowFrom": [],
       "persona": {
         "language": "zh-CN",
         "outputDir": "output"
@@ -246,10 +248,48 @@ agentflyer chat
     },
     "cli":      { "enabled": true },
     "web":      { "enabled": true },
-    "telegram": { "enabled": false, "botToken": "" },
-    "discord":  { "enabled": false, "botToken": "" },
-    "feishu":   { "enabled": false, "appId": "", "appSecret": "" },
-    "qq":       { "enabled": false, "appId": "", "clientSecret": "" }
+    "telegram": {
+      "enabled": false,
+      "botToken": "",
+      "defaultAgentId": "main",
+      "allowedChatIds": [],
+      "allowFrom": []
+    },
+    "discord":  {
+      "enabled": false,
+      "botToken": "",
+      "defaultAgentId": "main",
+      "allowedChannelIds": [],
+      "allowFrom": []
+    },
+    "feishu":   {
+      "enabled": false,
+      "appId": "",
+      "appSecret": "",
+      "defaultAgentId": "main",
+      "allowedChatIds": [],
+      "allowFrom": []
+    },
+    "qq":       {
+      "enabled": false,
+      "appId": "",
+      "clientSecret": "",
+      "defaultAgentId": "main",
+      "allowedGroupIds": [],
+      "allowFrom": []
+    }
+  },
+
+  // 记忆配置
+  "memory": {
+    "enabled": true,
+    "autoFetch": true,
+    "autoFetchLimit": 5,
+    "decay": {
+      "enabled": true,
+      "halfLifeDays": 30
+    },
+    "maxEntries": 10000
   },
 
   // 联邦配置（可选，详见「联邦协作」章节）
@@ -267,7 +307,6 @@ agentflyer chat
 |----------|---------|------|
 | `anthropic` | claude-haiku-3-5, claude-opus-4-5 | 需设置 `apiKey` |
 | `openai` | gpt-4o, gpt-4o-mini | 需设置 `apiKey` |
-| `google` | gemini-1.5-pro | 需设置 `apiKey` |
 | `ollama` | qwen2.5:7b, llama3.2 | 本地运行，设置 `apiBaseUrl` |
 | `openai-compat` | deepseek-chat, 其他兼容模型 | 设置 `apiBaseUrl` + `apiKey` |
 
@@ -283,6 +322,7 @@ agentflyer chat
   "botToken": "YOUR_BOT_TOKEN",
   "defaultAgentId": "main",
   "allowedChatIds": [],      // 空数组 = 不限制
+  "allowFrom": [],           // Telegram 用户名白名单；空数组 = 全部允许
   "pollIntervalMs": 2000
 }
 ```
@@ -295,6 +335,7 @@ agentflyer chat
   "botToken": "YOUR_BOT_TOKEN",
   "defaultAgentId": "main",
   "allowedChannelIds": [],
+  "allowFrom": [],           // Discord 用户 ID 白名单；空数组 = 全部允许
   "commandPrefix": "!agent"
 }
 ```
@@ -313,6 +354,7 @@ agentflyer chat
   "encryptKey": "",            // 飞书消息加密 Key（可选）
   "defaultAgentId": "main",
   "allowedChatIds": [],        // 空数组 = 不限制
+  "allowFrom": [],             // 飞书发送者 ID 白名单；空数组 = 全部允许
   "agentMappings": {           // 飞书群名/用户昵称 → agent ID 映射
     "主控": "main",
     "一号工人": "worker-1"
@@ -328,13 +370,33 @@ agentflyer chat
   "appId": "YOUR_APP_ID",
   "clientSecret": "YOUR_CLIENT_SECRET",
   "defaultAgentId": "main",
-  "allowedGroupIds": []
+  "allowedGroupIds": [],
+  "allowFrom": []              // QQ 用户 openid 白名单；空数组 = 全部允许
 }
 ```
 
 ### Web（内置）
 
-访问 `http://localhost:19789` 进入 Console UI，使用内置 **Chat** 标签页进行实时对话，支持 WebSocket 流式回复。
+Web 渠道始终启用。可以直接连接 WebSocket，也可以使用 Console UI 内置的 **Chat** 标签页。
+
+**WebSocket 连接地址：**
+```
+ws://localhost:19789/ws/chat?token=<authToken>&agentId=<agentId>&threadKey=<threadKey>
+```
+
+| 帧 | 方向 | 说明 |
+|----|------|------|
+| `{ type: 'connected', agentId, threadKey }` | 服务端 → 客户端 | 建立连接后的握手帧 |
+| `{ text: '...' }` | 客户端 → 服务端 | 发送一条消息给 Agent |
+| `{ type: 'chunk', delta: '...' }` | 服务端 → 客户端 | 流式文本增量 |
+| `{ type: 'done' }` | 服务端 → 客户端 | 本轮回复完成 |
+| `{ type: 'error', message: '...' }` | 服务端 → 客户端 | 本轮处理出错 |
+
+也可以通过 REST SSE 接口发送消息，详见后文的 API 章节。
+
+### 渠道安全与可靠性
+
+所有消息渠道共享一套**限流器**，默认按发送者执行 20 请求 / 60 秒的固定窗口限流。所有消息还会进入**每 Agent FIFO 队列**，避免多渠道同时发送时产生并发 turn 竞争。可以在任一渠道上设置 `allowFrom` 白名单限制可交互的发送者。
 
 ---
 
@@ -412,16 +474,17 @@ mesh_broadcast({ topic: 'market-alert', payload: { ... } })
 
 AgentFlyer 使用 SQLite 存储记忆条目，支持 BM25 全文检索和向量语义检索。
 
+在每轮对话开始前，AgentFlyer 可以自动查询记忆库，并把最相关的若干条记忆注入模型上下文。该行为由 `memory.autoFetch` 与 `memory.autoFetchLimit` 控制。
+
 ```
 ~/.agentflyer/
   memory/
     memories.db       # 主记忆数据库
-    vec_index.bin     # 向量索引（sqlite-vec）
 ```
 
-### 分区
+### 记忆工具
 
-记忆按分区（partition）隔离，默认按 agent ID 分区：
+Agent 运行时可调用以下记忆工具：
 
 ```typescript
 // Agent 可调用的记忆工具
@@ -436,10 +499,8 @@ memory_forget({ id: 'mem_01J...' })
 ```jsonc
 "memory": {
   "enabled": true,
-  "embed": {
-    "provider": "local",
-    "model": "Xenova/all-MiniLM-L6-v2"   // 本地向量嵌入，无需 API
-  },
+  "autoFetch": true,
+  "autoFetchLimit": 5,
   "decay": {
     "enabled": true,
     "halfLifeDays": 30   // 记忆重要度半衰期
@@ -503,6 +564,7 @@ keywords: [搜索, 查询, 最新]
 | **Workflow** | 工作流定义与执行管理 |
 | **Memory** | 记忆条目搜索、查看与管理 |
 | **Federation** | 联邦对端状态、peer 连接管理 |
+| **Stats** | 按 Agent 查看 Token 消耗与日统计 |
 | **Guide** | 项目使用指南（即本文档）|
 | **About** | 运行时版本与许可证信息 |
 
@@ -513,8 +575,8 @@ keywords: [搜索, 查询, 最新]
 ```bash
 # ── Gateway 管理 ───────────────────────────────────────────
 agentflyer start [--port 19789] [--bind loopback]
-agentflyer gateway stop
-agentflyer gateway status
+agentflyer stop
+agentflyer status
 
 # ── Agent 管理 ─────────────────────────────────────────────
 agentflyer agent list
@@ -534,7 +596,9 @@ agentflyer chat [--agent main]
 # ── 配置管理 ───────────────────────────────────────────────
 agentflyer config show
 agentflyer config set <key> <value>
-agentflyer config edit         # 打开系统编辑器
+agentflyer config validate
+agentflyer config doctor
+agentflyer config migrate [--from <path>] [--output <path>] [--dry]
 
 # ── 技能管理 ───────────────────────────────────────────────
 agentflyer skills list
@@ -544,6 +608,9 @@ agentflyer memory search <query>
 agentflyer memory list [--agent <id>] [--limit 20]
 agentflyer memory delete <id>
 
+# ── Token 统计 ──────────────────────────────────────────────
+agentflyer stats [--agent <id>] [--days 30]
+
 # ── 联邦管理 ───────────────────────────────────────────────
 agentflyer federation status
 agentflyer federation peers
@@ -551,8 +618,41 @@ agentflyer federation trust <nodeId>
 
 # ── 快捷命令 ───────────────────────────────────────────────
 agentflyer reload     # 等同于 agent reload
+agentflyer stats      # 查看近期 Token 使用统计
 agentflyer web        # 打开 Console UI 网页
 ```
+
+---
+
+## HTTP 与 WebSocket API
+
+Gateway 提供 HTTP、SSE 与 WebSocket 接口。除健康检查外，认证方式统一为 `Authorization: Bearer <token>`；Console UI 与日志流也支持通过查询参数传入 `?token=`。
+
+### HTTP 接口
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/health` | 健康检查，无需认证 |
+| `GET` | `/console` | Console UI 页面，支持 `?token=` |
+| `GET` | `/api/logs` | SSE 日志流，支持 `?token=` |
+| `POST` | `/chat` | SSE 流式对话，请求体 `{ agentId, message, thread? }` |
+| `POST` | `/rpc` | Console UI 使用的 JSON-RPC 接口 |
+| `GET` | `/v1/models` | OpenAI 兼容模型列表 |
+| `POST` | `/v1/chat/completions` | OpenAI 兼容聊天补全，支持流式输出 |
+| `POST` | `/hooks/trigger` | Webhook 触发接口，请求体 `{ agentId, message }` |
+| `GET` | `/api/stats` | Token 统计接口，支持 `agentId` 与 `days` 查询参数 |
+| `POST` | `/channels/feishu/event` | 飞书事件回调接口 |
+| `POST` | `/channels/qq/event` | QQ 事件回调接口 |
+
+### WebSocket 接口
+
+连接方式：
+
+```text
+ws://host:port/ws/chat?token=<authToken>&agentId=<agentId>&threadKey=<threadKey>
+```
+
+服务端发送的流式帧格式见前文「消息渠道」章节；客户端可以发送形如 `{ "text": "你好" }` 的 JSON 消息。
 
 ---
 
@@ -585,6 +685,10 @@ agentflyer/
 │   │   └── web/
 │   ├── gateway/       # HTTP + WS 入口
 │   │   ├── server.ts  # 服务器启动
+│   │   ├── router.ts  # REST、SSE、OpenAI 兼容、Webhook 路由
+│   │   ├── lifecycle.ts # 启动、热重载、渠道装配
+│   │   ├── agent-queue.ts # 每 Agent FIFO 队列
+│   │   ├── rate-limiter.ts # 按发送者限流器
 │   │   ├── rpc.ts     # RPC 接口（Console UI 使用）
 │   │   └── console-ui/# React 控制台前端
 │   ├── scheduler/     # Cron 调度器
@@ -605,8 +709,10 @@ agentflyer/
 ~/.agentflyer/
 ├── agentflyer.json        # 主配置文件
 ├── credentials/           # 加密存储的 API Key（AES-256-GCM）
+├── gateway.pid            # 当前网关 PID 与端口信息
 ├── sessions/              # 会话日志（JSONL）
 ├── memory/                # 记忆数据库
+├── stats/                 # 每日 Token 统计记录
 ├── workspace/             # Agent 默认工作区
 └── skills/                # 用户自定义技能
 ```
