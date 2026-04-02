@@ -337,7 +337,10 @@ async function executeWorkflowBackground(
       return;
     }
 
-    const step = workflow.steps[stepIdx]!;
+    const step = workflow.steps[stepIdx];
+    if (!step) {
+      throw new Error(`Workflow step index out of range: ${stepIdx}`);
+    }
     const resultSlot = run.stepResults.length; // where we'll write this step's result
 
     // Push a "started" entry
@@ -368,8 +371,8 @@ async function executeWorkflowBackground(
           let agentMsg = message;
           const formatInstruction = step.outputFormatPrompt
             ? step.outputFormatPrompt
-            : step.outputFormat && FORMAT_INSTRUCTIONS[step.outputFormat]
-              ? FORMAT_INSTRUCTIONS[step.outputFormat]!
+            : step.outputFormat
+              ? (FORMAT_INSTRUCTIONS[step.outputFormat] ?? '')
               : '';
           if (formatInstruction) {
             if (step.outputFormatMode === 'prepend') {

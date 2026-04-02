@@ -72,12 +72,14 @@ export function createGatewayServer(opts: GatewayServerOptions): GatewayServer {
   // it piggybacks on the existing http.Server for a single-port setup.
   let wss: WebSocketServer | null = null;
   if (opts.wsHandler) {
-    wss = new WebSocketServer({ noServer: true });
+    const wsServer = new WebSocketServer({ noServer: true });
+    wss = wsServer;
+    const wsHandler = opts.wsHandler;
     server.on('upgrade', (req, socket, head) => {
       const url = req.url ?? '';
       if (url === '/ws/chat' || url.startsWith('/ws/chat?')) {
-        wss!.handleUpgrade(req, socket, head, (ws) => {
-          opts.wsHandler!(ws, req);
+        wsServer.handleUpgrade(req, socket, head, (ws) => {
+          wsHandler(ws, req);
         });
       } else {
         // Reject unrecognised upgrade paths cleanly.

@@ -17,7 +17,7 @@
 
 import type { RoutingConfig } from '../core/config/schema.js';
 import { createLogger } from '../core/logger.js';
-import { asAgentId, type AgentId } from '../core/types.js';
+import { type AgentId, asAgentId } from '../core/types.js';
 
 const logger = createLogger('gateway:intent-router');
 

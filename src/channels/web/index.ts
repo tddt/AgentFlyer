@@ -1,7 +1,13 @@
 import type { WebSocket as WsSocket } from 'ws';
 import { createLogger } from '../../core/logger.js';
-import { asAgentId, asThreadKey, type AgentId, type StreamChunk, type ThreadKey } from '../../core/types.js';
-import type { Channel, ChannelMessage, InboundHandler } from '../types.js';
+import {
+  type AgentId,
+  type StreamChunk,
+  type ThreadKey,
+  asAgentId,
+  asThreadKey,
+} from '../../core/types.js';
+import type { Channel, InboundHandler } from '../types.js';
 
 const logger = createLogger('channels:web');
 
@@ -51,7 +57,11 @@ export class WebChannel implements Channel {
     if (!this.connections.has(connKey)) {
       this.connections.set(connKey, new Set());
     }
-    this.connections.get(connKey)!.add(ws);
+    const connections = this.connections.get(connKey);
+    if (!connections) {
+      throw new Error(`WebChannel connection bucket missing for ${connKey}`);
+    }
+    connections.add(ws);
     logger.debug('WebChannel: WS connected', { connKey });
 
     // Send initial handshake so the client knows the connection is live.
@@ -98,7 +108,9 @@ export class WebChannel implements Channel {
     });
   }
 
-  private _getSockets(target: { agentId: AgentId; threadKey: ThreadKey }): Set<WsSocket> | undefined {
+  private _getSockets(target: { agentId: AgentId; threadKey: ThreadKey }):
+    | Set<WsSocket>
+    | undefined {
     return this.connections.get(`${target.agentId}:${target.threadKey}`);
   }
 
@@ -110,7 +122,9 @@ export class WebChannel implements Channel {
     if (!sockets?.size) {
       logger.debug('WebChannel.sendStream: no active connections', { target });
       // Drain the stream so the generator is not left suspended.
-      for await (const _chunk of stream) { /* drain */ }
+      for await (const _chunk of stream) {
+        /* drain */
+      }
       return;
     }
 
@@ -143,4 +157,3 @@ export class WebChannel implements Channel {
     }
   }
 }
-

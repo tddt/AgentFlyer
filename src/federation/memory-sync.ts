@@ -112,7 +112,13 @@ export async function queryFederatedMemory(
   );
 
   const results = await Promise.all(
-    responsePromises.map((p, i) => Promise.race([p, timeoutPromises[i]!])),
+    responsePromises.map((p, i) => {
+      const timeoutPromise = timeoutPromises[i];
+      if (!timeoutPromise) {
+        throw new Error(`Missing timeout promise for response index ${i}`);
+      }
+      return Promise.race([p, timeoutPromise]);
+    }),
   );
 
   // Merge and de-duplicate by entry id

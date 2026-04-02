@@ -1,8 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { createLogger } from '../core/logger.js';
-import { asAgentId, type AgentId, type StreamChunk } from '../core/types.js';
 import { loadStats } from '../agent/stats.js';
+import { createLogger } from '../core/logger.js';
 import { summarizeSessionErrors } from '../core/session/error-stats.js';
+import { type StreamChunk, asAgentId } from '../core/types.js';
 import { validateToken } from './auth.js';
 import { buildConsoleHtml } from './console/index.js';
 import type { IntentRouter } from './intent-router.js';

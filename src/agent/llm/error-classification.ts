@@ -10,12 +10,7 @@ export interface AgentFailureClassification {
 }
 
 const RATE_LIMIT_PATTERNS = [/\b429\b/i, /rate\s*limit/i, /too many requests/i];
-const OVERLOADED_PATTERNS = [
-  /overload(?:ed)?/i,
-  /server busy/i,
-  /service busy/i,
-  /capacity/i,
-];
+const OVERLOADED_PATTERNS = [/overload(?:ed)?/i, /server busy/i, /service busy/i, /capacity/i];
 const CONTEXT_OVERFLOW_PATTERNS = [
   /context length/i,
   /context window/i,
@@ -26,7 +21,11 @@ const CONTEXT_OVERFLOW_PATTERNS = [
   /token limit/i,
   /request too large/i,
 ];
-const COMPACTION_FAILURE_PATTERNS = [/compaction/i, /summari[sz]e.*history/i, /truncated due to context length/i];
+const COMPACTION_FAILURE_PATTERNS = [
+  /compaction/i,
+  /summari[sz]e.*history/i,
+  /truncated due to context length/i,
+];
 const TRANSIENT_HTTP_PATTERNS = [
   /\b5(?:02|03|04|21|22|24)\b/i,
   /temporar(?:ily)? unavailable/i,

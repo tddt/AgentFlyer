@@ -107,11 +107,15 @@ export class WsFederationTransport implements FederationTransport {
       this.ws = await loadWs();
       if (!this.ws) return false;
     }
+    const wsImpl = this.ws;
+    if (!wsImpl) {
+      return false;
+    }
     const id = peerNodeId ?? `${host}:${port}`;
     if (this.connections.has(id)) return true;
 
     return new Promise<boolean>((resolve) => {
-      const socket = new this.ws!.WebSocket(`ws://${host}:${port}`);
+      const socket = new wsImpl.WebSocket(`ws://${host}:${port}`);
       const timeout = setTimeout(() => {
         socket.close();
         resolve(false);

@@ -38,18 +38,23 @@ export function createWebSearchTool(opts: WebSearchToolOptions): RegisteredTool 
   if (providers.length === 0) {
     throw new Error('createWebSearchTool: at least one provider is required');
   }
+  const firstProvider = providers[0];
+  if (!firstProvider) {
+    throw new Error('createWebSearchTool: default provider is missing');
+  }
+  const defaultProvider: SearchProvider = firstProvider;
 
   const providerNames = providers.map((p) => p.name);
 
   function resolveProvider(name?: string): SearchProvider {
-    if (!name) return providers[0]!;
+    if (!name) return defaultProvider;
     const found = providers.find((p) => p.name === name);
     if (!found) {
       logger.warn('Unknown search provider requested, using default', {
         requested: name,
         available: providerNames,
       });
-      return providers[0]!;
+      return defaultProvider;
     }
     return found;
   }

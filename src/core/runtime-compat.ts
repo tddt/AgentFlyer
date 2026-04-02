@@ -2,7 +2,7 @@
 // All Bun-specific API calls should go through this module.
 
 import { createHash } from 'node:crypto';
-import { readFile as fsReadFile, rename, writeFile as fsWriteFile } from 'node:fs/promises';
+import { readFile as fsReadFile, writeFile as fsWriteFile, rename } from 'node:fs/promises';
 
 /** True when running inside Bun runtime (main thread or worker threads) */
 export const isBun: boolean =
@@ -52,10 +52,7 @@ export async function writeFileText(path: string, content: string): Promise<void
  * still safer than an in-place overwrite because readers either see the old or
  * the new content, never a partial write.
  */
-export async function atomicWriteFile(
-  path: string,
-  content: string | Buffer,
-): Promise<void> {
+export async function atomicWriteFile(path: string, content: string | Buffer): Promise<void> {
   const tmp = `${path}.tmp`;
   if (typeof content === 'string') {
     await fsWriteFile(tmp, content, 'utf-8');

@@ -9,7 +9,7 @@ import { existsSync } from 'node:fs';
 import { basename, extname, resolve } from 'node:path';
 import type { Channel } from '../../../channels/types.js';
 import { createLogger } from '../../../core/logger.js';
-import { asThreadKey, type AgentId, type ThreadKey } from '../../../core/types.js';
+import { type AgentId, asThreadKey } from '../../../core/types.js';
 import type { RegisteredTool } from '../registry.js';
 
 const logger = createLogger('tools:channel');

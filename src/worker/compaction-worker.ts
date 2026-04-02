@@ -85,7 +85,10 @@ async function callOpenAICompact(prompt: string, api: LLMApiConfig): Promise<str
 }
 
 parentPort.on('message', async (req: CompactRequest) => {
-  const port = parentPort!;
+  const port = parentPort;
+  if (!port) {
+    throw new Error('Compaction worker requires a parentPort');
+  }
   try {
     let text: string;
     if (req.api.provider === 'openai') {

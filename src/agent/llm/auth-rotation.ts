@@ -29,7 +29,10 @@ export class ApiKeyRotator {
    * Advances the cursor so successive calls get a different key.
    */
   next(): string {
-    const key = this.keys[this.index % this.keys.length]!;
+    const key = this.keys[this.index % this.keys.length];
+    if (key === undefined) {
+      throw new Error('ApiKeyRotator: no API keys available');
+    }
     this.index = (this.index + 1) % this.keys.length;
     return key;
   }

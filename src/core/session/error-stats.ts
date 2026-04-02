@@ -122,10 +122,11 @@ export function summarizeSessionErrors(
 
   const byAgent = Array.from(byAgentMap.entries())
     .map(([agentId, value]) => {
-      const topErrorCode = Array.from(value.codeCounts.entries()).sort((a, b) => {
-        if (b[1] !== a[1]) return b[1] - a[1];
-        return a[0].localeCompare(b[0]);
-      })[0]?.[0] ?? 'generic';
+      const topErrorCode =
+        Array.from(value.codeCounts.entries()).sort((a, b) => {
+          if (b[1] !== a[1]) return b[1] - a[1];
+          return a[0].localeCompare(b[0]);
+        })[0]?.[0] ?? 'generic';
       return {
         agentId,
         totalErrorSessions: value.totalErrorSessions,

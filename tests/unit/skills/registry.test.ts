@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { asSkillId } from '../../../src/core/types.js';
-import { parseSkillFile, SkillRegistry } from '../../../src/skills/registry.js';
+import { SkillRegistry, parseSkillFile } from '../../../src/skills/registry.js';
 
 describe('SkillRegistry', () => {
   it('ignores blank ids when filtering by allow-list', () => {

@@ -120,7 +120,13 @@ export async function* streamChatFromGateway(
 
   // Generator loop: drain queue, wait for more, repeat until closed.
   while (!closed || queue.length > 0) {
-    while (queue.length > 0) yield queue.shift()!;
+    while (queue.length > 0) {
+      const nextChunk = queue.shift();
+      if (!nextChunk) {
+        continue;
+      }
+      yield nextChunk;
+    }
     if (!closed) await waitForData;
   }
 

@@ -33,7 +33,12 @@ function stableSerialize(value: unknown): string {
   return JSON.stringify(String(value));
 }
 
-function hashToolOutcome(toolName: string, input: unknown, result: string, isError: boolean): string {
+function hashToolOutcome(
+  toolName: string,
+  input: unknown,
+  result: string,
+  isError: boolean,
+): string {
   return createHash('sha256')
     .update(toolName)
     .update('\n')

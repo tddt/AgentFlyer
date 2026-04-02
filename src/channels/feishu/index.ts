@@ -2,7 +2,13 @@ import { createReadStream } from 'node:fs';
 import { basename } from 'node:path';
 import * as Lark from '@larksuiteoapi/node-sdk';
 import { createLogger } from '../../core/logger.js';
-import { asAgentId, asThreadKey, type AgentId, type StreamChunk, type ThreadKey } from '../../core/types.js';
+import {
+  type AgentId,
+  type StreamChunk,
+  type ThreadKey,
+  asAgentId,
+  asThreadKey,
+} from '../../core/types.js';
 import type { Channel, ChannelMessage, ContentAttachment, InboundHandler } from '../types.js';
 
 const logger = createLogger('channels:feishu');
@@ -122,17 +128,13 @@ export class FeishuChannel implements Channel {
                 try {
                   resolvedAgentId = asAgentId(mapped);
                   break;
-                } catch {
-                  continue;
-                }
+                } catch {}
               }
               if (name && this.opts.knownAgentIds?.includes(name)) {
                 try {
                   resolvedAgentId = asAgentId(name);
                   break;
-                } catch {
-                  continue;
-                }
+                } catch {}
               }
             }
 
@@ -145,9 +147,7 @@ export class FeishuChannel implements Channel {
                     resolvedAgentId = asAgentId(targetId);
                     logger.debug('Feishu routing via text @alias', { alias, agentId: targetId });
                     break;
-                  } catch {
-                    continue;
-                  }
+                  } catch {}
                 }
               }
             }
@@ -159,9 +159,7 @@ export class FeishuChannel implements Channel {
                     resolvedAgentId = asAgentId(agentId);
                     logger.debug('Feishu routing via text agentId', { agentId });
                     break;
-                  } catch {
-                    continue;
-                  }
+                  } catch {}
                 }
               }
             }

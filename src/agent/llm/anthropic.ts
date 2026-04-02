@@ -170,7 +170,8 @@ export class AnthropicProvider implements LLMProvider {
     } catch {
       // Fallback estimate: ~4 chars per token
       const totalChars = messages.reduce((sum, m) => {
-        const content = typeof m.content === 'string' ? m.content : (JSON.stringify(m.content) ?? '');
+        const content =
+          typeof m.content === 'string' ? m.content : (JSON.stringify(m.content) ?? '');
         return sum + content.length;
       }, 0);
       return Math.ceil(totalChars / 4);

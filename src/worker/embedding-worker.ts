@@ -70,7 +70,10 @@ function stubEmbed(text: string): number[] {
 }
 
 parentPort.on('message', async (req: EmbedRequest) => {
-  const port = parentPort!;
+  const port = parentPort;
+  if (!port) {
+    throw new Error('Embedding worker requires a parentPort');
+  }
   try {
     const pipe = await getOrLoadPipeline(req.model);
     if (pipe) {

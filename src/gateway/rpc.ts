@@ -6,15 +6,18 @@ import { fileURLToPath } from 'node:url';
 import { Cron } from 'croner';
 import { ulid } from 'ulid';
 import type { AgentRunner } from '../agent/runner.js';
-import { summarizeSessionErrors } from '../core/session/error-stats.js';
-import { buildClearedSessionUpdates, findFailedSessionsForAgent } from '../core/session/recovery.js';
 import type { ScheduledTaskMeta } from '../agent/tools/builtin/scheduler-tools.js';
 import type { Channel } from '../channels/types.js';
 import type { Config } from '../core/config/schema.js';
 import { createLogger } from '../core/logger.js';
+import { summarizeSessionErrors } from '../core/session/error-stats.js';
 import type { SessionMetaStore } from '../core/session/meta.js';
+import {
+  buildClearedSessionUpdates,
+  findFailedSessionsForAgent,
+} from '../core/session/recovery.js';
 import type { SessionStore, StoredMessage } from '../core/session/store.js';
-import { asSessionKey, type MessageContent } from '../core/types.js';
+import { type MessageContent, asSessionKey } from '../core/types.js';
 import type { EmbedConfig } from '../memory/embed.js';
 import { searchMemory } from '../memory/search.js';
 import type { MemoryStore } from '../memory/store.js';
@@ -559,7 +562,10 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
               errorCode,
               clearedSessions: failedSessions.length,
               remainingMatchingFailedSessions: 0,
-              remainingFailedSessionsForAgent: Math.max(0, agentFailedSessions.length - failedSessions.length),
+              remainingFailedSessionsForAgent: Math.max(
+                0,
+                agentFailedSessions.length - failedSessions.length,
+              ),
             },
           };
         }

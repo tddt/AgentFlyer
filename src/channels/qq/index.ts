@@ -1,7 +1,7 @@
 import * as crypto from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createLogger } from '../../core/logger.js';
-import { asThreadKey, type AgentId, type StreamChunk, type ThreadKey } from '../../core/types.js';
+import { type AgentId, type StreamChunk, type ThreadKey, asThreadKey } from '../../core/types.js';
 import type { Channel, ChannelMessage, InboundHandler } from '../types.js';
 
 const logger = createLogger('channels:qq');

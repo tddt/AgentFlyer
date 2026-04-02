@@ -6,7 +6,7 @@ import type { ChannelMessage } from '../../channels/types.js';
 import { loadConfig } from '../../core/config/loader.js';
 import { getDefaultConfigDir } from '../../core/config/loader.js';
 import { setLogLevel } from '../../core/logger.js';
-import { asAgentId, asThreadKey, type StreamChunk } from '../../core/types.js';
+import { type StreamChunk, asAgentId, asThreadKey } from '../../core/types.js';
 import { isGatewayRunning, startGateway } from '../../gateway/lifecycle.js';
 import { streamChatFromGateway } from '../gateway-client.js';
 
@@ -117,7 +117,7 @@ export const chatCommand = defineCommand({
           yield* streamChatFromGateway({
             port,
             token,
-            agentId: agentId!,
+            agentId: brandedAgentId,
             message: text,
             thread: threadKey,
           });

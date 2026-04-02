@@ -20,13 +20,14 @@ import type { MemoryOrganizer } from '../memory/organizer.js';
 import type { MemoryStore } from '../memory/store.js';
 import { checkCompactionNeeded, runCompaction } from './compactor/index.js';
 import { classifyAgentFailure } from './llm/error-classification.js';
-import { isRecoverableStreamError } from './llm/stream-error.js';
 import type { LLMProvider } from './llm/provider.js';
+import { isRecoverableStreamError } from './llm/stream-error.js';
 import { buildSystemPrompt } from './prompt/builder.js';
 import { layer0Identity, layer1Workspace, layer2Skills, layer3Memory } from './prompt/layers.js';
 import { buildPersonaContent } from './prompt/soul.js';
 import { readWorkspaceDocCached } from './prompt/workspace.js';
 import { recordTokenBill } from './stats.js';
+import { ToolLoopDetector } from './tools/loop-detection.js';
 import {
   type ApprovalHandler,
   type ToolPolicy,
@@ -34,7 +35,6 @@ import {
   filterAllowedTools,
   policyBlockedResult,
 } from './tools/policy.js';
-import { ToolLoopDetector } from './tools/loop-detection.js';
 import type { ToolRegistry } from './tools/registry.js';
 
 const logger = createLogger('agent:runner');
@@ -353,7 +353,10 @@ export class AgentRunner {
 
       let systemPrompt: string;
       if (allBaseUnchanged) {
-        systemPrompt = this.cachedSystemPrompt!;
+        if (this.cachedSystemPrompt === null) {
+          throw new Error('cachedSystemPrompt missing while cache reuse is enabled');
+        }
+        systemPrompt = this.cachedSystemPrompt;
       } else {
         ({ systemPrompt } = buildSystemPrompt(
           [
@@ -379,9 +382,7 @@ export class AgentRunner {
       // ── 2. Load conversation history ────────────────────────────────────────
       const history = await sessionStore.readAll(this.sessionKey);
       let messages: Message[] = sanitizeMessages(
-        history
-          .filter((s) => s.content != null)
-          .map((s) => ({ role: s.role, content: s.content })),
+        history.filter((s) => s.content != null).map((s) => ({ role: s.role, content: s.content })),
       );
 
       // Append the new user message
@@ -742,7 +743,7 @@ export class AgentRunner {
         lastActivity: Date.now(),
         contextTokensEstimate: totalInputTokens,
         error: finalFailureMessage ? formatFailureReply(finalFailureMessage) : undefined,
-        errorCode: finalFailureMessage ? finalFailureCode ?? 'generic' : undefined,
+        errorCode: finalFailureMessage ? (finalFailureCode ?? 'generic') : undefined,
       });
 
       // ── 5. Record token bill (fire-and-forget; never throws) ───────────────
@@ -772,7 +773,7 @@ export class AgentRunner {
       const failureText = formatFailureReply(failure.summary);
       logger.error('Agent turn failed unexpectedly', {
         agentId: this.agentId,
-        error: err instanceof Error ? err.stack ?? err.message : String(err),
+        error: err instanceof Error ? (err.stack ?? err.message) : String(err),
       });
       await this.deps.metaStore.update(this.sessionKey, {
         agentId: this.agentId,

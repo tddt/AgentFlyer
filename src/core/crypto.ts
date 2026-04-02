@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import { gcm } from '@noble/ciphers/aes';
 import * as ed from '@noble/ed25519';
 import { sha512 } from '@noble/hashes/sha512';
-import { asNodeId, type NodeId } from './types.js';
+import { type NodeId, asNodeId } from './types.js';
 
 // ed25519 v2 requires sha512 for sync operations
 ed.etc.sha512Sync = (...m: Uint8Array[]) => sha512(ed.etc.concatBytes(...m));

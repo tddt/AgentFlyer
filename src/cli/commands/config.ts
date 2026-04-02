@@ -46,11 +46,18 @@ export const configCommand = defineCommand({
         const keys = (args.key as string).split('.');
         let obj = cfg;
         for (let i = 0; i < keys.length - 1; i++) {
-          const k = keys[i]!;
+          const k = keys[i];
+          if (!k) {
+            continue;
+          }
           if (obj[k] === undefined || typeof obj[k] !== 'object') obj[k] = {};
           obj = obj[k] as Record<string, unknown>;
         }
-        const lastKey = keys[keys.length - 1]!;
+        const lastKey = keys[keys.length - 1];
+        if (!lastKey) {
+          note('Config key cannot be empty', 'Validation error');
+          process.exit(1);
+        }
         try {
           obj[lastKey] = JSON5.parse(args.value as string);
         } catch {

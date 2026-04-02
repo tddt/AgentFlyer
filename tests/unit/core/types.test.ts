@@ -48,7 +48,11 @@ describe('types — branded helpers', () => {
       const agentId = 'a' as AgentId;
       const threadKey = 'b:c' as ThreadKey;
       const key = makeSessionKey(agentId, threadKey);
-      const parsed = parseSessionKey(key)!;
+      const parsed = parseSessionKey(key);
+      expect(parsed).not.toBeNull();
+      if (!parsed) {
+        throw new Error('Expected parseSessionKey to return a value');
+      }
       expect(parsed.agentId).toBe(agentId);
       expect(parsed.threadKey).toBe(threadKey);
     });
@@ -79,7 +83,9 @@ describe('types — branded helpers', () => {
     });
 
     it('asSessionKey rejects invalid format', () => {
-      expect(() => asSessionKey('abc')).toThrow('SessionKey must match agent:<agentId>:<threadKey>');
+      expect(() => asSessionKey('abc')).toThrow(
+        'SessionKey must match agent:<agentId>:<threadKey>',
+      );
     });
 
     it('asNodeId rejects blank strings', () => {

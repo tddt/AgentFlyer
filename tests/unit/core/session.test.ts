@@ -3,11 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { summarizeSessionErrors } from '../../../src/core/session/error-stats.js';
+import { SessionMetaStore } from '../../../src/core/session/meta.js';
 import {
   buildClearedSessionUpdates,
   findFailedSessionsForAgent,
 } from '../../../src/core/session/recovery.js';
-import { SessionMetaStore } from '../../../src/core/session/meta.js';
 import { SessionStore } from '../../../src/core/session/store.js';
 import type { StoredMessage } from '../../../src/core/session/store.js';
 import { asAgentId, asThreadKey, makeSessionKey } from '../../../src/core/types.js';

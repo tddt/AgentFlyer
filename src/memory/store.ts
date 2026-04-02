@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createLogger } from '../core/logger.js';
 import { type AnyDatabase, openDatabase } from '../core/runtime-compat.js';
-import { asMemoryEntryId, type MemoryEntryId } from '../core/types.js';
+import { type MemoryEntryId, asMemoryEntryId } from '../core/types.js';
 
 const logger = createLogger('memory:store');
 

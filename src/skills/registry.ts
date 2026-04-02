@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import matter from 'gray-matter';
 import type { Config } from '../core/config/schema.js';
 import { createLogger } from '../core/logger.js';
-import { asSkillId, type SkillId } from '../core/types.js';
+import { type SkillId, asSkillId } from '../core/types.js';
 
 const logger = createLogger('skills:registry');
 

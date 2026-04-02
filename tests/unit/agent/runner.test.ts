@@ -2,13 +2,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { AgentRunner } from '../../../src/agent/runner.js';
 import type { LLMProvider } from '../../../src/agent/llm/provider.js';
+import type { RunParams } from '../../../src/agent/llm/provider.js';
+import { AgentRunner } from '../../../src/agent/runner.js';
 import { ToolRegistry } from '../../../src/agent/tools/registry.js';
+import type { AgentConfig } from '../../../src/core/config/schema.js';
 import { SessionMetaStore } from '../../../src/core/session/meta.js';
 import { SessionStore } from '../../../src/core/session/store.js';
-import type { AgentConfig } from '../../../src/core/config/schema.js';
-import type { RunParams } from '../../../src/agent/llm/provider.js';
 import type { StreamChunk } from '../../../src/core/types.js';
 
 const tempDirs: string[] = [];
@@ -32,7 +32,12 @@ class StubProvider implements LLMProvider {
   async *run(_params: RunParams): AsyncIterable<StreamChunk> {
     this.callCount += 1;
     if (this.callCount === 1) {
-      yield { type: 'tool_use_delta', id: 'call-1', name: 'bash', inputJson: '{"command":"echo hi"}' };
+      yield {
+        type: 'tool_use_delta',
+        id: 'call-1',
+        name: 'bash',
+        inputJson: '{"command":"echo hi"}',
+      };
       yield {
         type: 'done',
         inputTokens: 10,
@@ -358,7 +363,12 @@ describe('AgentRunner', () => {
       }
 
       async *run(_params: RunParams): AsyncIterable<StreamChunk> {
-        yield { type: 'tool_use_delta', id: `call-${toolExecutions + 1}`, name: 'progress_tool', inputJson: '{}' };
+        yield {
+          type: 'tool_use_delta',
+          id: `call-${toolExecutions + 1}`,
+          name: 'progress_tool',
+          inputJson: '{}',
+        };
         yield { type: 'done', inputTokens: 1, outputTokens: 1, stopReason: 'tool_use' };
       }
     }

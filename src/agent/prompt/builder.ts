@@ -25,8 +25,10 @@ export function buildSystemPrompt(layers: PromptLayer[], maxSystemTokens = 8_000
   // Drop trimmable layers (highest id first) until we fit
   const active = [...tagged];
   for (let i = active.length - 1; i >= 0 && total > maxSystemTokens; i--) {
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    const layer = active[i]!;
+    const layer = active[i];
+    if (!layer) {
+      continue;
+    }
     if (layer.trimable) {
       total -= layer.estimatedTokens;
       active.splice(i, 1);

@@ -10,7 +10,7 @@
 import { appendFile, mkdir, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createLogger } from '../core/logger.js';
-import { asAgentId, type AgentId } from '../core/types.js';
+import { type AgentId, asAgentId } from '../core/types.js';
 
 const logger = createLogger('agent:stats');
 
