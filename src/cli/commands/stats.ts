@@ -3,7 +3,7 @@ import { defineCommand } from 'citty';
 import type { DailyStats } from '../../agent/stats.js';
 import { loadStats } from '../../agent/stats.js';
 import { getDefaultConfigDir } from '../../core/config/loader.js';
-import type { AgentId } from '../../core/types.js';
+import { asAgentId } from '../../core/types.js';
 
 function padEnd(s: string, len: number): string {
   return s.length >= len ? s.slice(0, len) : s + ' '.repeat(len - s.length);
@@ -100,7 +100,8 @@ export const statsCommand = defineCommand({
   async run({ args }) {
     const dataDir = getDefaultConfigDir();
     const limitDays = Math.max(1, Number.parseInt(args.days as string, 10) || 30);
-    const agentId = args.agent as string | undefined as AgentId | undefined;
+    const agentArg = args.agent as string | undefined;
+    const agentId = agentArg?.trim() ? asAgentId(agentArg) : undefined;
 
     const rows = await loadStats(dataDir, agentId, limitDays);
 

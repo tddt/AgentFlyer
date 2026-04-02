@@ -1,6 +1,6 @@
 import type { WebSocket as WsSocket } from 'ws';
 import { createLogger } from '../../core/logger.js';
-import type { AgentId, StreamChunk, ThreadKey } from '../../core/types.js';
+import { asAgentId, asThreadKey, type AgentId, type StreamChunk, type ThreadKey } from '../../core/types.js';
 import type { Channel, ChannelMessage, InboundHandler } from '../types.js';
 
 const logger = createLogger('channels:web');
@@ -66,8 +66,8 @@ export class WebChannel implements Channel {
           ws.send(JSON.stringify({ type: 'error', message: 'Channel not ready' }));
           return;
         }
-        const resolvedAgentId = (msg.agentId ?? agentId) as AgentId;
-        const resolvedThreadKey = (msg.threadKey ?? threadKey) as ThreadKey;
+        const resolvedAgentId = msg.agentId?.trim() ? asAgentId(msg.agentId) : agentId;
+        const resolvedThreadKey = msg.threadKey?.trim() ? asThreadKey(msg.threadKey) : threadKey;
         void this.handler({
           channelId: 'web',
           agentId: resolvedAgentId,

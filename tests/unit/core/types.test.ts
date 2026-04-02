@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   asAgentId,
+  asMemoryEntryId,
+  asNodeId,
+  asReceiptId,
   asSessionKey,
+  asSkillId,
+  asTaskId,
   asThreadKey,
   makeSessionKey,
   parseSessionKey,
@@ -34,6 +39,11 @@ describe('types — branded helpers', () => {
       expect(parseSessionKey('not-valid' as ReturnType<typeof makeSessionKey>)).toBeNull();
     });
 
+    it('returns null for blank agent id or thread key', () => {
+      expect(parseSessionKey('agent:   :thread' as ReturnType<typeof makeSessionKey>)).toBeNull();
+      expect(parseSessionKey('agent:main:   ' as ReturnType<typeof makeSessionKey>)).toBeNull();
+    });
+
     it('round-trips makeSessionKey → parseSessionKey', () => {
       const agentId = 'a' as AgentId;
       const threadKey = 'b:c' as ThreadKey;
@@ -50,14 +60,62 @@ describe('types — branded helpers', () => {
       expect(id).toBe('hello');
     });
 
+    it('asAgentId rejects blank strings', () => {
+      expect(() => asAgentId('   ')).toThrow('AgentId cannot be empty');
+    });
+
     it('asThreadKey casts string', () => {
       const k = asThreadKey('thread-1');
       expect(k).toBe('thread-1');
     });
 
+    it('asThreadKey rejects blank strings', () => {
+      expect(() => asThreadKey('')).toThrow('ThreadKey cannot be empty');
+    });
+
     it('asSessionKey casts string', () => {
       const k = asSessionKey('agent:a:b');
       expect(k).toBe('agent:a:b');
+    });
+
+    it('asSessionKey rejects invalid format', () => {
+      expect(() => asSessionKey('abc')).toThrow('SessionKey must match agent:<agentId>:<threadKey>');
+    });
+
+    it('asNodeId rejects blank strings', () => {
+      expect(asNodeId('node-1')).toBe('node-1');
+      expect(() => asNodeId('   ')).toThrow('NodeId cannot be empty');
+    });
+
+    it('asSkillId rejects blank strings', () => {
+      expect(asSkillId('search')).toBe('search');
+      expect(() => asSkillId('')).toThrow('SkillId cannot be empty');
+    });
+
+    it('asMemoryEntryId rejects blank strings', () => {
+      expect(asMemoryEntryId('mem-1')).toBe('mem-1');
+      expect(() => asMemoryEntryId('')).toThrow('MemoryEntryId cannot be empty');
+    });
+
+    it('asTaskId rejects blank strings', () => {
+      expect(asTaskId('task-1')).toBe('task-1');
+      expect(() => asTaskId('')).toThrow('TaskId cannot be empty');
+    });
+
+    it('asReceiptId rejects blank strings', () => {
+      expect(asReceiptId('receipt-1')).toBe('receipt-1');
+      expect(() => asReceiptId('')).toThrow('ReceiptId cannot be empty');
+    });
+  });
+
+  describe('makeSessionKey', () => {
+    it('rejects blank branded values', () => {
+      expect(() => makeSessionKey('   ' as AgentId, 'thread-1' as ThreadKey)).toThrow(
+        'AgentId cannot be empty',
+      );
+      expect(() => makeSessionKey('agent-1' as AgentId, '   ' as ThreadKey)).toThrow(
+        'ThreadKey cannot be empty',
+      );
     });
   });
 });

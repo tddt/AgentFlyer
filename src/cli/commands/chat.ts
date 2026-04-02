@@ -6,7 +6,7 @@ import type { ChannelMessage } from '../../channels/types.js';
 import { loadConfig } from '../../core/config/loader.js';
 import { getDefaultConfigDir } from '../../core/config/loader.js';
 import { setLogLevel } from '../../core/logger.js';
-import type { AgentId, StreamChunk, ThreadKey } from '../../core/types.js';
+import { asAgentId, asThreadKey, type StreamChunk } from '../../core/types.js';
 import { isGatewayRunning, startGateway } from '../../gateway/lifecycle.js';
 import { streamChatFromGateway } from '../gateway-client.js';
 
@@ -73,9 +73,10 @@ export const chatCommand = defineCommand({
       process.exit(1);
     }
 
-    const threadKey = args.thread as string as ThreadKey;
+    const brandedAgentId = asAgentId(agentId);
+    const threadKey = asThreadKey(args.thread as string);
     const channel = new CliChannel({
-      agentId: agentId as AgentId,
+      agentId: brandedAgentId,
       threadKey,
       showStats: Boolean(args.stats),
     });
@@ -121,7 +122,7 @@ export const chatCommand = defineCommand({
             thread: threadKey,
           });
         }
-        await channel.sendStream({ agentId: agentId as AgentId, threadKey }, remoteStream());
+        await channel.sendStream({ agentId: brandedAgentId, threadKey }, remoteStream());
       });
     } else {
       // ── Local mode: start gateway in-process ──────────────────────────────
@@ -167,7 +168,7 @@ export const chatCommand = defineCommand({
             next = await gen.next();
           }
         }
-        await channel.sendStream({ agentId: agentId as AgentId, threadKey }, streamChunks());
+        await channel.sendStream({ agentId: brandedAgentId, threadKey }, streamChunks());
       });
     }
   },

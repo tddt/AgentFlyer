@@ -4,6 +4,16 @@ import { join } from 'node:path';
 import type { SessionKey } from '../types.js';
 
 export type SessionStatus = 'idle' | 'running' | 'compacting' | 'error';
+export type SessionErrorCode =
+  | 'generic'
+  | 'rate_limit'
+  | 'overloaded'
+  | 'context_overflow'
+  | 'compaction_failure'
+  | 'transient_http'
+  | 'billing'
+  | 'tool_loop'
+  | 'tool_round_limit';
 
 export interface SessionMeta {
   sessionKey: SessionKey;
@@ -17,6 +27,7 @@ export interface SessionMeta {
   lastCompactionAt?: number;
   compactionCount: number;
   error?: string;
+  errorCode?: SessionErrorCode;
 }
 
 function sessionKeyToMetaFilename(sessionKey: SessionKey): string {

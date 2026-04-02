@@ -1,7 +1,7 @@
 import * as crypto from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createLogger } from '../../core/logger.js';
-import type { AgentId, StreamChunk, ThreadKey } from '../../core/types.js';
+import { asThreadKey, type AgentId, type StreamChunk, type ThreadKey } from '../../core/types.js';
 import type { Channel, ChannelMessage, InboundHandler } from '../types.js';
 
 const logger = createLogger('channels:qq');
@@ -226,14 +226,14 @@ export class QQChannel implements Channel {
           logger.debug('QQ group message from non-allowed group skipped', { groupOpenid });
           return;
         }
-        threadKey = `qq:group:${groupOpenid}` as ThreadKey;
+        threadKey = asThreadKey(`qq:group:${groupOpenid}`);
       } else if (eventType === 'C2C_MESSAGE_CREATE') {
         // Direct message to bot
         openid = (d.author as Record<string, string> | undefined)?.user_openid ?? '';
         msgId = (d.id as string) ?? '';
         text = ((d.content as string) ?? '').trim();
         isC2C = true;
-        threadKey = `qq:c2c:${openid}` as ThreadKey;
+        threadKey = asThreadKey(`qq:c2c:${openid}`);
       } else {
         return; // Ignore other event types
       }

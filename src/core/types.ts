@@ -27,31 +27,79 @@ export interface NodeIdentity {
 }
 
 // ─── Session key helpers ──────────────────────────────────────────────────────
+const SESSION_KEY_PATTERN = /^agent:([^:]+):(.+)$/;
+
+function ensureNonBlankString(value: string, label: string): string {
+  if (value.trim().length === 0) {
+    throw new Error(`${label} cannot be empty`);
+  }
+  return value;
+}
+
+function parseSessionKeyParts(key: string): { agentId: string; threadKey: string } | null {
+  const match = SESSION_KEY_PATTERN.exec(key);
+  if (!match || !match[1] || !match[2]) {
+    return null;
+  }
+  if (match[1].trim().length === 0 || match[2].trim().length === 0) {
+    return null;
+  }
+  return {
+    agentId: match[1],
+    threadKey: match[2],
+  };
+}
+
 export function makeSessionKey(agentId: AgentId, threadKey: ThreadKey): SessionKey {
-  return `agent:${agentId}:${threadKey}` as SessionKey;
+  const safeAgentId = ensureNonBlankString(agentId, 'AgentId');
+  const safeThreadKey = ensureNonBlankString(threadKey, 'ThreadKey');
+  return `agent:${safeAgentId}:${safeThreadKey}` as SessionKey;
 }
 
 export function parseSessionKey(
   key: SessionKey,
 ): { agentId: AgentId; threadKey: ThreadKey } | null {
-  const match = /^agent:([^:]+):(.+)$/.exec(key);
-  if (!match || !match[1] || !match[2]) return null;
+  const parsed = parseSessionKeyParts(key);
+  if (!parsed) return null;
   return {
-    agentId: match[1] as AgentId,
-    threadKey: match[2] as ThreadKey,
+    agentId: parsed.agentId as AgentId,
+    threadKey: parsed.threadKey as ThreadKey,
   };
 }
 
 export function asAgentId(s: string): AgentId {
-  return s as AgentId;
+  return ensureNonBlankString(s, 'AgentId') as AgentId;
 }
 
 export function asThreadKey(s: string): ThreadKey {
-  return s as ThreadKey;
+  return ensureNonBlankString(s, 'ThreadKey') as ThreadKey;
 }
 
 export function asSessionKey(s: string): SessionKey {
+  if (!parseSessionKeyParts(s)) {
+    throw new Error('SessionKey must match agent:<agentId>:<threadKey>');
+  }
   return s as SessionKey;
+}
+
+export function asNodeId(s: string): NodeId {
+  return ensureNonBlankString(s, 'NodeId') as NodeId;
+}
+
+export function asSkillId(s: string): SkillId {
+  return ensureNonBlankString(s, 'SkillId') as SkillId;
+}
+
+export function asMemoryEntryId(s: string): MemoryEntryId {
+  return ensureNonBlankString(s, 'MemoryEntryId') as MemoryEntryId;
+}
+
+export function asTaskId(s: string): TaskId {
+  return ensureNonBlankString(s, 'TaskId') as TaskId;
+}
+
+export function asReceiptId(s: string): ReceiptId {
+  return ensureNonBlankString(s, 'ReceiptId') as ReceiptId;
 }
 
 // ─── Message content types ───────────────────────────────────────────────────

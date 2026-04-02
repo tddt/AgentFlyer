@@ -2,7 +2,6 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import chokidar from 'chokidar';
 import { createLogger } from '../core/logger.js';
-import type { MemoryEntryId } from '../core/types.js';
 import { type EmbedConfig, embed } from './embed.js';
 import type { MemoryStore } from './store.js';
 
@@ -59,11 +58,11 @@ async function syncFile(
   });
 
   // Rebuild embedding if not yet stored
-  const existing = store.loadEmbedding(entry.id as MemoryEntryId);
+  const existing = store.loadEmbedding(entry.id);
   if (!existing) {
     try {
       const vec = await embed(content, embedConfig);
-      store.saveEmbedding(entry.id as MemoryEntryId, vec, embedConfig.model);
+      store.saveEmbedding(entry.id, vec, embedConfig.model);
     } catch (err) {
       logger.warn('Failed to generate embedding', { file: filePath, error: String(err) });
     }

@@ -3,6 +3,7 @@ import { ulid } from 'ulid';
 import type { AgentConfig } from '../core/config/schema.js';
 import { createLogger } from '../core/logger.js';
 import type { SessionMetaStore } from '../core/session/meta.js';
+import type { SessionErrorCode } from '../core/session/meta.js';
 import type { SessionStore, StoredMessage } from '../core/session/store.js';
 import type {
   AgentId,
@@ -14,10 +15,12 @@ import type {
   ToolResultContent,
   ToolUseContent,
 } from '../core/types.js';
-import { makeSessionKey } from '../core/types.js';
+import { asAgentId, asThreadKey, makeSessionKey } from '../core/types.js';
 import type { MemoryOrganizer } from '../memory/organizer.js';
 import type { MemoryStore } from '../memory/store.js';
 import { checkCompactionNeeded, runCompaction } from './compactor/index.js';
+import { classifyAgentFailure } from './llm/error-classification.js';
+import { isRecoverableStreamError } from './llm/stream-error.js';
 import type { LLMProvider } from './llm/provider.js';
 import { buildSystemPrompt } from './prompt/builder.js';
 import { layer0Identity, layer1Workspace, layer2Skills, layer3Memory } from './prompt/layers.js';
@@ -31,6 +34,7 @@ import {
   filterAllowedTools,
   policyBlockedResult,
 } from './tools/policy.js';
+import { ToolLoopDetector } from './tools/loop-detection.js';
 import type { ToolRegistry } from './tools/registry.js';
 
 const logger = createLogger('agent:runner');
@@ -46,6 +50,22 @@ const READ_ONLY_TOOLS = new Set([
 
 /** Mutation tools that invalidate the read-only tool result cache. */
 const MUTATION_TOOLS = new Set(['write_file', 'create_file', 'edit_file', 'bash', 'run_terminal']);
+const MAX_RECOVERABLE_STREAM_RETRIES = 1;
+const RECOVERABLE_STREAM_RETRY_DELAY_MS = 1200;
+
+function normalizeFailureSummary(message: string): string {
+  const trimmed = message.replace(/\s+/g, ' ').trim().replace(/\.+$/, '');
+  if (!trimmed) return '发生未知错误';
+  return trimmed.length > 240 ? `${trimmed.slice(0, 237)}...` : trimmed;
+}
+
+function formatFailureReply(message: string): string {
+  return `⚠️ 任务执行失败：${normalizeFailureSummary(message)}`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
  * Remove messages that violate OpenAI's tool_call sequencing rules.
@@ -222,14 +242,14 @@ export class AgentRunner {
     private readonly config: AgentConfig,
     private readonly deps: RunnerDeps,
   ) {
-    this.agentId = config.id as AgentId;
-    this.threadKey = 'default' as ThreadKey;
+    this.agentId = asAgentId(config.id);
+    this.threadKey = asThreadKey('default');
     this.sessionKey = makeSessionKey(this.agentId, this.threadKey);
   }
 
   /** Change the active thread (creates a new session file). */
   setThread(threadKey: string): void {
-    this.threadKey = threadKey as ThreadKey;
+    this.threadKey = asThreadKey(threadKey);
     this.sessionKey = makeSessionKey(this.agentId, this.threadKey);
     this.promptLayerHashes.clear();
     this.cachedSystemPrompt = null;
@@ -291,6 +311,8 @@ export class AgentRunner {
       throw new Error(`Agent '${this.agentId}' is already processing a turn`);
     }
     this._running = true;
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
     try {
       const { provider, toolRegistry, sessionStore, metaStore, approvalHandler } = this.deps;
       const configModel =
@@ -398,11 +420,15 @@ export class AgentRunner {
       }
 
       // ── 3. Main agentic loop ────────────────────────────────────────────────
-      let totalInputTokens = 0;
-      let totalOutputTokens = 0;
       let totalCacheReadTokens = 0;
       let totalText = '';
       let toolRounds = 0; // rounds that actually invoked tools
+      const toolFailureMessages: string[] = [];
+      let finalFailureMessage: string | null = null;
+      let finalFailureCode: SessionErrorCode | undefined;
+      const toolLoopDetector = new ToolLoopDetector();
+      let recoverableStreamRetries = 0;
+      let toolRoundLimitHit = false;
 
       const MAX_TOOL_ROUNDS = 20; // safety cap
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
@@ -434,48 +460,84 @@ export class AgentRunner {
           .map((t) => t.definition)
           .filter((d) => permittedNames.has(d.name));
 
-        // Accumulate tool calls from streaming
-        const toolCallMap = new Map<string, { name: string; inputJson: string }>();
+        let toolCallMap = new Map<string, { name: string; inputJson: string }>();
         let accText = '';
         let stopReason: 'end_turn' | 'tool_use' | 'max_tokens' | 'stop_sequence' = 'end_turn';
-        let _doneEmitted = false;
+        let streamErrorMessage: string | null = null;
 
-        // Track ids by index (OpenAI sends partial ids per index)
-        const indexToId = new Map<string, string>();
+        while (true) {
+          toolCallMap = new Map<string, { name: string; inputJson: string }>();
+          accText = '';
+          stopReason = 'end_turn';
+          streamErrorMessage = null;
+          let sawTextDelta = false;
+          let sawToolUseDelta = false;
 
-        for await (const chunk of provider.run({
-          model,
-          systemPrompt,
-          messages,
-          tools: toolDefs,
-          maxTokens,
-          temperature: this.deps.resolvedModel?.temperature,
-        })) {
-          yield chunk;
+          // Track ids by index (OpenAI sends partial ids per index)
+          const indexToId = new Map<string, string>();
 
-          if (chunk.type === 'text_delta') {
-            accText += chunk.text;
-          } else if (chunk.type === 'tool_use_delta') {
-            const id = chunk.id || indexToId.get(chunk.name) || chunk.name;
-            if (chunk.id) indexToId.set(chunk.name, chunk.id);
-            const existing = toolCallMap.get(id) ?? { name: chunk.name, inputJson: '' };
-            if (chunk.name && !existing.name) existing.name = chunk.name;
-            existing.inputJson += chunk.inputJson;
-            toolCallMap.set(id, existing);
-          } else if (chunk.type === 'done') {
-            totalInputTokens += chunk.inputTokens;
-            totalOutputTokens += chunk.outputTokens;
-            totalCacheReadTokens += chunk.cacheReadTokens ?? 0;
-            stopReason = chunk.stopReason;
-            _doneEmitted = true;
-          } else if (chunk.type === 'error') {
-            logger.error('LLM error', { message: chunk.message });
-            // Clear accumulated tool calls so we never persist an orphaned
-            // assistant message (tool_calls without tool_results).
-            toolCallMap.clear();
-            accText = '';
-            break;
+          try {
+            for await (const chunk of provider.run({
+              model,
+              systemPrompt,
+              messages,
+              tools: toolDefs,
+              maxTokens,
+              temperature: this.deps.resolvedModel?.temperature,
+            })) {
+              yield chunk;
+
+              if (chunk.type === 'text_delta') {
+                accText += chunk.text;
+                sawTextDelta = true;
+              } else if (chunk.type === 'tool_use_delta') {
+                sawToolUseDelta = true;
+                const id = chunk.id || indexToId.get(chunk.name) || chunk.name;
+                if (chunk.id) indexToId.set(chunk.name, chunk.id);
+                const existing = toolCallMap.get(id) ?? { name: chunk.name, inputJson: '' };
+                if (chunk.name && !existing.name) existing.name = chunk.name;
+                existing.inputJson += chunk.inputJson;
+                toolCallMap.set(id, existing);
+              } else if (chunk.type === 'done') {
+                totalInputTokens += chunk.inputTokens;
+                totalOutputTokens += chunk.outputTokens;
+                totalCacheReadTokens += chunk.cacheReadTokens ?? 0;
+                stopReason = chunk.stopReason;
+              } else if (chunk.type === 'error') {
+                logger.error('LLM error', { message: chunk.message });
+                // Clear accumulated tool calls so we never persist an orphaned
+                // assistant message (tool_calls without tool_results).
+                toolCallMap.clear();
+                streamErrorMessage = chunk.message;
+                break;
+              }
+            }
+          } catch (err) {
+            streamErrorMessage = err instanceof Error ? err.message : String(err);
+            logger.error('LLM stream threw unexpectedly', {
+              agentId: this.agentId,
+              message: streamErrorMessage,
+            });
           }
+
+          const canRetryRecoverableStream =
+            streamErrorMessage !== null &&
+            !sawTextDelta &&
+            !sawToolUseDelta &&
+            toolCallMap.size === 0 &&
+            recoverableStreamRetries < MAX_RECOVERABLE_STREAM_RETRIES &&
+            isRecoverableStreamError(streamErrorMessage);
+
+          if (!canRetryRecoverableStream) break;
+
+          recoverableStreamRetries += 1;
+          logger.warn('Retrying recoverable LLM stream failure', {
+            agentId: this.agentId,
+            retry: recoverableStreamRetries,
+            delayMs: RECOVERABLE_STREAM_RETRY_DELAY_MS,
+            message: streamErrorMessage,
+          });
+          await sleep(RECOVERABLE_STREAM_RETRY_DELAY_MS);
         }
 
         totalText += accText;
@@ -497,15 +559,24 @@ export class AgentRunner {
             ? [...(accText ? [{ type: 'text' as const, text: accText }] : []), ...assistantToolUse]
             : accText;
 
-        const assistantMsg: StoredMessage = {
-          id: ulid(),
-          sessionKey: this.sessionKey,
-          role: 'assistant',
-          content: assistantContent,
-          timestamp: Date.now(),
-        };
-        await sessionStore.append(this.sessionKey, assistantMsg);
-        messages = [...messages, { role: 'assistant', content: assistantContent }];
+        if (assistantToolUse.length > 0 || accText.trim().length > 0) {
+          const assistantMsg: StoredMessage = {
+            id: ulid(),
+            sessionKey: this.sessionKey,
+            role: 'assistant',
+            content: assistantContent,
+            timestamp: Date.now(),
+          };
+          await sessionStore.append(this.sessionKey, assistantMsg);
+          messages = [...messages, { role: 'assistant', content: assistantContent }];
+        }
+
+        if (streamErrorMessage) {
+          const failure = classifyAgentFailure(streamErrorMessage);
+          finalFailureMessage = failure.summary;
+          finalFailureCode = failure.code;
+          break;
+        }
 
         // ── No more tool calls — done ────────────────────────────────────────
         if (stopReason !== 'tool_use' || toolCallMap.size === 0) break;
@@ -566,6 +637,32 @@ export class AgentRunner {
             content: callResult.content,
             is_error: callResult.isError,
           });
+
+          if (callResult.isError) {
+            toolFailureMessages.push(callResult.content);
+          }
+
+          const loopSignal = toolLoopDetector.record(
+            tc.name,
+            parsedInput,
+            callResult.content,
+            callResult.isError,
+          );
+          if (loopSignal.level === 'warn') {
+            logger.warn('Potential no-progress tool loop detected', {
+              agentId: this.agentId,
+              toolName: tc.name,
+              repeatCount: loopSignal.repeatCount,
+            });
+          } else if (loopSignal.level === 'block') {
+            logger.error('Blocked repeated no-progress tool loop', {
+              agentId: this.agentId,
+              toolName: tc.name,
+              repeatCount: loopSignal.repeatCount,
+            });
+            finalFailureMessage = loopSignal.message ?? '检测到无进展工具循环';
+            finalFailureCode = 'tool_loop';
+          }
         }
 
         // Persist tool results as user message
@@ -578,6 +675,16 @@ export class AgentRunner {
         };
         await sessionStore.append(this.sessionKey, toolResultMsg);
         messages = [...messages, { role: 'user', content: toolResults }];
+
+        if (finalFailureMessage) break;
+        if (round === MAX_TOOL_ROUNDS - 1) {
+          toolRoundLimitHit = true;
+        }
+      }
+
+      if (toolRoundLimitHit && !finalFailureMessage) {
+        finalFailureMessage = `工具调用轮次已达到上限（${MAX_TOOL_ROUNDS}），已停止本轮以避免失控执行。`;
+        finalFailureCode = 'tool_round_limit';
       }
 
       // ── 3.5. Closing message if agent produced no text output ──────────────
@@ -585,8 +692,36 @@ export class AgentRunner {
       // response contains no text, channel sendStream() receives no text_delta
       // chunks and sends nothing to the user.  Yield a brief notice so every
       // channel always delivers a visible completion signal.
-      if (!totalText && toolRounds > 0) {
-        const closingText = '✅ 任务执行完毕。';
+      if (finalFailureMessage) {
+        const failureText = totalText
+          ? `\n\n${formatFailureReply(finalFailureMessage)}`
+          : formatFailureReply(finalFailureMessage);
+        yield { type: 'text_delta' as const, text: failureText };
+        totalText += failureText;
+        const failureMsg: StoredMessage = {
+          id: ulid(),
+          sessionKey: this.sessionKey,
+          role: 'assistant',
+          content: failureText,
+          timestamp: Date.now(),
+        };
+        await sessionStore.append(this.sessionKey, failureMsg);
+      } else if (!totalText) {
+        const closingText = finalFailureMessage
+          ? formatFailureReply(finalFailureMessage)
+          : toolFailureMessages.length > 0
+            ? formatFailureReply(toolFailureMessages[toolFailureMessages.length - 1] ?? '')
+            : toolRounds > 0
+              ? '✅ 任务执行完毕。'
+              : '';
+        if (!closingText) {
+          return {
+            sessionKey: this.sessionKey,
+            text: totalText,
+            inputTokens: totalInputTokens,
+            outputTokens: totalOutputTokens,
+          };
+        }
         yield { type: 'text_delta' as const, text: closingText };
         totalText = closingText;
         const closingMsg: StoredMessage = {
@@ -603,9 +738,11 @@ export class AgentRunner {
       await metaStore.update(this.sessionKey, {
         agentId: this.agentId,
         threadKey: this.threadKey,
-        status: 'idle',
+        status: finalFailureMessage ? 'error' : 'idle',
         lastActivity: Date.now(),
         contextTokensEstimate: totalInputTokens,
+        error: finalFailureMessage ? formatFailureReply(finalFailureMessage) : undefined,
+        errorCode: finalFailureMessage ? finalFailureCode ?? 'generic' : undefined,
       });
 
       // ── 5. Record token bill (fire-and-forget; never throws) ───────────────
@@ -627,6 +764,36 @@ export class AgentRunner {
       return {
         sessionKey: this.sessionKey,
         text: totalText,
+        inputTokens: totalInputTokens,
+        outputTokens: totalOutputTokens,
+      };
+    } catch (err) {
+      const failure = classifyAgentFailure(err instanceof Error ? err.message : String(err));
+      const failureText = formatFailureReply(failure.summary);
+      logger.error('Agent turn failed unexpectedly', {
+        agentId: this.agentId,
+        error: err instanceof Error ? err.stack ?? err.message : String(err),
+      });
+      await this.deps.metaStore.update(this.sessionKey, {
+        agentId: this.agentId,
+        threadKey: this.threadKey,
+        status: 'error',
+        lastActivity: Date.now(),
+        error: failureText,
+        errorCode: failure.code,
+      });
+      const failureMsg: StoredMessage = {
+        id: ulid(),
+        sessionKey: this.sessionKey,
+        role: 'assistant',
+        content: failureText,
+        timestamp: Date.now(),
+      };
+      await this.deps.sessionStore.append(this.sessionKey, failureMsg).catch(() => undefined);
+      yield { type: 'text_delta', text: failureText };
+      return {
+        sessionKey: this.sessionKey,
+        text: failureText,
         inputTokens: totalInputTokens,
         outputTokens: totalOutputTokens,
       };

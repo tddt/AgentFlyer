@@ -1,5 +1,4 @@
 import { createLogger } from '../core/logger.js';
-import type { MemoryEntryId } from '../core/types.js';
 import { decayScore } from './decay.js';
 import { type EmbedConfig, cosineSimilarity, embed } from './embed.js';
 import type { MemoryEntry, MemoryStore } from './store.js';
@@ -69,10 +68,10 @@ async function vectorSearch(
   const scored: Array<{ entry: MemoryEntry; similarity: number }> = [];
 
   for (const id of embeddedIds) {
-    const embedding = store.loadEmbedding(id as MemoryEntryId);
+    const embedding = store.loadEmbedding(id);
     if (!embedding) continue;
 
-    const entry = store.getById(id as MemoryEntryId);
+    const entry = store.getById(id);
     if (!entry) continue;
     if (partition && entry.partition !== partition) continue;
 

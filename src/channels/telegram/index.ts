@@ -1,5 +1,5 @@
 import { createLogger } from '../../core/logger.js';
-import type { AgentId, StreamChunk, ThreadKey } from '../../core/types.js';
+import { asThreadKey, type AgentId, type StreamChunk, type ThreadKey } from '../../core/types.js';
 import type { Channel, ChannelMessage, InboundHandler } from '../types.js';
 
 const logger = createLogger('channels:telegram');
@@ -132,7 +132,7 @@ export class TelegramChannel implements Channel {
             continue;
           }
 
-          const threadKey = `telegram:${chatId}` as ThreadKey;
+          const threadKey = asThreadKey(`telegram:${chatId}`);
           this.threadChatMap.set(threadKey, chatId);
 
           const channelMsg: ChannelMessage = {

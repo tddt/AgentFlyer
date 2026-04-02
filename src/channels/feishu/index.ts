@@ -2,7 +2,7 @@ import { createReadStream } from 'node:fs';
 import { basename } from 'node:path';
 import * as Lark from '@larksuiteoapi/node-sdk';
 import { createLogger } from '../../core/logger.js';
-import type { AgentId, StreamChunk, ThreadKey } from '../../core/types.js';
+import { asAgentId, asThreadKey, type AgentId, type StreamChunk, type ThreadKey } from '../../core/types.js';
 import type { Channel, ChannelMessage, ContentAttachment, InboundHandler } from '../types.js';
 
 const logger = createLogger('channels:feishu');
@@ -119,12 +119,20 @@ export class FeishuChannel implements Channel {
               const name = mention.name ?? '';
               const mapped = this.opts.agentMappings?.[name];
               if (mapped) {
-                resolvedAgentId = mapped as AgentId;
-                break;
+                try {
+                  resolvedAgentId = asAgentId(mapped);
+                  break;
+                } catch {
+                  continue;
+                }
               }
               if (name && this.opts.knownAgentIds?.includes(name)) {
-                resolvedAgentId = name as AgentId;
-                break;
+                try {
+                  resolvedAgentId = asAgentId(name);
+                  break;
+                } catch {
+                  continue;
+                }
               }
             }
 
@@ -133,9 +141,13 @@ export class FeishuChannel implements Channel {
             if (resolvedAgentId === this.opts.defaultAgentId) {
               for (const [alias, targetId] of Object.entries(this.opts.agentMappings ?? {})) {
                 if (rawText.includes(`@${alias}`)) {
-                  resolvedAgentId = targetId as AgentId;
-                  logger.debug('Feishu routing via text @alias', { alias, agentId: targetId });
-                  break;
+                  try {
+                    resolvedAgentId = asAgentId(targetId);
+                    logger.debug('Feishu routing via text @alias', { alias, agentId: targetId });
+                    break;
+                  } catch {
+                    continue;
+                  }
                 }
               }
             }
@@ -143,9 +155,13 @@ export class FeishuChannel implements Channel {
             if (resolvedAgentId === this.opts.defaultAgentId) {
               for (const agentId of this.opts.knownAgentIds ?? []) {
                 if (rawText.includes(`@${agentId}`)) {
-                  resolvedAgentId = agentId as AgentId;
-                  logger.debug('Feishu routing via text agentId', { agentId });
-                  break;
+                  try {
+                    resolvedAgentId = asAgentId(agentId);
+                    logger.debug('Feishu routing via text agentId', { agentId });
+                    break;
+                  } catch {
+                    continue;
+                  }
                 }
               }
             }
@@ -158,7 +174,7 @@ export class FeishuChannel implements Channel {
         }
         if (!text) return;
 
-        const threadKey = `feishu:${chat_id}` as ThreadKey;
+        const threadKey = asThreadKey(`feishu:${chat_id}`);
         this.threadMap.set(threadKey, {
           chatId: chat_id,
           chatType: chat_type,

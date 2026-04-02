@@ -6,12 +6,16 @@ import { useLocale } from '../context/i18n.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
 import { useToast } from '../hooks/useToast.js';
 import { useUptime } from '../hooks/useUptime.js';
+import { getRecoveryHint } from '../recovery-hints.js';
 import type {
   AgentInfo,
   AgentListResult,
+  ErrorStatsSummary,
   GatewayStatus,
+  SessionClearResult,
   SessionListResult,
   SessionMetaInfo,
+  StatsResult,
 } from '../types.js';
 
 function timeAgo(ms: number): string {
@@ -20,6 +24,97 @@ function timeAgo(ms: number): string {
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
   return `${Math.floor(diff / 86_400_000)}d ago`;
+}
+
+function formatErrorCode(errorCode: string): string {
+  return errorCode.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
+
+function formatTrendLabel(date: string): string {
+  return date.slice(5).replace('-', '/');
+}
+
+function AgentTrendMini({
+  trend,
+  summary,
+  windowDays,
+}: {
+  trend: Array<{ date: string; count: number }>;
+  summary: string;
+  windowDays: number;
+}) {
+  if (trend.length === 0) return null;
+
+  const peakCount = Math.max(...trend.map((point) => point.count), 0);
+
+  return (
+    <div className="mt-2.5 rounded-md bg-black/20 ring-1 ring-white/[0.04] px-2.5 py-2">
+      <div className="flex items-end gap-1 h-8">
+        {trend.map((point) => (
+          <div key={point.date} className="flex-1 h-full flex items-end" title={`${point.date}: ${point.count}`}>
+            <div
+              className="w-full rounded-sm bg-gradient-to-t from-red-500/70 to-orange-300/75"
+              style={{ height: `${Math.max(8, peakCount > 0 ? (point.count / peakCount) * 100 : 8)}%` }}
+            />
+          </div>
+        ))}
+      </div>
+      <div className="mt-1.5 flex items-center justify-between gap-2 text-[10px] text-slate-500">
+        <span>{formatTrendLabel(trend[0]?.date ?? '')}</span>
+        <span className="text-slate-400">{summary.replace('{n}', String(windowDays))}</span>
+        <span>{formatTrendLabel(trend.at(-1)?.date ?? '')}</span>
+      </div>
+    </div>
+  );
+}
+
+function AgentRecoveryHintMini({
+  errorCode,
+  t,
+}: {
+  errorCode: string;
+  t: (key: string, vars?: Record<string, string | number>) => string;
+}) {
+  const hint = getRecoveryHint(errorCode, (key) => t(key));
+
+  return (
+    <div className="mt-2 rounded-md bg-amber-950/15 ring-1 ring-amber-500/10 px-2.5 py-2 text-[10px] text-amber-100/80">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="inline-flex rounded-full bg-amber-400/10 px-2 py-0.5 font-medium uppercase tracking-wide text-amber-300/90">
+          {hint.actionLabel}
+        </span>
+        <span className="font-medium text-amber-200">{hint.title}</span>
+      </div>
+      <div className="mt-1 leading-5 text-amber-100/70">{hint.description}</div>
+    </div>
+  );
+}
+
+function formatDateTime(ms: number): string {
+  return new Date(ms).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+}
+
+function buildOverviewClearResultMessage(
+  t: (key: string, vars?: Record<string, string | number>) => string,
+  result: SessionClearResult,
+  agentId: string,
+  errorCode: string,
+): string {
+  const clearedCount = result.clearedSessions ?? 0;
+  const remainingForAgent = result.remainingFailedSessionsForAgent ?? 0;
+
+  if (remainingForAgent > 0) {
+    return t('overview.clearTopErrorResultRemaining')
+      .replace('{count}', String(clearedCount))
+      .replace('{errorCode}', formatErrorCode(errorCode))
+      .replace('{agentId}', agentId)
+      .replace('{remaining}', String(remainingForAgent));
+  }
+
+  return t('overview.clearTopErrorResultClean')
+    .replace('{count}', String(clearedCount))
+    .replace('{errorCode}', formatErrorCode(errorCode))
+    .replace('{agentId}', agentId);
 }
 
 function PingWidget() {
@@ -75,7 +170,11 @@ interface AgentSessionBar {
   msgs: number;
 }
 
-export function OverviewTab({ onNavigate }: { onNavigate?: (tab: string) => void }) {
+export function OverviewTab({
+  onNavigate,
+}: {
+  onNavigate?: (tab: string, options?: { sessionAgentId?: string; sessionErrorCode?: string }) => void;
+}) {
   const { t } = useLocale();
   const { toast } = useToast();
   const [fetchedAt, setFetchedAt] = useState<number | null>(null);
@@ -104,6 +203,11 @@ export function OverviewTab({ onNavigate }: { onNavigate?: (tab: string) => void
     [],
   );
 
+  const { data: statsData, refetch: refetchStats } = useQuery<StatsResult>(
+    () => rpc<StatsResult>('stats.get', { days: 14 }),
+    [],
+  );
+
   const uptime = useUptime(status?.uptime ?? null, fetchedAt);
 
   // Auto-refresh every 30s
@@ -113,9 +217,10 @@ export function OverviewTab({ onNavigate }: { onNavigate?: (tab: string) => void
       refetch();
       refetchAgents();
       refetchSessions();
+      refetchStats();
     }, 30_000);
     return () => clearInterval(id);
-  }, [autoRefresh, refetch, refetchAgents, refetchSessions]);
+  }, [autoRefresh, refetch, refetchAgents, refetchSessions, refetchStats]);
 
   const handleReload = async () => {
     try {
@@ -123,8 +228,24 @@ export function OverviewTab({ onNavigate }: { onNavigate?: (tab: string) => void
       toast('All agents reloaded', 'success');
       refetch();
       refetchAgents();
+      refetchStats();
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Reload failed', 'error');
+    }
+  };
+
+  const handleClearTopError = async (agentId: string, errorCode: string) => {
+    try {
+      const result = await rpc<SessionClearResult>('session.clear', {
+        agentId,
+        failedOnly: true,
+        errorCode,
+      });
+      toast(buildOverviewClearResultMessage(t, result, agentId, errorCode), 'success');
+      refetchSessions();
+      refetchStats();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Clear failed', 'error');
     }
   };
 
@@ -133,11 +254,17 @@ export function OverviewTab({ onNavigate }: { onNavigate?: (tab: string) => void
 
   const agents: AgentInfo[] = Array.isArray(agentListResult?.agents) ? agentListResult.agents : [];
   const sessions: SessionMetaInfo[] = sessionsData?.sessions ?? [];
+  const errorStats: ErrorStatsSummary | null = statsData?.errors ?? null;
   const agentCount = typeof status?.agents === 'number' ? status.agents : agents.length;
 
   // Aggregate stats
   const totalMsgs = sessions.reduce((s, x) => s + x.messageCount, 0);
   const totalTokens = sessions.reduce((s, x) => s + (x.totalTokens ?? 0), 0);
+  const errorSessions = errorStats?.totalErrorSessions ?? sessions.filter((s) => s.status === 'error').length;
+  const errorBreakdown = errorStats?.breakdown ?? [];
+  const errorTrend = errorStats?.trend ?? [];
+  const hotAgents = errorStats?.byAgent.slice(0, 5) ?? [];
+  const maxTrendCount = Math.max(...errorTrend.map((point) => point.count), 1);
 
   // Per-agent session bars
   const agentBars: AgentSessionBar[] = agents
@@ -183,6 +310,7 @@ export function OverviewTab({ onNavigate }: { onNavigate?: (tab: string) => void
               refetch();
               refetchAgents();
               refetchSessions();
+              refetchStats();
             }}
           >
             {t('overview.refresh')}
@@ -194,12 +322,13 @@ export function OverviewTab({ onNavigate }: { onNavigate?: (tab: string) => void
       </div>
 
       {/* Stats grid */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-7">
         <StatCard label={t('overview.version')} value={status?.version ?? '—'} accent="text-slate-300" />
         <StatCard label={t('overview.uptime')} value={uptime} accent="text-emerald-400" />
         <StatCard label={t('overview.agents')} value={agentCount} accent="text-indigo-400" />
         <StatCard label={t('overview.sessions')} value={sessions.length} accent="text-blue-400" />
         <StatCard label={t('overview.messages')} value={totalMsgs} accent="text-violet-400" />
+        <StatCard label={t('overview.errorSessions')} value={errorSessions} accent="text-red-400" />
         <StatCard
           label={t('overview.tokens')}
           value={totalTokens > 1000 ? `${(totalTokens / 1000).toFixed(1)}k` : totalTokens}
@@ -309,9 +438,25 @@ export function OverviewTab({ onNavigate }: { onNavigate?: (tab: string) => void
                     <span className="text-[11.5px] font-mono text-slate-300 truncate">
                       {s.threadKey}
                     </span>
-                    <span className="text-[10px] text-slate-500 mt-0.5">
-                      {s.agentId} · {s.messageCount} msgs · {timeAgo(s.lastActivity)}
-                    </span>
+                    <div className="flex items-center gap-2 flex-wrap mt-0.5">
+                      <span className="text-[10px] text-slate-500">
+                        {s.agentId} · {s.messageCount} msgs · {timeAgo(s.lastActivity)}
+                      </span>
+                      {s.errorCode ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onNavigate?.('sessions', {
+                              sessionAgentId: s.agentId,
+                              sessionErrorCode: s.errorCode,
+                            })
+                          }
+                          className="inline-flex"
+                        >
+                          <Badge variant="red">{formatErrorCode(s.errorCode)}</Badge>
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
                   {s.totalTokens && s.totalTokens > 0 && (
                     <span className="text-[10px] text-amber-500/80 shrink-0 font-mono">
@@ -357,6 +502,144 @@ export function OverviewTab({ onNavigate }: { onNavigate?: (tab: string) => void
           </div>
         </div>
       )}
+
+      <div
+        className="rounded-xl ring-1 ring-white/[0.07] p-5"
+        style={{ background: 'rgba(14,17,28,0.85)' }}
+      >
+        <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+          <h2 className="text-[13px] font-semibold text-slate-300 tracking-tight">
+            {t('overview.errorBreakdown')}
+          </h2>
+          {errorStats ? (
+            <span className="text-[11px] text-slate-500">
+              {t('overview.errorTrendWindow')
+                .replace('{count}', String(errorStats.recentErrorSessions))
+                .replace('{n}', String(errorStats.windowDays))}
+            </span>
+          ) : null}
+        </div>
+        {errorTrend.length > 0 ? (
+          <div className="mb-4 grid grid-cols-7 gap-2">
+            {errorTrend.map((point) => (
+              <div key={point.date} className="flex flex-col items-center gap-1.5">
+                <div
+                  className="w-full rounded-md overflow-hidden flex items-end"
+                  style={{ background: 'rgba(255,255,255,0.05)', height: 56 }}
+                >
+                  <div
+                    className="w-full bg-red-500/70 rounded-md transition-all duration-500"
+                    style={{ height: `${Math.max(10, (point.count / maxTrendCount) * 100)}%` }}
+                    title={`${point.date}: ${point.count}`}
+                  />
+                </div>
+                <span className="text-[10px] text-slate-500">{formatTrendLabel(point.date)}</span>
+                <span className="text-[10px] text-slate-400 font-mono">{point.count}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {errorBreakdown.length === 0 ? (
+          <p className="text-slate-500 text-sm">{t('overview.noErrors')}</p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {errorBreakdown.map(({ code, count }) => (
+              <button
+                key={code}
+                type="button"
+                onClick={() => onNavigate?.('sessions', { sessionErrorCode: code })}
+                className="inline-flex"
+                title={t('overview.openFilteredSessions')}
+              >
+                <Badge variant="red">
+                  {formatErrorCode(code)} · {count}
+                </Badge>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div
+        className="rounded-xl ring-1 ring-white/[0.07] p-5"
+        style={{ background: 'rgba(14,17,28,0.85)' }}
+      >
+        <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+          <h2 className="text-[13px] font-semibold text-slate-300 tracking-tight">
+            {t('overview.agentErrors')}
+          </h2>
+          {errorStats ? (
+            <span className="text-[11px] text-slate-500">
+              {t('overview.agentErrorsHint').replace('{n}', String(errorStats.windowDays))}
+            </span>
+          ) : null}
+        </div>
+        {hotAgents.length === 0 ? (
+          <p className="text-slate-500 text-sm">{t('overview.noErrors')}</p>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {hotAgents.map((entry) => {
+              const agent = agents.find((item) => item.agentId === entry.agentId);
+              const label = agent?.name ?? entry.agentId;
+              const trendPeak = Math.max(...entry.trend.map((point) => point.count), 0);
+              const trendToday = entry.trend.at(-1)?.count ?? 0;
+              return (
+                <div
+                  key={entry.agentId}
+                  className="flex items-start gap-3 rounded-lg bg-white/[0.02] ring-1 ring-white/[0.05] px-3 py-2.5 text-left hover:ring-red-500/30 transition-colors"
+                >
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onNavigate?.('sessions', {
+                        sessionAgentId: entry.agentId,
+                        sessionErrorCode: entry.topErrorCode,
+                      })
+                    }
+                    title={t('overview.openAgentSessions')}
+                    className="min-w-0 flex-1 text-left"
+                  >
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[12px] font-medium text-slate-200 truncate">{label}</span>
+                      <span className="text-[10px] text-slate-500 font-mono">{entry.agentId}</span>
+                    </div>
+                    <div className="mt-1 flex items-center gap-2 flex-wrap text-[10px] text-slate-500">
+                      <span>
+                        {entry.recentErrorSessions} / {entry.totalErrorSessions} {t('overview.errorSessions')}
+                      </span>
+                      <span>·</span>
+                      <span>{formatDateTime(entry.latestErrorAt)}</span>
+                    </div>
+                    <AgentRecoveryHintMini errorCode={entry.topErrorCode} t={t} />
+                    <AgentTrendMini
+                      trend={entry.trend}
+                      windowDays={errorStats?.windowDays ?? 14}
+                      summary={
+                        trendPeak > 0
+                          ? t('overview.agentTrendActive')
+                              .replace('{peak}', String(trendPeak))
+                              .replace('{today}', String(trendToday))
+                          : t('overview.agentTrendQuiet')
+                      }
+                    />
+                  </button>
+                  <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end pt-0.5">
+                    <Badge variant="red">{formatErrorCode(entry.topErrorCode)}</Badge>
+                    <Badge variant="gray">{entry.recentErrorSessions}</Badge>
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      onClick={() => void handleClearTopError(entry.agentId, entry.topErrorCode)}
+                    >
+                      {t('overview.clearTopError')}
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {/* Quick actions */}
       <div

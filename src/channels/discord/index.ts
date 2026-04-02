@@ -1,5 +1,5 @@
 import { createLogger } from '../../core/logger.js';
-import type { AgentId, StreamChunk, ThreadKey } from '../../core/types.js';
+import { asThreadKey, type AgentId, type StreamChunk, type ThreadKey } from '../../core/types.js';
 import type { Channel, ChannelMessage, InboundHandler } from '../types.js';
 
 const logger = createLogger('channels:discord');
@@ -186,7 +186,7 @@ export class DiscordChannel implements Channel {
       const text = msg.content.slice(prefix.length).trim();
       if (!text) return;
 
-      const threadKey = `discord:${channelId}` as ThreadKey;
+      const threadKey = asThreadKey(`discord:${channelId}`);
       this.threadChannelMap.set(threadKey, channelId);
 
       const channelMsg: ChannelMessage = {

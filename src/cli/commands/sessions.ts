@@ -2,8 +2,7 @@ import { note, outro, spinner } from '@clack/prompts';
 import chalk from 'chalk';
 import { defineCommand } from 'citty';
 import { getDefaultConfigDir, loadConfig } from '../../core/config/loader.js';
-import { parseSessionKey } from '../../core/types.js';
-import type { SessionKey } from '../../core/types.js';
+import { asSessionKey, parseSessionKey } from '../../core/types.js';
 import { isGatewayRunning } from '../../gateway/lifecycle.js';
 import { callRpc } from '../gateway-client.js';
 
@@ -51,7 +50,7 @@ const sessionsList = defineCommand({
       const sessions = (rpcResult.sessions ?? []).map((raw) => {
         // Fallback: parse agentId/threadKey from sessionKey when meta fields are empty
         const parsed =
-          !raw.agentId || !raw.threadKey ? parseSessionKey(raw.sessionKey as SessionKey) : null;
+          !raw.agentId || !raw.threadKey ? parseSessionKey(asSessionKey(raw.sessionKey)) : null;
         return {
           sessionKey: raw.sessionKey,
           agentId: raw.agentId || parsed?.agentId || '',

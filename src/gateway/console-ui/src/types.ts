@@ -130,10 +130,78 @@ export interface SessionMetaInfo {
   contextTokensEstimate: number;
   compactionCount: number;
   error?: string;
+  errorCode?: string;
 }
 
 export interface SessionListResult {
   sessions: SessionMetaInfo[];
+}
+
+export interface ErrorStatsBreakdownEntry {
+  code: string;
+  count: number;
+  lastSeenAt: number;
+}
+
+export interface ErrorStatsTrendPoint {
+  date: string;
+  count: number;
+}
+
+export interface ErrorStatsByAgentEntry {
+  agentId: string;
+  totalErrorSessions: number;
+  recentErrorSessions: number;
+  latestErrorAt: number;
+  topErrorCode: string;
+  trend: ErrorStatsTrendPoint[];
+}
+
+export interface ErrorStatsSummary {
+  totalErrorSessions: number;
+  recentErrorSessions: number;
+  latestErrorAt: number | null;
+  breakdown: ErrorStatsBreakdownEntry[];
+  trend: ErrorStatsTrendPoint[];
+  byAgent: ErrorStatsByAgentEntry[];
+  windowDays: number;
+}
+
+export interface StatsResultRow {
+  date: string;
+  agentId: string;
+  model: string;
+  turns: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  totalTokens: number;
+}
+
+export interface StatsResult {
+  rows: StatsResultRow[];
+  errors: ErrorStatsSummary;
+}
+
+export interface SessionClearResult {
+  cleared: boolean;
+  agentId?: string;
+  sessionKey?: string;
+  failedOnly?: boolean;
+  errorCode?: string;
+  clearedSessions?: number;
+  remainingMatchingFailedSessions?: number;
+  remainingFailedSessionsForAgent?: number;
+}
+
+export type ChatRecoveryMode = 'continue' | 'new_thread';
+
+export interface ChatRecoveryContext {
+  eventId: number;
+  agentId: string;
+  threadKey: string;
+  errorCode: string;
+  mode: ChatRecoveryMode;
 }
 
 export interface DisplayMessage {
@@ -141,6 +209,7 @@ export interface DisplayMessage {
   role: 'user' | 'assistant';
   text: string;
   tools?: Array<{ name: string; input: string }>;
+  toolResults?: Array<{ content: string; isError?: boolean }>;
   timestamp: number;
   isToolResult: boolean;
 }

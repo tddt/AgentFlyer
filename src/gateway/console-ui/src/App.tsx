@@ -6,6 +6,7 @@ import { WorkflowRunProvider } from './context/workflow-run.js';
 import { rpc } from './hooks/useRpc.js';
 import { ToastContext, useToastState } from './hooks/useToast.js';
 import { SetupWizard } from './tabs/SetupWizard.js';
+import type { ChatRecoveryContext, ChatRecoveryMode } from './types.js';
 
 type TabId =
   | 'overview'
@@ -70,6 +71,11 @@ function Spinner() {
 
 export function App() {
   const [activeTab, setActiveTab] = useState<TabId>('overview');
+  const [sessionsAgentFilter, setSessionsAgentFilter] = useState('all');
+  const [sessionsErrorCodeFilter, setSessionsErrorCodeFilter] = useState('all');
+  const [chatAgentId, setChatAgentId] = useState('');
+  const [chatThreadKey, setChatThreadKey] = useState('');
+  const [chatRecoveryContext, setChatRecoveryContext] = useState<ChatRecoveryContext | null>(null);
   const toastState = useToastState();
   const ActiveTab = TAB_MAP[activeTab];
 
@@ -95,6 +101,40 @@ export function App() {
     if (goToChat) setActiveTab('chat');
   }
 
+  function handleNavigate(
+    tab: string,
+    options?: {
+      sessionAgentId?: string;
+      sessionErrorCode?: string;
+      chatAgentId?: string;
+      chatThreadKey?: string;
+      chatRecoveryErrorCode?: string;
+      chatRecoveryMode?: ChatRecoveryMode;
+    },
+  ): void {
+    const nextTab = tab as TabId;
+    if (nextTab === 'sessions') {
+      setSessionsAgentFilter(options?.sessionAgentId ?? 'all');
+      setSessionsErrorCodeFilter(options?.sessionErrorCode ?? 'all');
+    }
+    if (nextTab === 'chat') {
+      setChatAgentId(options?.chatAgentId ?? '');
+      setChatThreadKey(options?.chatThreadKey ?? '');
+      if (options?.chatAgentId && options?.chatThreadKey && options?.chatRecoveryErrorCode) {
+        setChatRecoveryContext({
+          eventId: Date.now(),
+          agentId: options.chatAgentId,
+          threadKey: options.chatThreadKey,
+          errorCode: options.chatRecoveryErrorCode,
+          mode: options.chatRecoveryMode ?? 'continue',
+        });
+      } else {
+        setChatRecoveryContext(null);
+      }
+    }
+    setActiveTab(nextTab);
+  }
+
   return (
     <LocaleProvider>
       <WorkflowRunProvider>
@@ -117,7 +157,21 @@ export function App() {
             >
               <Suspense fallback={<Spinner />}>
                 {activeTab === 'overview' ? (
-                  <OverviewTab onNavigate={(tab) => setActiveTab(tab as TabId)} />
+                  <OverviewTab onNavigate={handleNavigate} />
+                ) : activeTab === 'agents' ? (
+                  <AgentsTab onNavigate={handleNavigate} />
+                ) : activeTab === 'chat' ? (
+                  <ChatTab
+                    initialAgentId={chatAgentId}
+                    initialThreadKey={chatThreadKey}
+                    initialRecoveryContext={chatRecoveryContext}
+                  />
+                ) : activeTab === 'sessions' ? (
+                  <SessionsTab
+                    initialAgentFilter={sessionsAgentFilter}
+                    initialErrorCodeFilter={sessionsErrorCodeFilter}
+                    onNavigate={handleNavigate}
+                  />
                 ) : (
                   <ActiveTab />
                 )}

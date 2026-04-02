@@ -4,7 +4,17 @@ import { Button } from '../components/Button.js';
 import { useLocale } from '../context/i18n.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
 import { useToast } from '../hooks/useToast.js';
-import type { AgentConfig, AgentInfo, AgentListResult, SessionListResult } from '../types.js';
+import { getRecoveryHint } from '../recovery-hints.js';
+import type {
+  AgentConfig,
+  AgentInfo,
+  AgentListResult,
+  ErrorStatsByAgentEntry,
+  ErrorStatsTrendPoint,
+  SessionClearResult,
+  SessionListResult,
+  StatsResult,
+} from '../types.js';
 
 interface EditForm {
   name: string;
@@ -129,7 +139,111 @@ function EditModal({
   );
 }
 
-export function AgentsTab() {
+function formatErrorCode(errorCode: string): string {
+  return errorCode.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
+
+function formatTrendLabel(date: string): string {
+  return date.slice(5).replace('-', '/');
+}
+
+function buildClearResultMessage(
+  t: (key: string, vars?: Record<string, string | number>) => string,
+  result: SessionClearResult,
+  agentId: string,
+  errorCode?: string,
+): string {
+  const clearedCount = result.clearedSessions ?? 0;
+  const remainingForAgent = result.remainingFailedSessionsForAgent ?? 0;
+
+  if (errorCode) {
+    if (remainingForAgent > 0) {
+      return t('agents.clearTopErrorResultRemaining')
+        .replace('{count}', String(clearedCount))
+        .replace('{errorCode}', formatErrorCode(errorCode))
+        .replace('{agentId}', agentId)
+        .replace('{remaining}', String(remainingForAgent));
+    }
+
+    return t('agents.clearTopErrorResultClean')
+      .replace('{count}', String(clearedCount))
+      .replace('{errorCode}', formatErrorCode(errorCode))
+      .replace('{agentId}', agentId);
+  }
+
+  if (remainingForAgent > 0) {
+    return t('agents.clearFailedResultRemaining')
+      .replace('{count}', String(clearedCount))
+      .replace('{agentId}', agentId)
+      .replace('{remaining}', String(remainingForAgent));
+  }
+
+  return t('agents.clearFailedResultClean')
+    .replace('{count}', String(clearedCount))
+    .replace('{agentId}', agentId);
+}
+
+function AgentErrorTrend({
+  trend,
+  windowDays,
+  summary,
+}: {
+  trend: ErrorStatsTrendPoint[];
+  windowDays: number;
+  summary: string;
+}) {
+  if (trend.length === 0) return null;
+
+  const peakCount = Math.max(...trend.map((point) => point.count), 0);
+
+  return (
+    <div className="rounded-lg bg-slate-950/40 ring-1 ring-white/5 px-3 py-2.5">
+      <div className="flex items-end gap-1 h-10">
+        {trend.map((point) => (
+          <div key={point.date} className="flex-1 h-full flex items-end" title={`${point.date}: ${point.count}`}>
+            <div
+              className="w-full rounded-sm bg-gradient-to-t from-red-500/75 to-amber-300/80"
+              style={{ height: `${Math.max(10, peakCount > 0 ? (point.count / peakCount) * 100 : 10)}%` }}
+            />
+          </div>
+        ))}
+      </div>
+      <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-slate-500">
+        <span>{formatTrendLabel(trend[0]?.date ?? '')}</span>
+        <span className="text-slate-400">{summary.replace('{n}', String(windowDays))}</span>
+        <span>{formatTrendLabel(trend.at(-1)?.date ?? '')}</span>
+      </div>
+    </div>
+  );
+}
+
+function AgentRecoveryTip({
+  errorCode,
+  t,
+}: {
+  errorCode: string;
+  t: (key: string, vars?: Record<string, string | number>) => string;
+}) {
+  const hint = getRecoveryHint(errorCode, (key) => t(key));
+
+  return (
+    <div className="rounded-lg bg-amber-950/15 ring-1 ring-amber-500/10 px-3 py-2 text-[11px] text-amber-100/85">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="inline-flex rounded-full bg-amber-400/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-300/90">
+          {hint.actionLabel}
+        </span>
+        <span className="font-medium text-amber-200">{hint.title}</span>
+      </div>
+      <div className="mt-1 leading-5 text-amber-100/75">{hint.description}</div>
+    </div>
+  );
+}
+
+export function AgentsTab({
+  onNavigate,
+}: {
+  onNavigate?: (tab: string, options?: { sessionAgentId?: string; sessionErrorCode?: string }) => void;
+}) {
   const { toast } = useToast();
   const { t } = useLocale();
   const [selected, setSelected] = useState<string | null>(null);
@@ -146,8 +260,13 @@ export function AgentsTab() {
     agents?: AgentConfig[] | Record<string, AgentConfig>;
   }>(() => rpc<{ agents?: AgentConfig[] | Record<string, AgentConfig> }>('config.get'), []);
 
-  const { data: sessionsData } = useQuery<SessionListResult>(
+  const { data: sessionsData, refetch: refetchSessions } = useQuery<SessionListResult>(
     () => rpc<SessionListResult>('session.list'),
+    [],
+  );
+
+  const { data: statsData, refetch: refetchStats } = useQuery<StatsResult>(
+    () => rpc<StatsResult>('stats.get', { days: 14 }),
     [],
   );
 
@@ -165,6 +284,11 @@ export function AgentsTab() {
     sessionCounts[s.agentId] = (sessionCounts[s.agentId] ?? 0) + 1;
   }
 
+  const errorStatsByAgent = new Map<string, ErrorStatsByAgentEntry>(
+    (statsData?.errors.byAgent ?? []).map((entry) => [entry.agentId, entry]),
+  );
+  const errorWindowDays = statsData?.errors.windowDays ?? 14;
+
   const handleReload = useCallback(
     async (agentId: string) => {
       try {
@@ -172,11 +296,12 @@ export function AgentsTab() {
         toast(`Agent ${agentId} reloaded`, 'success');
         refetch();
         refetchConfig();
+        refetchStats();
       } catch (e) {
         toast(e instanceof Error ? e.message : 'Reload failed', 'error');
       }
     },
-    [toast, refetch, refetchConfig],
+    [toast, refetch, refetchConfig, refetchStats],
   );
 
   const handleClear = useCallback(
@@ -184,11 +309,48 @@ export function AgentsTab() {
       try {
         await rpc('session.clear', { agentId });
         toast(`Sessions cleared for ${agentId}`, 'success');
+        refetchSessions();
+        refetchStats();
       } catch (e) {
         toast(e instanceof Error ? e.message : 'Clear failed', 'error');
       }
     },
-    [toast],
+    [toast, refetchSessions, refetchStats],
+  );
+
+  const handleClearFailed = useCallback(
+    async (agentId: string) => {
+      try {
+        const result = await rpc<SessionClearResult>('session.clear', {
+          agentId,
+          failedOnly: true,
+        });
+        toast(buildClearResultMessage(t, result, agentId), 'success');
+        refetchSessions();
+        refetchStats();
+      } catch (e) {
+        toast(e instanceof Error ? e.message : 'Clear failed', 'error');
+      }
+    },
+    [toast, refetchSessions, refetchStats, t],
+  );
+
+  const handleClearTopError = useCallback(
+    async (agentId: string, errorCode: string) => {
+      try {
+        const result = await rpc<SessionClearResult>('session.clear', {
+          agentId,
+          failedOnly: true,
+          errorCode,
+        });
+        toast(buildClearResultMessage(t, result, agentId, errorCode), 'success');
+        refetchSessions();
+        refetchStats();
+      } catch (e) {
+        toast(e instanceof Error ? e.message : 'Clear failed', 'error');
+      }
+    },
+    [toast, refetchSessions, refetchStats, t],
   );
 
   if (loading && !agentsResult) return <div className="text-slate-400 text-sm p-8">{t('common.loading')}</div>;
@@ -233,6 +395,8 @@ export function AgentsTab() {
           onClick={() => {
             refetch();
             refetchConfig();
+            refetchSessions();
+            refetchStats();
           }}
         >
           {t('agents.refresh')}
@@ -253,13 +417,19 @@ export function AgentsTab() {
               const cfg = agentConfigs[a.agentId];
               const isSelected = selected === a.agentId;
               const sessCount = sessionCounts[a.agentId] ?? 0;
+              const errorStats = errorStatsByAgent.get(a.agentId);
+              const hasRecentErrors = (errorStats?.recentErrorSessions ?? 0) > 0;
+              const trendPeak = Math.max(...(errorStats?.trend ?? []).map((point) => point.count), 0);
+              const trendToday = errorStats?.trend.at(-1)?.count ?? 0;
               return (
                 <div key={a.agentId} className="flex flex-col">
                   <div
                     className={`rounded-xl bg-slate-800/60 ring-1 transition-all p-4 flex flex-col gap-3 cursor-pointer ${
                       isSelected
                         ? 'ring-indigo-500/60 bg-slate-800'
-                        : 'ring-slate-700/50 hover:ring-indigo-500/30'
+                        : hasRecentErrors
+                          ? 'ring-red-500/30 hover:ring-red-500/45'
+                          : 'ring-slate-700/50 hover:ring-indigo-500/30'
                     }`}
                     onClick={() => setSelected(isSelected ? null : a.agentId)}
                   >
@@ -274,6 +444,14 @@ export function AgentsTab() {
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
                         <Badge variant="green">{t('agents.runningBadge')}</Badge>
+                        {hasRecentErrors ? (
+                          <Badge variant="red">
+                            {t('agents.recentErrorsBadge').replace(
+                              '{n}',
+                              String(errorStats?.recentErrorSessions ?? 0),
+                            )}
+                          </Badge>
+                        ) : null}
                       </div>
                     </div>
 
@@ -281,7 +459,40 @@ export function AgentsTab() {
                       {cfg?.model && <Badge variant="blue">{cfg.model}</Badge>}
                       {cfg?.persona && <Badge variant="purple">{t('agents.personaBadge')}</Badge>}
                       {sessCount > 0 && <Badge variant="gray">{t('agents.sessionsBadge', { n: sessCount })}</Badge>}
+                      {errorStats ? (
+                        <Badge variant="red">{formatErrorCode(errorStats.topErrorCode)}</Badge>
+                      ) : null}
                     </div>
+
+                    {errorStats ? (
+                      <div className="rounded-lg bg-red-950/20 ring-1 ring-red-500/15 px-3 py-2 text-[11px] text-slate-300">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span>
+                            {t('agents.errorSummary')
+                              .replace('{recent}', String(errorStats.recentErrorSessions))
+                              .replace('{total}', String(errorStats.totalErrorSessions))}
+                          </span>
+                          <span className="text-slate-500">·</span>
+                          <span className="text-slate-400">{formatErrorCode(errorStats.topErrorCode)}</span>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {errorStats ? <AgentRecoveryTip errorCode={errorStats.topErrorCode} t={t} /> : null}
+
+                    {errorStats ? (
+                      <AgentErrorTrend
+                        trend={errorStats.trend}
+                        windowDays={errorWindowDays}
+                        summary={
+                          trendPeak > 0
+                            ? t('agents.errorTrendActive')
+                                .replace('{peak}', String(trendPeak))
+                                .replace('{today}', String(trendToday))
+                            : t('agents.errorTrendQuiet')
+                        }
+                      />
+                    ) : null}
 
                     <div className="flex gap-2 mt-1">
                       <Button
@@ -314,6 +525,45 @@ export function AgentsTab() {
                       >
                         {t('agents.clearSessions')}
                       </Button>
+                      {errorStats ? (
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleClearFailed(a.agentId);
+                          }}
+                        >
+                          {t('agents.clearFailed')}
+                        </Button>
+                      ) : null}
+                      {errorStats ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleClearTopError(a.agentId, errorStats.topErrorCode);
+                          }}
+                        >
+                          {t('agents.clearTopError')}
+                        </Button>
+                      ) : null}
+                      {errorStats ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onNavigate?.('sessions', {
+                              sessionAgentId: a.agentId,
+                              sessionErrorCode: errorStats.topErrorCode,
+                            });
+                          }}
+                        >
+                          {t('agents.viewFailures')}
+                        </Button>
+                      ) : null}
                     </div>
                   </div>
 

@@ -48,7 +48,7 @@ export class MeshBus extends EventEmitter {
 
     // Directed delivery
     if (envelope.to !== '*') {
-      const handler = this.handlers.get(envelope.to as AgentId);
+      const handler = this.handlers.get(envelope.to);
       if (handler) {
         try {
           handler(envelope);

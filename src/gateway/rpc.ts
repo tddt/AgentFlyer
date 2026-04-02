@@ -6,13 +6,15 @@ import { fileURLToPath } from 'node:url';
 import { Cron } from 'croner';
 import { ulid } from 'ulid';
 import type { AgentRunner } from '../agent/runner.js';
+import { summarizeSessionErrors } from '../core/session/error-stats.js';
+import { buildClearedSessionUpdates, findFailedSessionsForAgent } from '../core/session/recovery.js';
 import type { ScheduledTaskMeta } from '../agent/tools/builtin/scheduler-tools.js';
 import type { Channel } from '../channels/types.js';
 import type { Config } from '../core/config/schema.js';
 import { createLogger } from '../core/logger.js';
 import type { SessionMetaStore } from '../core/session/meta.js';
 import type { SessionStore, StoredMessage } from '../core/session/store.js';
-import type { MessageContent, SessionKey } from '../core/types.js';
+import { asSessionKey, type MessageContent } from '../core/types.js';
 import type { EmbedConfig } from '../memory/embed.js';
 import { searchMemory } from '../memory/search.js';
 import type { MemoryStore } from '../memory/store.js';
@@ -359,6 +361,7 @@ interface DisplayMessage {
   role: 'user' | 'assistant';
   text: string;
   tools?: Array<{ name: string; input: string }>;
+  toolResults?: Array<{ content: string; isError?: boolean }>;
   timestamp: number;
   isToolResult: boolean;
 }
@@ -367,6 +370,7 @@ function convertToDisplay(msg: StoredMessage): DisplayMessage {
   const { content } = msg;
   let text = '';
   const tools: Array<{ name: string; input: string }> = [];
+  const toolResults: Array<{ content: string; isError?: boolean }> = [];
   let isToolResult = false;
 
   if (typeof content === 'string') {
@@ -384,6 +388,14 @@ function convertToDisplay(msg: StoredMessage): DisplayMessage {
         });
       } else if (block.type === 'tool_result') {
         isToolResult = true;
+        const resultContent =
+          typeof block.content === 'string'
+            ? block.content
+            : block.content
+                .filter((item) => item.type === 'text')
+                .map((item) => item.text)
+                .join('');
+        toolResults.push({ content: resultContent.trim(), isError: block.is_error });
       }
     }
   }
@@ -393,6 +405,7 @@ function convertToDisplay(msg: StoredMessage): DisplayMessage {
     role: msg.role as 'user' | 'assistant',
     text: text.trim(),
     tools: tools.length > 0 ? tools : undefined,
+    toolResults: toolResults.length > 0 ? toolResults : undefined,
     timestamp: msg.timestamp,
     isToolResult,
   };
@@ -499,25 +512,58 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
       }
 
       case 'session.messages': {
-        const { sessionKey } = (params ?? {}) as { sessionKey?: string };
+        const { sessionKey, includeToolResults } = (params ?? {}) as {
+          sessionKey?: string;
+          includeToolResults?: boolean;
+        };
         if (!sessionKey) return buildErrorResponse(id, -32602, 'sessionKey is required');
-        const stored = await ctx.sessionStore.readAll(sessionKey as SessionKey);
-        const messages = stored.map(convertToDisplay).filter((m) => !m.isToolResult);
-        return { id, result: { sessionKey, messages } };
+        const safeSessionKey = asSessionKey(sessionKey);
+        const stored = await ctx.sessionStore.readAll(safeSessionKey);
+        const messages = stored
+          .map(convertToDisplay)
+          .filter((m) => includeToolResults || !m.isToolResult);
+        return { id, result: { sessionKey: safeSessionKey, messages } };
       }
 
       case 'session.clear': {
-        const { agentId, sessionKey } = (params ?? {}) as { agentId?: string; sessionKey?: string };
+        const { agentId, sessionKey, failedOnly, errorCode } = (params ?? {}) as {
+          agentId?: string;
+          sessionKey?: string;
+          failedOnly?: boolean;
+          errorCode?: import('../core/session/meta.js').SessionErrorCode;
+        };
         // Clear by explicit sessionKey if provided
         if (sessionKey) {
-          await ctx.sessionStore.overwrite(sessionKey as SessionKey, []);
-          await ctx.metaStore.update(sessionKey as SessionKey, {
-            messageCount: 0,
-            contextTokensEstimate: 0,
-            compactionCount: 0,
-          });
-          return { id, result: { cleared: true, sessionKey } };
+          const safeSessionKey = asSessionKey(sessionKey);
+          await ctx.sessionStore.overwrite(safeSessionKey, []);
+          await ctx.metaStore.update(safeSessionKey, buildClearedSessionUpdates());
+          return { id, result: { cleared: true, sessionKey: safeSessionKey } };
         }
+
+        if (failedOnly) {
+          if (!agentId) return buildErrorResponse(id, -32602, 'agentId is required');
+          const sessions = await ctx.metaStore.listAll();
+          const agentFailedSessions = findFailedSessionsForAgent(sessions, agentId);
+          const failedSessions = findFailedSessionsForAgent(sessions, agentId, errorCode);
+          const updates = buildClearedSessionUpdates();
+          for (const session of failedSessions) {
+            await ctx.sessionStore.overwrite(session.sessionKey, []);
+            await ctx.metaStore.update(session.sessionKey, updates);
+          }
+          return {
+            id,
+            result: {
+              cleared: true,
+              agentId,
+              failedOnly: true,
+              errorCode,
+              clearedSessions: failedSessions.length,
+              remainingMatchingFailedSessions: 0,
+              remainingFailedSessionsForAgent: Math.max(0, agentFailedSessions.length - failedSessions.length),
+            },
+          };
+        }
+
         const runner = agentId ? ctx.runners.get(agentId) : undefined;
         if (!runner) return buildErrorResponse(id, 404, `Agent not found: ${agentId}`);
         await runner.clearHistory();
@@ -871,12 +917,15 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
           days?: number;
         };
         const { loadStats } = await import('../agent/stats.js');
+        const limitDays = days ?? 30;
         const rows = await loadStats(
           ctx.dataDir,
           statsAgent as import('../core/types.js').AgentId | undefined,
-          days ?? 30,
+          limitDays,
         );
-        return { id, result: { rows } };
+        const sessions = await ctx.metaStore.listAll();
+        const errors = summarizeSessionErrors(sessions, Math.min(limitDays, 14));
+        return { id, result: { rows, errors } };
       }
 
       case 'mesh.status': {

@@ -17,7 +17,7 @@
 
 import type { RoutingConfig } from '../core/config/schema.js';
 import { createLogger } from '../core/logger.js';
-import type { AgentId } from '../core/types.js';
+import { asAgentId, type AgentId } from '../core/types.js';
 
 const logger = createLogger('gateway:intent-router');
 
@@ -34,14 +34,14 @@ export class IntentRouter {
 
   constructor(cfg: RoutingConfig) {
     this.mode = cfg.mode;
-    this.defaultAgent = cfg.defaultAgent as AgentId;
+    this.defaultAgent = asAgentId(cfg.defaultAgent);
 
     this.rules = cfg.rules.map((r) => ({
       // RATIONALE: Use case-insensitive flag so Chinese / mixed-case messages work without
       // the user needing to write separate patterns for every capitalisation variant.
       regex: new RegExp(r.pattern, 'i'),
-      agent: r.agent as AgentId,
-      fallback: (r.fallback ?? cfg.defaultAgent) as AgentId,
+      agent: asAgentId(r.agent),
+      fallback: asAgentId(r.fallback ?? cfg.defaultAgent),
     }));
 
     if (this.mode !== 'simple') {

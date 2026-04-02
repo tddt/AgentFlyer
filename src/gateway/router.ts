@@ -1,7 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createLogger } from '../core/logger.js';
-import type { AgentId, StreamChunk } from '../core/types.js';
+import { asAgentId, type AgentId, type StreamChunk } from '../core/types.js';
 import { loadStats } from '../agent/stats.js';
+import { summarizeSessionErrors } from '../core/session/error-stats.js';
 import { validateToken } from './auth.js';
 import { buildConsoleHtml } from './console/index.js';
 import type { IntentRouter } from './intent-router.js';
@@ -445,10 +446,13 @@ export async function routeRequest(
   if (url.startsWith('/api/stats') && method === 'GET') {
     const qs = url.includes('?') ? url.slice(url.indexOf('?') + 1) : '';
     const params = new URLSearchParams(qs);
-    const agentId = (params.get('agentId') ?? undefined) as AgentId | undefined;
+    const agentIdParam = params.get('agentId');
+    const agentId = agentIdParam?.trim() ? asAgentId(agentIdParam) : undefined;
     const days = Math.max(1, Number(params.get('days') ?? '30') || 30);
     const stats = await loadStats(opts.rpcContext.dataDir, agentId, days);
-    json(res, 200, { ok: true, stats });
+    const sessions = await opts.rpcContext.metaStore.listAll();
+    const errors = summarizeSessionErrors(sessions, Math.min(days, 14));
+    json(res, 200, { ok: true, stats, errors });
     return true;
   }
 

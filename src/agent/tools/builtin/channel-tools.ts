@@ -9,7 +9,7 @@ import { existsSync } from 'node:fs';
 import { basename, extname, resolve } from 'node:path';
 import type { Channel } from '../../../channels/types.js';
 import { createLogger } from '../../../core/logger.js';
-import type { AgentId, ThreadKey } from '../../../core/types.js';
+import { asThreadKey, type AgentId, type ThreadKey } from '../../../core/types.js';
 import type { RegisteredTool } from '../registry.js';
 
 const logger = createLogger('tools:channel');
@@ -101,7 +101,7 @@ export function createChannelTools(deps: ChannelToolDeps): RegisteredTool[] {
           results.push(`${id}: channel not found or not active`);
           continue;
         }
-        const threadKey = (thread_key ?? `${id}:default`) as ThreadKey;
+        const threadKey = asThreadKey(thread_key ?? `${id}:default`);
         try {
           await ch.send({ agentId, threadKey }, text);
           results.push(`${id}: sent`);
@@ -184,7 +184,7 @@ export function createChannelTools(deps: ChannelToolDeps): RegisteredTool[] {
           results.push(`${id}: does not support attachments`);
           continue;
         }
-        const threadKey = (thread_key ?? `${id}:default`) as ThreadKey;
+        const threadKey = asThreadKey(thread_key ?? `${id}:default`);
         try {
           await ch.sendAttachment({ agentId, threadKey }, { filePath: absPath, mimeType, name });
           results.push(`${id}: sent "${name}"`);

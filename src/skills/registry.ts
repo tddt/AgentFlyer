@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import matter from 'gray-matter';
 import type { Config } from '../core/config/schema.js';
 import { createLogger } from '../core/logger.js';
-import type { SkillId } from '../core/types.js';
+import { asSkillId, type SkillId } from '../core/types.js';
 
 const logger = createLogger('skills:registry');
 
@@ -59,7 +59,15 @@ export class SkillRegistry {
 
   /** Return only skills whose IDs are in the given allow-list */
   filterByIds(ids: string[]): SkillMeta[] {
-    return ids.map((id) => this.skills.get(id as SkillId)).filter((s): s is SkillMeta => s != null);
+    return ids
+      .map((id) => {
+        try {
+          return this.skills.get(asSkillId(id));
+        } catch {
+          return undefined;
+        }
+      })
+      .filter((skill): skill is SkillMeta => skill != null);
   }
 
   size(): number {
@@ -117,7 +125,8 @@ export function parseSkillFile(filePath: string, shortDescMaxLen = 60): SkillMet
     const raw = readFileSync(filePath, 'utf-8');
     const { data, content } = matter(raw);
 
-    const id = (data.id as string | undefined) ?? (basename(join(filePath, '../')) as SkillId);
+    const rawId = (data.id as string | undefined) ?? basename(join(filePath, '../'));
+    const id = asSkillId(rawId);
     const name: string = (data.name as string | undefined) ?? id;
     const description: string =
       (data.description as string | undefined) ?? content.slice(0, 200).trim();
@@ -128,7 +137,7 @@ export function parseSkillFile(filePath: string, shortDescMaxLen = 60): SkillMet
     const contentHash = createHash('sha256').update(raw).digest('hex');
 
     return {
-      id: id as SkillId,
+      id,
       name,
       description,
       shortDesc,

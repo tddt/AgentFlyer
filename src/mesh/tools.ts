@@ -1,7 +1,7 @@
 import { ulid } from 'ulid';
 import type { AgentRunner } from '../agent/runner.js';
 import { createLogger } from '../core/logger.js';
-import type { AgentId, TaskId } from '../core/types.js';
+import { asTaskId, type AgentId, type TaskId } from '../core/types.js';
 import type { MeshBus } from './bus.js';
 
 const logger = createLogger('mesh:tools');
@@ -38,7 +38,7 @@ export class MeshTaskDispatcher {
       throw new Error(`No runner registered for agent: ${agentId}`);
     }
 
-    const taskId = ulid() as TaskId;
+    const taskId = asTaskId(ulid());
     const record: TaskRecord = {
       taskId,
       agentId,

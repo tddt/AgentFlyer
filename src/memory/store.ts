@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createLogger } from '../core/logger.js';
 import { type AnyDatabase, openDatabase } from '../core/runtime-compat.js';
-import type { MemoryEntryId } from '../core/types.js';
+import { asMemoryEntryId, type MemoryEntryId } from '../core/types.js';
 
 const logger = createLogger('memory:store');
 
@@ -100,7 +100,7 @@ export class MemoryStore {
   }
 
   insert(entry: Omit<MemoryEntry, 'id'>): MemoryEntry {
-    const id = genId(entry.content) as MemoryEntryId;
+    const id = asMemoryEntryId(genId(entry.content));
     const now = Date.now();
     this.conn
       .prepare(`
@@ -135,7 +135,7 @@ export class MemoryStore {
   }
 
   upsert(entry: Omit<MemoryEntry, 'id'> & { id?: MemoryEntryId }): MemoryEntry {
-    const id = entry.id && entry.id.length > 0 ? entry.id : (genId(entry.content) as MemoryEntryId);
+    const id = entry.id && entry.id.length > 0 ? entry.id : asMemoryEntryId(genId(entry.content));
     const now = Date.now();
     this.conn
       .prepare(`
@@ -256,7 +256,7 @@ export class MemoryStore {
     const rows = this.conn.prepare('SELECT memory_id FROM memory_embeddings').all() as Array<{
       memory_id: string;
     }>;
-    return rows.map((r) => r.memory_id as MemoryEntryId);
+    return rows.map((r) => asMemoryEntryId(r.memory_id));
   }
 
   /** Update the importance score of a memory entry */
@@ -301,7 +301,7 @@ interface MemoryRow {
 
 function rowToEntry(row: MemoryRow): MemoryEntry {
   return {
-    id: row.id as MemoryEntryId,
+    id: asMemoryEntryId(row.id),
     key: row.key,
     agentId: row.agent_id,
     partition: row.partition,

@@ -2,7 +2,7 @@ import * as process from 'node:process';
 import * as readline from 'node:readline';
 import chalk from 'chalk';
 import { createLogger } from '../../core/logger.js';
-import type { AgentId, StreamChunk, ThreadKey } from '../../core/types.js';
+import { asThreadKey, type AgentId, type StreamChunk, type ThreadKey } from '../../core/types.js';
 import type { Channel, ChannelMessage, InboundHandler } from '../types.js';
 
 const logger = createLogger('channels:cli');
@@ -32,7 +32,7 @@ export class CliChannel implements Channel {
 
   constructor(opts: CliChannelOptions) {
     this.opts = {
-      threadKey: 'cli-default' as ThreadKey,
+      threadKey: asThreadKey('cli-default'),
       prompt: chalk.cyan('You: '),
       showStats: false,
       ...opts,

@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import { gcm } from '@noble/ciphers/aes';
 import * as ed from '@noble/ed25519';
 import { sha512 } from '@noble/hashes/sha512';
-import type { NodeId } from './types.js';
+import { asNodeId, type NodeId } from './types.js';
 
 // ed25519 v2 requires sha512 for sync operations
 ed.etc.sha512Sync = (...m: Uint8Array[]) => sha512(ed.etc.concatBytes(...m));
@@ -143,7 +143,7 @@ export async function loadOrCreateFederationIdentity(identityDir: string): Promi
   }
 
   const kp = await generateKeyPair();
-  const nodeId = toHex(kp.publicKey).slice(0, 16) as NodeId;
+  const nodeId = asNodeId(toHex(kp.publicKey).slice(0, 16));
 
   const identity: FederationIdentityPublic = {
     nodeId,

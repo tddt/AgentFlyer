@@ -10,7 +10,7 @@
 import { appendFile, mkdir, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createLogger } from '../core/logger.js';
-import type { AgentId } from '../core/types.js';
+import { asAgentId, type AgentId } from '../core/types.js';
 
 const logger = createLogger('agent:stats');
 
@@ -134,7 +134,15 @@ export async function loadStats(
     // List all per-agent stat dirs
     try {
       const statsDir = join(dataDir, 'stats');
-      agentIds = (await readdir(statsDir)) as AgentId[];
+      agentIds = (await readdir(statsDir))
+        .map((entry) => {
+          try {
+            return asAgentId(entry);
+          } catch {
+            return null;
+          }
+        })
+        .filter((entry): entry is AgentId => entry !== null);
     } catch {
       return [];
     }

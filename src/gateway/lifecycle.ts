@@ -42,7 +42,7 @@ import type { AgentConfig } from '../core/config/schema.js';
 import { createLogger } from '../core/logger.js';
 import { SessionMetaStore } from '../core/session/meta.js';
 import { SessionStore } from '../core/session/store.js';
-import type { AgentId, ThreadKey } from '../core/types.js';
+import { asAgentId, asThreadKey, type AgentId, type ThreadKey } from '../core/types.js';
 import { FederationNode } from '../federation/node.js';
 import { MemoryOrganizer } from '../memory/organizer.js';
 import { MemoryStore } from '../memory/store.js';
@@ -403,7 +403,7 @@ function buildRunner(
     skillsText,
     systemPromptMaxTokens: config.context?.systemPrompt?.maxTokens,
     dataDir,
-    memoryOrganizer: new MemoryOrganizer(memoryStore, provider, agentCfg.id as AgentId),
+    memoryOrganizer: new MemoryOrganizer(memoryStore, provider, asAgentId(agentCfg.id)),
     memoryStore,
     resolvedModel: {
       id: primaryModelId,
@@ -637,7 +637,7 @@ export async function startGateway(
   async function startExternalChannels(): Promise<void> {
     const channelsCfg = config.channels;
     // Default agent: first configured agent, or 'main' as fallback
-    const firstAgentId = config.agents[0]?.id ?? 'main';
+    const firstAgentId = asAgentId(config.agents[0]?.id ?? 'main');
 
     // ── Telegram ────────────────────────────────────────────────────────────
     const tgCfg = channelsCfg.telegram;
@@ -645,7 +645,7 @@ export async function startGateway(
       try {
         const tg = new TelegramChannel({
           botToken: tgCfg.botToken,
-          defaultAgentId: (tgCfg.defaultAgentId || firstAgentId) as AgentId,
+          defaultAgentId: asAgentId(tgCfg.defaultAgentId || firstAgentId),
           allowedChatIds: tgCfg.allowedChatIds,
           pollIntervalMs: tgCfg.pollIntervalMs,
         });
@@ -703,7 +703,7 @@ export async function startGateway(
       try {
         const dc = new DiscordChannel({
           botToken: dcCfg.botToken,
-          defaultAgentId: (dcCfg.defaultAgentId || firstAgentId) as AgentId,
+          defaultAgentId: asAgentId(dcCfg.defaultAgentId || firstAgentId),
           allowedChannelIds: dcCfg.allowedChannelIds,
           commandPrefix: dcCfg.commandPrefix,
         });
@@ -768,7 +768,7 @@ export async function startGateway(
           appSecret: feishuCfg.appSecret,
           verificationToken: feishuCfg.verificationToken,
           encryptKey: feishuCfg.encryptKey,
-          defaultAgentId: (feishuCfg.defaultAgentId || firstAgentId) as AgentId,
+          defaultAgentId: asAgentId(feishuCfg.defaultAgentId || firstAgentId),
           allowedChatIds: feishuCfg.allowedChatIds,
           agentMappings: feishuCfg.agentMappings,
           knownAgentIds: [...runners.keys()],
@@ -825,7 +825,7 @@ export async function startGateway(
         const qq = new QQChannel({
           appId: qqCfg.appId,
           clientSecret: qqCfg.clientSecret,
-          defaultAgentId: (qqCfg.defaultAgentId || firstAgentId) as AgentId,
+          defaultAgentId: asAgentId(qqCfg.defaultAgentId || firstAgentId),
           allowedGroupIds: qqCfg.allowedGroupIds,
         });
         await qq.start(async (msg) => {
@@ -912,8 +912,8 @@ export async function startGateway(
       ws.close(4401, 'Unauthorized');
       return;
     }
-    const agentId = (params.get('agentId') ?? config.agents[0]?.id ?? 'main') as AgentId;
-    const threadKey = (params.get('threadKey') ?? `ws-${Date.now()}`) as ThreadKey;
+    const agentId = asAgentId(params.get('agentId')?.trim() || config.agents[0]?.id || 'main');
+    const threadKey = asThreadKey(params.get('threadKey')?.trim() || `ws-${Date.now()}`);
     webChannel.bindWebSocket(ws, agentId, threadKey);
   };
 
