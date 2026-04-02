@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Badge } from '../components/Badge.js';
 import { Button } from '../components/Button.js';
+import { DeliverableModal } from '../components/DeliverableModal.js';
 import { MarkdownView } from '../components/MarkdownView.js';
 import { useLocale } from '../context/i18n.js';
 import { useWorkflowRun } from '../context/workflow-run.js';
@@ -47,6 +48,7 @@ export function WorkflowRunPanel({
   const [input, setInput] = useState('');
   const [runId, setRunId] = useState<string | null>(initialRunId ?? null);
   const [run, setRun] = useState<WorkflowRunRecord | null>(null);
+  const [deliverableId, setDeliverableId] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const running = run?.status === 'running';
@@ -254,7 +256,26 @@ export function WorkflowRunPanel({
                 {((run.finishedAt - run.startedAt) / 1000).toFixed(1)}s
               </span>
             )}
+            {run.latestDeliverableId && (
+              <Button size="sm" variant="ghost" onClick={() => setDeliverableId(run.latestDeliverableId ?? null)}>
+                {t('deliverables.open')}
+              </Button>
+            )}
           </div>
+
+          {run.latestDeliverableId && (
+            <div className="rounded-2xl border border-cyan-400/20 bg-cyan-500/8 px-4 py-3 text-sm text-cyan-100">
+              <div className="text-[11px] uppercase tracking-[0.22em] text-cyan-300/70">
+                {t('workflow.run.deliverableReady')}
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-3">
+                <span className="font-mono text-xs text-cyan-200/90">{run.latestDeliverableId}</span>
+                <Button size="sm" variant="ghost" onClick={() => setDeliverableId(run.latestDeliverableId ?? null)}>
+                  {t('deliverables.open')}
+                </Button>
+              </div>
+            </div>
+          )}
 
           {run.stepResults.map((sr, i) => {
             const step = workflow.steps.find((s) => s.id === sr.stepId);
@@ -343,6 +364,10 @@ export function WorkflowRunPanel({
             );
           })()}
         </div>
+      )}
+
+      {deliverableId && (
+        <DeliverableModal deliverableId={deliverableId} onClose={() => setDeliverableId(null)} />
       )}
     </div>
   );

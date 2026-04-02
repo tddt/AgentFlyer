@@ -12,6 +12,8 @@ import { rpc, useQuery } from '../hooks/useRpc.js';
 import { useToast } from '../hooks/useToast.js';
 import type {
   AgentListResult,
+  ChannelInfo,
+  ChannelListResult,
   SchedulerListResult,
   TaskInfo,
   WorkflowDef,
@@ -50,7 +52,12 @@ export function WorkflowTab() {
     () => rpc<SchedulerListResult>('scheduler.list'),
     [],
   );
+  const { data: channelData } = useQuery<ChannelListResult>(
+    () => rpc<ChannelListResult>('channel.list'),
+    [],
+  );
   const scheduledTasks: TaskInfo[] = schedulerData?.tasks ?? [];
+  const channels: ChannelInfo[] = channelData?.channels ?? [];
 
   // First currently-running workflow + its def — drives the top banner
   const activeRunBanner = useMemo(() => {
@@ -134,6 +141,7 @@ export function WorkflowTab() {
       <WorkflowEditor
         workflow={editTarget}
         agents={agents}
+        channels={channels}
         onSave={(w) => void handleSave(w)}
         onCancel={() => setView('list')}
       />
@@ -246,6 +254,11 @@ export function WorkflowTab() {
                   {schedCount > 0 && (
                     <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-purple-600/20 ring-1 ring-purple-500/40 text-purple-300">
                       ⏰ {schedCount}
+                    </span>
+                  )}
+                  {(w.publicationTargets?.length || w.publicationChannels?.length) && (
+                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-cyan-600/20 ring-1 ring-cyan-500/40 text-cyan-300">
+                      ↗ {w.publicationTargets?.length ?? w.publicationChannels?.length}
                     </span>
                   )}
                   <Badge variant="gray">{t('workflow.steps', { n: String(w.steps.length) })}</Badge>

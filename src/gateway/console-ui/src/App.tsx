@@ -14,6 +14,7 @@ type TabId =
   | 'chat'
   | 'logs'
   | 'config'
+  | 'deliverables'
   | 'scheduler'
   | 'sessions'
   | 'workflow'
@@ -29,6 +30,9 @@ const AgentsTab = lazy(() => import('./tabs/AgentsTab.js').then((m) => ({ defaul
 const ChatTab = lazy(() => import('./tabs/ChatTab.js').then((m) => ({ default: m.ChatTab })));
 const LogsTab = lazy(() => import('./tabs/LogsTab.js').then((m) => ({ default: m.LogsTab })));
 const ConfigTab = lazy(() => import('./tabs/ConfigTab.js').then((m) => ({ default: m.ConfigTab })));
+const DeliverablesTab = lazy(() =>
+  import('./tabs/DeliverablesTab.js').then((m) => ({ default: m.DeliverablesTab })),
+);
 const SchedulerTab = lazy(() =>
   import('./tabs/SchedulerTab.js').then((m) => ({ default: m.SchedulerTab })),
 );
@@ -51,6 +55,7 @@ const TAB_MAP: Record<TabId, React.ComponentType> = {
   chat: ChatTab,
   logs: LogsTab,
   config: ConfigTab,
+  deliverables: DeliverablesTab,
   scheduler: SchedulerTab,
   sessions: SessionsTab,
   workflow: WorkflowTab,

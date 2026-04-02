@@ -5,6 +5,7 @@
 import { useState } from 'react';
 import { Badge } from '../components/Badge.js';
 import { Button } from '../components/Button.js';
+import { DeliverableModal } from '../components/DeliverableModal.js';
 import { useLocale } from '../context/i18n.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
 import type { WorkflowDef, WorkflowRunRecord } from '../types.js';
@@ -37,6 +38,7 @@ export function WorkflowHistoryPanel({
     [],
   );
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [deliverableId, setDeliverableId] = useState<string | null>(null);
 
   const runs = data?.runs ?? [];
 
@@ -99,11 +101,25 @@ export function WorkflowHistoryPanel({
                   {new Date(r.startedAt).toLocaleString()}
                   {duration && ` · ${duration}`}
                 </span>
+                {r.latestDeliverableId && (
+                  <Badge variant="blue">deliverable</Badge>
+                )}
                 <span className="text-slate-600 text-xs">{isOpen ? '▲' : '▼'}</span>
               </button>
 
               {isOpen && (
                 <div className="px-4 pb-4 flex flex-col gap-3">
+                  {r.latestDeliverableId && (
+                    <div className="flex justify-end">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setDeliverableId(r.latestDeliverableId ?? null)}
+                      >
+                        {t('deliverables.open')}
+                      </Button>
+                    </div>
+                  )}
                   {r.input && (
                     <div className="rounded-lg bg-slate-900/60 ring-1 ring-slate-700/40 px-3 py-2">
                       <span className="text-xs text-slate-500 block mb-1">{t('workflow.history.input')}</span>
@@ -196,6 +212,10 @@ export function WorkflowHistoryPanel({
           );
         })}
       </div>
+
+      {deliverableId && (
+        <DeliverableModal deliverableId={deliverableId} onClose={() => setDeliverableId(null)} />
+      )}
     </div>
   );
 }

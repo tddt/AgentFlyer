@@ -1,3 +1,5 @@
+import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { loadStats } from '../agent/stats.js';
 import { createLogger } from '../core/logger.js';
@@ -60,6 +62,75 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(payload);
 }
 
+function queryTokenFromUrl(url: string): string {
+  const qs = url.includes('?') ? url.slice(url.indexOf('?') + 1) : '';
+  return new URLSearchParams(qs).get('token') ?? '';
+}
+
+function writeUnauthorized(res: ServerResponse): void {
+  json(res, 401, { error: 'Unauthorized' });
+}
+
+async function streamContentItem(
+  req: IncomingMessage,
+  res: ServerResponse,
+  opts: RouterOptions,
+  itemId: string,
+): Promise<boolean> {
+  const item = await opts.rpcContext.contentStore.get(itemId);
+  if (!item) {
+    json(res, 404, { error: 'Content item not found' });
+    return true;
+  }
+
+  let fileStat: Awaited<ReturnType<typeof stat>>;
+  try {
+    fileStat = await stat(item.filePath);
+  } catch {
+    json(res, 404, { error: 'Content file not found on disk' });
+    return true;
+  }
+
+  const rangeHeader = req.headers.range;
+  if (rangeHeader) {
+    const match = /^bytes=(\d+)-(\d*)$/.exec(rangeHeader);
+    if (!match) {
+      res.writeHead(416, { 'Content-Range': `bytes */${fileStat.size}` });
+      res.end();
+      return true;
+    }
+
+    const start = Number(match[1]);
+    const end = match[2] ? Number(match[2]) : fileStat.size - 1;
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || end >= fileStat.size) {
+      res.writeHead(416, { 'Content-Range': `bytes */${fileStat.size}` });
+      res.end();
+      return true;
+    }
+
+    res.writeHead(206, {
+      'Content-Type': item.mimeType,
+      'Content-Length': end - start + 1,
+      'Content-Range': `bytes ${start}-${end}/${fileStat.size}`,
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'no-store',
+      'Content-Disposition': `inline; filename="${encodeURIComponent(item.name)}"`,
+    });
+    createReadStream(item.filePath, { start, end }).pipe(res);
+    return true;
+  }
+
+  res.writeHead(200, {
+    'Content-Type': item.mimeType,
+    'Content-Length': fileStat.size,
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'no-store',
+    'Content-Disposition': `inline; filename="${encodeURIComponent(item.name)}"`,
+  });
+  createReadStream(item.filePath).pipe(res);
+  return true;
+}
+
 /**
  * Route an HTTP request to the appropriate handler.
  * Returns `false` if the request was not handled (let caller deal with it).
@@ -116,11 +187,10 @@ export async function routeRequest(
   // ── Web console (token in query param — SSE cannot set headers) ────────
   // GET /console?token=<token>
   if (url.startsWith('/console') && method === 'GET') {
-    const qs = url.includes('?') ? url.slice(url.indexOf('?') + 1) : '';
-    const queryToken = new URLSearchParams(qs).get('token') ?? '';
+    const queryToken = queryTokenFromUrl(url);
     const authCheck = validateToken(`Bearer ${queryToken}`, opts.authToken);
     if (!authCheck.ok) {
-      json(res, 401, { error: 'Unauthorized' });
+      writeUnauthorized(res);
       return true;
     }
     const html = buildConsoleHtml(opts.authToken, opts.port);
@@ -134,11 +204,10 @@ export async function routeRequest(
 
   // GET /api/logs?token=<token>  — SSE log stream
   if (url.startsWith('/api/logs') && method === 'GET') {
-    const qs = url.includes('?') ? url.slice(url.indexOf('?') + 1) : '';
-    const queryToken = new URLSearchParams(qs).get('token') ?? '';
+    const queryToken = queryTokenFromUrl(url);
     const authCheck = validateToken(`Bearer ${queryToken}`, opts.authToken);
     if (!authCheck.ok) {
-      json(res, 401, { error: 'Unauthorized' });
+      writeUnauthorized(res);
       return true;
     }
     res.writeHead(200, {
@@ -149,6 +218,22 @@ export async function routeRequest(
     });
     opts.logBroadcaster.subscribe(res);
     return true;
+  }
+
+  // GET /api/content/<itemId>?token=<token>  — browser-safe media/file preview
+  if (url.startsWith('/api/content/') && method === 'GET') {
+    const itemId = url.slice('/api/content/'.length).split('?')[0] ?? '';
+    const queryToken = queryTokenFromUrl(url);
+    const authCheck = validateToken(`Bearer ${queryToken}`, opts.authToken);
+    if (!authCheck.ok) {
+      writeUnauthorized(res);
+      return true;
+    }
+    if (!itemId) {
+      json(res, 400, { error: 'Missing content item id' });
+      return true;
+    }
+    return streamContentItem(req, res, opts, decodeURIComponent(itemId));
   }
 
   // ── All other routes require auth ──────────────────────────────────────

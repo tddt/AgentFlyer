@@ -5,7 +5,9 @@
 import { useState } from 'react';
 import { Button } from '../components/Button.js';
 import type {
+  ChannelInfo,
   ConditionBranch,
+  PublicationTargetConfig,
   StepOutputVar,
   StepType,
   WorkflowDef,
@@ -824,11 +826,13 @@ function StepRow({
 export function WorkflowEditor({
   workflow,
   agents,
+  channels,
   onSave,
   onCancel,
 }: {
   workflow: WorkflowDef | null;
   agents: { agentId: string; name?: string }[];
+  channels: ChannelInfo[];
   onSave: (w: WorkflowDef) => void;
   onCancel: () => void;
 }) {
@@ -851,6 +855,9 @@ export function WorkflowEditor({
   const [newGlobalVal, setNewGlobalVal] = useState('');
   const [nameError, setNameError] = useState(false);
   const [inputRequired, setInputRequired] = useState(workflow?.inputRequired !== false);
+  const [publicationTargets, setPublicationTargets] = useState<PublicationTargetConfig[]>(
+    workflow?.publicationTargets ?? [],
+  );
   const [showHelp, setShowHelp] = useState(false);
 
   const updateStep = (i: number, s: WorkflowStep) =>
@@ -892,6 +899,7 @@ export function WorkflowEditor({
       name: name.trim(),
       description: description.trim() || undefined,
       steps,
+      publicationTargets: publicationTargets.length > 0 ? publicationTargets : undefined,
       variables: Object.keys(variables).length ? variables : undefined,
       inputRequired: inputRequired ? undefined : false,
       createdAt: workflow?.createdAt ?? now,
@@ -1035,6 +1043,99 @@ export function WorkflowEditor({
             </div>
           </div>
         )}
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-slate-400">交付物传播渠道</span>
+          <span className="text-[11px] text-slate-500">
+            {publicationTargets.length > 0
+              ? `已配置 ${publicationTargets.length} 个目标`
+              : '未选择时将展示所有可用渠道'}
+          </span>
+        </div>
+        <div className="rounded-xl bg-slate-800/50 ring-1 ring-slate-700/40 p-3 flex flex-col gap-2">
+          {channels.length === 0 ? (
+            <span className="text-xs text-slate-500">当前没有已注册渠道</span>
+          ) : (
+            <>
+              {publicationTargets.map((target, index) => (
+                <div
+                  key={`${target.channelId}:${target.threadKey}:${index}`}
+                  className="grid grid-cols-[minmax(0,160px)_minmax(0,1fr)_minmax(0,160px)_auto] gap-2 items-center"
+                >
+                  <select
+                    value={target.channelId}
+                    onChange={(e) =>
+                      setPublicationTargets((current) =>
+                        current.map((item, itemIndex) =>
+                          itemIndex === index ? { ...item, channelId: e.target.value } : item,
+                        ),
+                      )
+                    }
+                    className="rounded-lg bg-slate-900/70 ring-1 ring-slate-700 px-2 py-1.5 text-sm text-slate-100"
+                  >
+                    {channels.map((channel) => (
+                      <option key={channel.id} value={channel.id}>
+                        {channel.name}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    className={`${inputCls} font-mono text-xs`}
+                    placeholder="threadKey"
+                    value={target.threadKey}
+                    onChange={(e) =>
+                      setPublicationTargets((current) =>
+                        current.map((item, itemIndex) =>
+                          itemIndex === index ? { ...item, threadKey: e.target.value } : item,
+                        ),
+                      )
+                    }
+                  />
+                  <input
+                    className={inputCls}
+                    placeholder="agentId (optional)"
+                    value={target.agentId ?? ''}
+                    onChange={(e) =>
+                      setPublicationTargets((current) =>
+                        current.map((item, itemIndex) =>
+                          itemIndex === index
+                            ? { ...item, agentId: e.target.value || undefined }
+                            : item,
+                        ),
+                      )
+                    }
+                  />
+                  <button
+                    onClick={() =>
+                      setPublicationTargets((current) =>
+                        current.filter((_, itemIndex) => itemIndex !== index),
+                      )
+                    }
+                    className="text-slate-600 hover:text-red-400 text-sm"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+              <button
+                onClick={() =>
+                  setPublicationTargets((current) => [
+                    ...current,
+                    {
+                      channelId: channels[0]?.id ?? '',
+                      threadKey: '',
+                    },
+                  ])
+                }
+                className="text-xs text-indigo-400 hover:text-indigo-300 text-left"
+              >
+                + 添加传播目标
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Pipeline visualizer */}

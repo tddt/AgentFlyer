@@ -56,6 +56,7 @@ import { createSkillTools } from '../skills/skill-tools.js';
 import { AgentQueueRegistry } from './agent-queue.js';
 import { generateToken } from './auth.js';
 import { ContentStore } from './content-store.js';
+import { DeliverableStore } from './deliverables.js';
 import { HookRegistry } from './hooks.js';
 import { IntentRouter } from './intent-router.js';
 import { logBroadcaster } from './log-buffer.js';
@@ -604,6 +605,7 @@ export async function startGateway(
     sessionStore: new SessionStore(join(dataDir, 'sessions')),
     metaStore: new SessionMetaStore(join(dataDir, 'sessions')),
     contentStore: new ContentStore(() => state.config),
+    deliverableStore: new DeliverableStore(dataDir),
     channels: sharedChannels,
     runningTasks: new Map(),
   };

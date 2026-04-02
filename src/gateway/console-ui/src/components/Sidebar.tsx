@@ -5,6 +5,7 @@ type TabId =
   | 'chat'
   | 'logs'
   | 'config'
+  | 'deliverables'
   | 'scheduler'
   | 'sessions'
   | 'workflow'
@@ -102,6 +103,22 @@ const Ico: Record<string, ReactNode> = {
       <circle cx="8" cy="12" r="2.5" fill="currentColor" stroke="none" />
       <line x1="4" y1="18" x2="20" y2="18" />
       <circle cx="14" cy="18" r="2.5" fill="currentColor" stroke="none" />
+    </svg>
+  ),
+  deliverables: (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M20 7 12 3 4 7l8 4 8-4Z" />
+      <path d="M4 7v10l8 4 8-4V7" />
+      <path d="M12 11v10" />
     </svg>
   ),
   scheduler: (
@@ -229,6 +246,7 @@ const NAV_IDS: TabId[] = [
   'chat',
   'logs',
   'config',
+  'deliverables',
   'scheduler',
   'sessions',
   'workflow',

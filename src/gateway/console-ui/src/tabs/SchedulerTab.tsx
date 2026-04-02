@@ -2,12 +2,16 @@ import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Badge } from '../components/Badge.js';
 import { Button } from '../components/Button.js';
+import { DeliverableModal } from '../components/DeliverableModal.js';
 import { useLocale } from '../context/i18n.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
 import { useToast } from '../hooks/useToast.js';
 import type {
   AgentInfo,
   AgentListResult,
+  ChannelInfo,
+  ChannelListResult,
+  PublicationTargetConfig,
   RunningTaskInfo,
   SchedulerListResult,
   TaskHistoryResult,
@@ -29,6 +33,7 @@ interface TaskForm {
   intervalMinutes: number;
   reportTo: string;
   outputChannel: 'logs' | 'cli' | 'web';
+  publicationTargets: PublicationTargetConfig[];
   enabled: boolean;
 }
 
@@ -63,8 +68,18 @@ function defaultTaskForm(agentId: string): TaskForm {
     intervalMinutes: 60,
     reportTo: '',
     outputChannel: 'logs',
+    publicationTargets: [],
     enabled: true,
   };
+}
+
+function formatPublicationLabel(
+  channel: ChannelInfo,
+  t: (key: string, vars?: Record<string, string>) => string,
+): string {
+  return channel.supportsAttachment
+    ? t('propagation.channelArtifactReady')
+    : t('propagation.channelSummaryOnly');
 }
 
 interface ChannelsConfigResult {
@@ -162,11 +177,13 @@ function HistoryRecordCard({
   durStr,
   index,
   total,
+  onOpenDeliverable,
 }: {
   r: TaskRunRecord;
   durStr: string;
   index: number;
   total: number;
+  onOpenDeliverable: (deliverableId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const { t } = useLocale();
@@ -186,6 +203,14 @@ function HistoryRecordCard({
         <Badge variant={r.ok ? 'green' : 'red'}>{r.ok ? 'OK' : 'Error'}</Badge>
         <span className="text-xs text-slate-400">{new Date(r.startedAt).toLocaleString()}</span>
         <span className="text-xs text-slate-500 font-mono">{durStr}</span>
+        {r.deliverableId && (
+          <button
+            className="text-xs text-cyan-300 hover:text-cyan-200"
+            onClick={() => onOpenDeliverable(r.deliverableId ?? '')}
+          >
+            {t('deliverables.open')}
+          </button>
+        )}
         {(r.workflowId ?? r.agentId) && (
           <span className="text-xs text-slate-600 ml-auto truncate max-w-[200px]">
             {r.workflowId ? `⚡ ${r.workflowId}` : r.agentId}
@@ -256,6 +281,7 @@ export function SchedulerTab() {
   } | null>(null);
   const [runningTasks, setRunningTasks] = useState<RunningTaskInfo[]>([]);
   const [nowTs, setNowTs] = useState(Date.now());
+  const [deliverableId, setDeliverableId] = useState<string | null>(null);
 
   const {
     data: schedulerResult,
@@ -273,6 +299,10 @@ export function SchedulerTab() {
   );
   const { data: configResult } = useQuery<ChannelsConfigResult>(
     () => rpc<ChannelsConfigResult>('config.get'),
+    [],
+  );
+  const { data: channelResult } = useQuery<ChannelListResult>(
+    () => rpc<ChannelListResult>('channel.list'),
     [],
   );
 
@@ -306,6 +336,7 @@ export function SchedulerTab() {
   const tasks: TaskInfo[] = Array.isArray(schedulerResult?.tasks) ? schedulerResult.tasks : [];
   const agents: AgentInfo[] = Array.isArray(agentResult?.agents) ? agentResult.agents : [];
   const workflows: WorkflowDef[] = workflowResult?.workflows ?? [];
+  const channels: ChannelInfo[] = channelResult?.channels ?? [];
   const defaultAgentId = agents[0]?.agentId ?? '';
   const defaultOutputChannel =
     configResult?.channels?.defaults?.schedulerOutput ??
@@ -363,6 +394,7 @@ export function SchedulerTab() {
         intervalMinutes: 60,
         reportTo: task.reportTo ?? '',
         outputChannel: task.outputChannel ?? defaultOutputChannel,
+        publicationTargets: task.publicationTargets ?? [],
         enabled: task.enabled !== false,
       },
     });
@@ -434,6 +466,7 @@ export function SchedulerTab() {
           intervalMinutes: f.scheduleMode === 'interval' ? f.intervalMinutes : undefined,
           reportTo: f.reportTo || undefined,
           outputChannel: f.outputChannel,
+          publicationTargets: f.publicationTargets,
           enabled: f.enabled,
         });
         toast('Task created', 'success');
@@ -447,6 +480,7 @@ export function SchedulerTab() {
           intervalMinutes: f.scheduleMode === 'interval' ? f.intervalMinutes : undefined,
           reportTo: f.reportTo || undefined,
           outputChannel: f.outputChannel,
+          publicationTargets: f.publicationTargets,
           enabled: f.enabled,
         });
         toast('Task updated', 'success');
@@ -636,6 +670,17 @@ export function SchedulerTab() {
                   </td>
                   <td className="px-4 py-3 text-xs text-slate-300">
                     {task.outputChannel ?? defaultOutputChannel}
+                    <div className="text-slate-500 mt-1">
+                      {task.publicationChannels && task.publicationChannels.length > 0
+                        ? t('scheduler.publicationCount', {
+                            n: String(task.publicationTargets?.length ?? task.publicationChannels.length),
+                          })
+                        : task.publicationTargets && task.publicationTargets.length > 0
+                        ? t('scheduler.publicationCount', {
+                            n: String(task.publicationTargets.length),
+                          })
+                        : t('scheduler.publicationAuto')}
+                    </div>
                   </td>
                   <td className="px-4 py-3">
                     <Badge variant={task.enabled === false ? 'yellow' : 'green'}>
@@ -650,6 +695,14 @@ export function SchedulerTab() {
                     <div className="text-slate-500 mt-1">
                       {task.lastRunAt ? new Date(task.lastRunAt).toLocaleString() : ''}
                     </div>
+                    {task.latestDeliverableId && (
+                      <button
+                        className="mt-2 text-xs text-cyan-300 hover:text-cyan-200"
+                        onClick={() => setDeliverableId(task.latestDeliverableId ?? null)}
+                      >
+                        {t('deliverables.open')}
+                      </button>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap gap-2">
@@ -901,6 +954,130 @@ export function SchedulerTab() {
             </select>
           </Field>
 
+          <Field label={t('scheduler.modal.publicationChannels')}>
+            <div className="rounded-xl bg-slate-800/50 border border-slate-700/60 p-3 flex flex-col gap-2">
+              <p className="text-xs text-slate-400">{t('scheduler.modal.publicationHint')}</p>
+              {channels.length === 0 ? (
+                <span className="text-xs text-slate-500">{t('scheduler.modal.noChannels')}</span>
+              ) : (
+                <>
+                  {taskModal.form.publicationTargets.map((target, index) => (
+                    <div
+                      key={`${target.channelId}:${target.threadKey}:${index}`}
+                      className="grid grid-cols-[minmax(0,150px)_minmax(0,1fr)_minmax(0,160px)_auto] gap-2 items-center"
+                    >
+                      <select
+                        value={target.channelId}
+                        onChange={(e) =>
+                          setTaskModal({
+                            ...taskModal,
+                            form: {
+                              ...taskModal.form,
+                              publicationTargets: taskModal.form.publicationTargets.map((item, itemIndex) =>
+                                itemIndex === index ? { ...item, channelId: e.target.value } : item,
+                              ),
+                            },
+                          })
+                        }
+                        className="bg-slate-900/50 border border-slate-700 text-slate-200 text-xs rounded-lg px-2.5 py-2"
+                      >
+                        {channels.map((channel) => (
+                          <option key={channel.id} value={channel.id}>
+                            {channel.name}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        value={target.threadKey}
+                        onChange={(e) =>
+                          setTaskModal({
+                            ...taskModal,
+                            form: {
+                              ...taskModal.form,
+                              publicationTargets: taskModal.form.publicationTargets.map((item, itemIndex) =>
+                                itemIndex === index ? { ...item, threadKey: e.target.value } : item,
+                              ),
+                            },
+                          })
+                        }
+                        placeholder="threadKey"
+                        className="bg-slate-900/50 border border-slate-700 text-slate-200 text-xs rounded-lg px-2.5 py-2 font-mono"
+                      />
+                      <input
+                        value={target.agentId ?? ''}
+                        onChange={(e) =>
+                          setTaskModal({
+                            ...taskModal,
+                            form: {
+                              ...taskModal.form,
+                              publicationTargets: taskModal.form.publicationTargets.map((item, itemIndex) =>
+                                itemIndex === index
+                                  ? { ...item, agentId: e.target.value || undefined }
+                                  : item,
+                              ),
+                            },
+                          })
+                        }
+                        placeholder="agentId (optional)"
+                        className="bg-slate-900/50 border border-slate-700 text-slate-200 text-xs rounded-lg px-2.5 py-2"
+                      />
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          setTaskModal({
+                            ...taskModal,
+                            form: {
+                              ...taskModal.form,
+                              publicationTargets: taskModal.form.publicationTargets.filter(
+                                (_, itemIndex) => itemIndex !== index,
+                              ),
+                            },
+                          })
+                        }
+                      >
+                        {t('common.delete')}
+                      </Button>
+                    </div>
+                  ))}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      setTaskModal({
+                        ...taskModal,
+                        form: {
+                          ...taskModal.form,
+                          publicationTargets: [
+                            ...taskModal.form.publicationTargets,
+                            {
+                              channelId: channels[0]?.id ?? '',
+                              threadKey: '',
+                            },
+                          ],
+                        },
+                      })
+                    }
+                  >
+                    + Add Target
+                  </Button>
+                  {taskModal.form.publicationTargets.map((target) => {
+                    const channel = channels.find((item) => item.id === target.channelId);
+                    if (!channel) return null;
+                    return (
+                      <div
+                        key={`${target.channelId}:${target.threadKey}:hint`}
+                        className="text-[11px] text-slate-500"
+                      >
+                        {channel.name} · {formatPublicationLabel(channel, t)}
+                      </div>
+                    );
+                  })}
+                </>
+              )}
+            </div>
+          </Field>
+
           <Field label="Enabled">
             <label className="text-xs text-slate-300 inline-flex items-center gap-2">
               <input
@@ -986,6 +1163,7 @@ export function SchedulerTab() {
                         durStr={durStr}
                         index={i}
                         total={historyModal.records.length}
+                        onOpenDeliverable={setDeliverableId}
                       />
                     );
                   })}
@@ -994,6 +1172,10 @@ export function SchedulerTab() {
           </div>,
           document.body,
         )}
+
+      {deliverableId && (
+        <DeliverableModal deliverableId={deliverableId} onClose={() => setDeliverableId(null)} />
+      )}
     </div>
   );
 }

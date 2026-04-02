@@ -53,11 +53,18 @@ export interface ScheduledTaskMeta {
   cronExpr: string;
   reportTo?: string;
   outputChannel?: 'logs' | 'cli' | 'web';
+  publicationTargets?: Array<{
+    channelId: string;
+    threadKey: string;
+    agentId?: string;
+  }>;
+  publicationChannels?: string[];
   enabled?: boolean;
   createdAt: number;
   runCount: number;
   lastRunAt?: number;
   lastResult?: string;
+  latestDeliverableId?: string;
 }
 
 class TaskStore {

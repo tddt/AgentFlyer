@@ -34,6 +34,22 @@ export interface AgentListResult {
   agents: AgentInfo[];
 }
 
+export interface ChannelInfo {
+  id: string;
+  name: string;
+  supportsAttachment: boolean;
+}
+
+export interface ChannelListResult {
+  channels: ChannelInfo[];
+}
+
+export interface PublicationTargetConfig {
+  channelId: string;
+  threadKey: string;
+  agentId?: string;
+}
+
 export interface TaskInfo {
   id: string;
   name: string;
@@ -45,12 +61,15 @@ export interface TaskInfo {
   cronExpr: string;
   reportTo?: string;
   outputChannel?: 'logs' | 'cli' | 'web';
+  publicationTargets?: PublicationTargetConfig[];
+  publicationChannels?: string[];
   enabled?: boolean;
   createdAt?: number;
   runCount: number;
   lastRunAt?: number;
   nextRunAt?: number;
   lastResult?: string;
+  latestDeliverableId?: string;
 }
 
 export interface SchedulerListResult {
@@ -68,12 +87,15 @@ export interface RunningTaskInfo {
 export interface TaskRunRecord {
   taskId: string;
   taskName: string;
+  runKey: string;
   startedAt: number;
   finishedAt: number;
   ok: boolean;
   result: string;
   agentId?: string;
   workflowId?: string;
+  workflowRunId?: string;
+  deliverableId?: string;
 }
 
 export interface TaskHistoryResult {
@@ -288,6 +310,8 @@ export interface WorkflowDef {
   name: string;
   description?: string;
   steps: WorkflowStep[];
+  publicationTargets?: PublicationTargetConfig[];
+  publicationChannels?: string[];
   /** Global constants available as {{globals.<key>}} in any template. */
   variables?: Record<string, string>;
   /** ID of the first step to execute (defaults to steps[0].id). */
@@ -317,6 +341,105 @@ export interface WorkflowRunRecord {
   finishedAt?: number;
   status: 'running' | 'done' | 'error' | 'cancelled';
   stepResults: WorkflowStepResult[];
+  latestDeliverableId?: string;
+}
+
+export type DeliverableStatus = 'ready' | 'error' | 'cancelled';
+export type DeliverableFormat =
+  | 'text'
+  | 'markdown'
+  | 'json'
+  | 'csv'
+  | 'image'
+  | 'video'
+  | 'audio'
+  | 'file';
+
+export type ArtifactRole = 'primary' | 'step-output' | 'step-error' | 'file';
+
+export type DeliverablePublicationTargetKind = 'system' | 'agent' | 'channel';
+export type DeliverablePublicationMode = 'summary' | 'artifact';
+export type DeliverablePublicationStatus = 'planned' | 'available' | 'sent' | 'failed';
+
+export interface DeliverablePublicationTarget {
+  id: string;
+  kind: DeliverablePublicationTargetKind;
+  targetId: string;
+  label: string;
+  mode: DeliverablePublicationMode;
+  status: DeliverablePublicationStatus;
+  threadKey?: string;
+  agentId?: string;
+  detail?: string;
+  lastAttemptAt?: number;
+}
+
+export interface ArtifactRef {
+  id: string;
+  name: string;
+  role: ArtifactRole;
+  format: DeliverableFormat;
+  mimeType?: string;
+  filePath?: string;
+  contentItemId?: string;
+  textContent?: string;
+  size?: number;
+  stepId?: string;
+  stepLabel?: string;
+  stepIndex?: number;
+  createdAt: number;
+}
+
+export type DeliverableSource =
+  | {
+      kind: 'workflow_run';
+      workflowId: string;
+      workflowName: string;
+      runId: string;
+    }
+  | {
+      kind: 'scheduler_task_run';
+      taskId: string;
+      taskName: string;
+      runKey: string;
+      startedAt: number;
+      finishedAt: number;
+      workflowId?: string;
+      workflowRunId?: string;
+      agentId?: string;
+    };
+
+export interface DeliverableStats {
+  total: number;
+  ready: number;
+  error: number;
+  cancelled: number;
+  workflowRuns: number;
+  schedulerRuns: number;
+  totalArtifacts: number;
+  textualArtifacts: number;
+  fileArtifacts: number;
+  recent24h: number;
+}
+
+export interface DeliverableRecord {
+  id: string;
+  title: string;
+  summary: string;
+  previewText: string;
+  status: DeliverableStatus;
+  source: DeliverableSource;
+  artifacts: ArtifactRef[];
+  publications?: DeliverablePublicationTarget[];
+  primaryArtifactId?: string;
+  metadata?: Record<string, string | number | boolean | null>;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface DeliverableListResult {
+  items: DeliverableRecord[];
+  stats: DeliverableStats;
 }
 
 // ── Enriched agent config ─────────────────────────────────────────────────────

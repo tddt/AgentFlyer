@@ -11,6 +11,12 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ulid } from 'ulid';
 import { createLogger } from '../core/logger.js';
+import { publishDeliverableTargets } from './deliverable-publication.js';
+import {
+  type DeliverablePublicationTarget,
+  buildWorkflowDeliverable,
+  findRecentArtifacts,
+} from './deliverables.js';
 import type { RpcContext } from './rpc.js';
 
 const logger = createLogger('gateway:workflow');
@@ -95,6 +101,12 @@ export interface WorkflowDef {
   name: string;
   description?: string;
   steps: WorkflowStep[];
+  publicationTargets?: Array<{
+    channelId: string;
+    threadKey: string;
+    agentId?: string;
+  }>;
+  publicationChannels?: string[];
   /** Global constants available as {{globals.<key>}} in any template. */
   variables?: Record<string, string>;
   /** ID of the first step to execute (defaults to steps[0].id). */
@@ -123,6 +135,7 @@ export interface WorkflowRunRecord {
   finishedAt?: number;
   status: 'running' | 'done' | 'error' | 'cancelled';
   stepResults: WorkflowStepResult[];
+  latestDeliverableId?: string;
 }
 
 // ── In-memory active runs (cleared on gateway restart) ────────────────────────
@@ -173,6 +186,70 @@ async function persistRun(dataDir: string, run: WorkflowRunRecord): Promise<void
   const filtered = existing.filter((r) => r.runId !== run.runId);
   const updated = [run, ...filtered].slice(0, 100);
   await writeWorkflowRunsFile(dataDir, updated);
+}
+
+async function createWorkflowDeliverableRecord(
+  ctx: RpcContext,
+  workflow: WorkflowDef,
+  run: WorkflowRunRecord,
+): Promise<void> {
+  if (run.latestDeliverableId) return;
+
+  const finishedAt = run.finishedAt ?? Date.now();
+  const agentIds = Array.from(
+    new Set(
+      workflow.steps.map((step) => step.agentId).filter((agentId): agentId is string => !!agentId),
+    ),
+  );
+  const contentItems = agentIds.length > 0 ? await ctx.contentStore.list() : [];
+  const fileArtifacts = findRecentArtifacts(contentItems, agentIds, run.startedAt, finishedAt);
+  const publicationTargets = workflow.publicationTargets;
+  const publicationChannelIds = workflow.publicationChannels;
+  const configuredTargets =
+    publicationTargets?.flatMap((target) => {
+      const channel = ctx.channels.get(target.channelId);
+      return channel ? [{ target, channel }] : [];
+    }) ?? [];
+  const publications: DeliverablePublicationTarget[] =
+    configuredTargets.length > 0
+      ? configuredTargets.map(({ target, channel }) => ({
+          id: `channel:${channel.id}:${target.threadKey}`,
+          kind: 'channel',
+          targetId: channel.id,
+          label: `${channel.name} · ${target.threadKey}`,
+          mode: fileArtifacts.length > 0 && channel.sendAttachment ? 'artifact' : 'summary',
+          status: 'planned',
+          threadKey: target.threadKey,
+          agentId: target.agentId,
+          detail: target.agentId
+            ? `Planned for thread ${target.threadKey} using agent ${target.agentId}.`
+            : `Planned for thread ${target.threadKey}.`,
+        }))
+      : (publicationChannelIds && publicationChannelIds.length > 0
+          ? publicationChannelIds
+              .map((channelId) => ctx.channels.get(channelId))
+              .filter((channel): channel is NonNullable<typeof channel> => !!channel)
+          : Array.from(ctx.channels.values())
+        ).map((channel) => ({
+          id: `channel:${channel.id}`,
+          kind: 'channel',
+          targetId: channel.id,
+          label: channel.name,
+          mode: fileArtifacts.length > 0 && channel.sendAttachment ? 'artifact' : 'summary',
+          status:
+            publicationChannelIds && publicationChannelIds.length > 0 ? 'planned' : 'available',
+          detail:
+            fileArtifacts.length > 0 && !channel.sendAttachment
+              ? 'This channel can receive a summary, but attachment upload is not implemented.'
+              : fileArtifacts.length > 0
+                ? 'This channel can receive workflow artifacts.'
+                : 'This channel can receive a summary view of the workflow deliverable.',
+        }));
+  const deliverable = await ctx.deliverableStore.upsert(
+    buildWorkflowDeliverable(workflow, run, fileArtifacts, publications),
+  );
+  await publishDeliverableTargets(ctx, deliverable);
+  run.latestDeliverableId = deliverable.id;
 }
 
 // ── Template interpolation ────────────────────────────────────────────────────
@@ -332,6 +409,7 @@ async function executeWorkflowBackground(
     if (activeWorkflowRuns.get(run.runId)?.status === 'cancelled') {
       run.status = 'cancelled';
       run.finishedAt = Date.now();
+      await createWorkflowDeliverableRecord(ctx, workflow, run);
       activeWorkflowRuns.set(run.runId, { ...run });
       await persistRun(ctx.dataDir, run);
       return;
@@ -442,6 +520,7 @@ async function executeWorkflowBackground(
                   prevOutputs.push(stepOutput);
                   run.status = 'done';
                   run.finishedAt = Date.now();
+                  await createWorkflowDeliverableRecord(ctx, workflow, run);
                   activeWorkflowRuns.set(run.runId, { ...run });
                   await persistRun(ctx.dataDir, run);
                   logger.info('Workflow ended via condition branch', { runId: run.runId });
@@ -492,6 +571,7 @@ async function executeWorkflowBackground(
       if (step.condition === 'on_success') {
         run.status = 'error';
         run.finishedAt = Date.now();
+        await createWorkflowDeliverableRecord(ctx, workflow, run);
         activeWorkflowRuns.set(run.runId, { ...run });
         await persistRun(ctx.dataDir, run);
         return;
@@ -518,6 +598,7 @@ async function executeWorkflowBackground(
 
   run.status = run.status === 'cancelled' ? 'cancelled' : 'done';
   run.finishedAt = Date.now();
+  await createWorkflowDeliverableRecord(ctx, workflow, run);
   activeWorkflowRuns.set(run.runId, { ...run });
   await persistRun(ctx.dataDir, run);
   logger.info('Workflow completed', { runId: run.runId, status: run.status });
@@ -533,7 +614,7 @@ export async function runWorkflowForScheduler(
   ctx: RpcContext,
   workflowId: string,
   input: string,
-): Promise<string> {
+): Promise<{ workflowRunId: string; output: string; deliverableId?: string }> {
   const workflows = await readWorkflowsFile(ctx.dataDir);
   const workflow = workflows.find((w) => w.id === workflowId);
   if (!workflow) throw new Error(`Workflow not found: ${workflowId}`);
@@ -558,7 +639,11 @@ export async function runWorkflowForScheduler(
     throw new Error(lastErr ?? 'Workflow execution failed');
   }
   const lastStep = final.stepResults[final.stepResults.length - 1];
-  return lastStep?.output ?? '(workflow completed)';
+  return {
+    workflowRunId: runId,
+    output: lastStep?.output ?? '(workflow completed)',
+    deliverableId: final.latestDeliverableId,
+  };
 }
 
 // ── RPC dispatch ─────────────────────────────────────────────────────────────

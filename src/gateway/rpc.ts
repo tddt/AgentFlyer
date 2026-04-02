@@ -26,6 +26,17 @@ import type { CronScheduler } from '../scheduler/cron.js';
 import { scanSkillsDir } from '../skills/registry.js';
 import type { ContentStore } from './content-store.js';
 import {
+  publishDeliverableTargets,
+  publishDeliverableToTarget,
+} from './deliverable-publication.js';
+import {
+  type DeliverablePublicationTarget,
+  buildSchedulerDeliverable,
+  findRecentArtifacts,
+  makeSchedulerRunKey,
+} from './deliverables.js';
+import type { DeliverableStore } from './deliverables.js';
+import {
   type WorkflowRpcMethod,
   dispatchWorkflowRpc,
   runWorkflowForScheduler,
@@ -36,12 +47,169 @@ const logger = createLogger('gateway:rpc');
 const _pkgRoot = join(dirname(fileURLToPath(import.meta.url)), '../..');
 type OutputChannel = 'logs' | 'cli' | 'web';
 
+function normalizePublicationChannels(
+  value: unknown,
+  availableChannels: Map<string, Channel>,
+): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const normalized = Array.from(
+    new Set(
+      value
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0),
+    ),
+  );
+  for (const channelId of normalized) {
+    if (!availableChannels.has(channelId)) {
+      throw new Error(`Unknown channel: ${channelId}`);
+    }
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizePublicationTargets(
+  value: unknown,
+  availableChannels: Map<string, Channel>,
+): Array<{ channelId: string; threadKey: string; agentId?: string }> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const normalized: Array<{ channelId: string; threadKey: string; agentId?: string }> = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== 'object' || item === null) continue;
+    const raw = item as { channelId?: unknown; threadKey?: unknown; agentId?: unknown };
+    const channelId = typeof raw.channelId === 'string' ? raw.channelId.trim() : '';
+    const threadKey = typeof raw.threadKey === 'string' ? raw.threadKey.trim() : '';
+    const agentId = typeof raw.agentId === 'string' ? raw.agentId.trim() : undefined;
+    if (!channelId || !threadKey) continue;
+    if (!availableChannels.has(channelId)) {
+      throw new Error(`Unknown channel: ${channelId}`);
+    }
+    const dedupeKey = `${channelId}:${threadKey}:${agentId ?? ''}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    normalized.push({ channelId, threadKey, agentId: agentId || undefined });
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function outputChannelLabel(channel: OutputChannel): string {
+  return channel === 'logs' ? 'Gateway Logs' : channel === 'cli' ? 'CLI Console' : 'Web Console';
+}
+
+function buildAvailableChannelTargets(
+  ctx: RpcContext,
+  hasFileArtifacts: boolean,
+): DeliverablePublicationTarget[] {
+  return Array.from(ctx.channels.values()).map((channel) => ({
+    id: `channel:${channel.id}`,
+    kind: 'channel',
+    targetId: channel.id,
+    label: channel.name,
+    mode: hasFileArtifacts && channel.sendAttachment ? 'artifact' : 'summary',
+    status: 'available',
+    detail:
+      hasFileArtifacts && !channel.sendAttachment
+        ? 'Text delivery is available, but attachment upload is not implemented for this channel.'
+        : hasFileArtifacts
+          ? 'This channel can receive file or media artifacts.'
+          : 'This channel can receive a summary version of the deliverable.',
+  }));
+}
+
+function buildSchedulerPublicationTargets(
+  ctx: RpcContext,
+  task: ScheduledTaskMeta,
+  fileArtifacts: import('./deliverables.js').ArtifactRef[],
+): DeliverablePublicationTarget[] {
+  const planned: DeliverablePublicationTarget[] = [];
+  const outputChannel = task.outputChannel ?? 'logs';
+
+  planned.push({
+    id: `system:${outputChannel}`,
+    kind: 'system',
+    targetId: outputChannel,
+    label: outputChannelLabel(outputChannel),
+    mode: 'summary',
+    status: 'planned',
+    detail: 'Scheduler execution summary is planned to flow through this system output.',
+  });
+
+  if (task.reportTo) {
+    planned.push({
+      id: `agent:${task.reportTo}`,
+      kind: 'agent',
+      targetId: task.reportTo,
+      label: `Agent ${task.reportTo}`,
+      mode: 'summary',
+      status: 'planned',
+      detail: 'A follow-up summary is planned to be sent to this reporting agent.',
+    });
+  }
+
+  const publicationTargets = task.publicationTargets;
+  const publicationChannelIds = task.publicationChannels;
+  const channelTargets: DeliverablePublicationTarget[] =
+    publicationTargets && publicationTargets.length > 0
+      ? publicationTargets
+          .map((target) => ({ target, channel: ctx.channels.get(target.channelId) }))
+          .filter(
+            (
+              item,
+            ): item is {
+              target: NonNullable<typeof publicationTargets>[number];
+              channel: Channel;
+            } => !!item.channel,
+          )
+          .map(({ target, channel }) => ({
+            id: `channel:${channel.id}:${target.threadKey}`,
+            kind: 'channel' as const,
+            targetId: channel.id,
+            label: `${channel.name} · ${target.threadKey}`,
+            mode:
+              fileArtifacts.length > 0 && channel.sendAttachment
+                ? ('artifact' as const)
+                : ('summary' as const),
+            status: 'planned' as const,
+            threadKey: target.threadKey,
+            agentId: target.agentId,
+            detail: target.agentId
+              ? `Planned for thread ${target.threadKey} using agent ${target.agentId}.`
+              : `Planned for thread ${target.threadKey}.`,
+          }))
+      : publicationChannelIds && publicationChannelIds.length > 0
+        ? publicationChannelIds
+            .map((channelId) => ctx.channels.get(channelId))
+            .filter((channel): channel is NonNullable<typeof channel> => !!channel)
+            .map((channel) => ({
+              id: `channel:${channel.id}`,
+              kind: 'channel' as const,
+              targetId: channel.id,
+              label: channel.name,
+              mode:
+                fileArtifacts.length > 0 && channel.sendAttachment
+                  ? ('artifact' as const)
+                  : ('summary' as const),
+              status: 'planned' as const,
+              detail:
+                fileArtifacts.length > 0 && !channel.sendAttachment
+                  ? 'Summary delivery is planned, but attachment upload is not implemented for this channel.'
+                  : fileArtifacts.length > 0
+                    ? 'This channel is planned to receive file or media artifacts.'
+                    : 'This channel is planned to receive a summary version of the deliverable.',
+            }))
+        : buildAvailableChannelTargets(ctx, fileArtifacts.length > 0);
+
+  return [...planned, ...channelTargets];
+}
+
 /** Supported RPC methods. */
 export type RpcMethod =
   | 'agent.list'
   | 'agent.chat'
   | 'agent.reload'
   | 'agent.status'
+  | 'channel.list'
   | 'session.list'
   | 'session.messages'
   | 'session.clear'
@@ -62,6 +230,9 @@ export type RpcMethod =
   | 'skill.validateDir'
   | 'content.list'
   | 'content.share'
+  | 'deliverable.list'
+  | 'deliverable.get'
+  | 'deliverable.publish'
   | 'memory.search'
   | 'memory.delete'
   | 'stats.get'
@@ -101,6 +272,8 @@ export interface RpcContext {
   metaStore: SessionMetaStore;
   /** Content catalog for agent-generated files. */
   contentStore: ContentStore;
+  /** Deliverable store for workflow/scheduler outputs. */
+  deliverableStore: DeliverableStore;
   /** All registered channels — used for content.share. */
   channels: Map<string, Channel>;
   /** Mesh registry — used for mesh.status. */
@@ -212,12 +385,15 @@ async function runAgentTask(
 interface TaskRunRecord {
   taskId: string;
   taskName: string;
+  runKey: string;
   startedAt: number;
   finishedAt: number;
   ok: boolean;
   result: string;
   agentId?: string;
   workflowId?: string;
+  workflowRunId?: string;
+  deliverableId?: string;
 }
 
 const HISTORY_MAX_PER_TASK = 50;
@@ -250,6 +426,35 @@ async function appendHistoryRecord(dataDir: string, record: TaskRunRecord): Prom
   );
 }
 
+async function createSchedulerDeliverableRecord(
+  ctx: RpcContext,
+  task: ScheduledTaskMeta,
+  startedAt: number,
+  finishedAt: number,
+  ok: boolean,
+  result: string,
+  workflowRunId?: string,
+): Promise<import('./deliverables.js').DeliverableRecord> {
+  const agentIds = task.agentId ? [task.agentId] : [];
+  const contentItems = agentIds.length > 0 ? await ctx.contentStore.list() : [];
+  const fileArtifacts = findRecentArtifacts(contentItems, agentIds, startedAt, finishedAt);
+  const publications = buildSchedulerPublicationTargets(ctx, task, fileArtifacts);
+  const deliverable = await ctx.deliverableStore.upsert(
+    buildSchedulerDeliverable({
+      task,
+      startedAt,
+      finishedAt,
+      ok,
+      result,
+      workflowRunId,
+      fileArtifacts,
+      publications,
+    }),
+  );
+  await publishDeliverableTargets(ctx, deliverable);
+  return (await ctx.deliverableStore.get(deliverable.id)) ?? deliverable;
+}
+
 function scheduleRuntimeTask(ctx: RpcContext, taskId: string): void {
   void (async () => {
     const tasks = await readTasksFile(ctx.dataDir);
@@ -277,9 +482,16 @@ function scheduleRuntimeTask(ctx: RpcContext, taskId: string): void {
 
         let result = '';
         let runOk = false;
+        let workflowRunId: string | undefined;
         try {
           if (current.workflowId) {
-            result = await runWorkflowForScheduler(ctx, current.workflowId, current.message);
+            const workflowResult = await runWorkflowForScheduler(
+              ctx,
+              current.workflowId,
+              current.message,
+            );
+            result = workflowResult.output;
+            workflowRunId = workflowResult.workflowRunId;
           } else {
             result = await runAgentTask(
               ctx,
@@ -295,15 +507,33 @@ function scheduleRuntimeTask(ctx: RpcContext, taskId: string): void {
 
         ctx.runningTasks.delete(task.id);
         const finishedAt = Date.now();
+        const deliverable = await createSchedulerDeliverableRecord(
+          ctx,
+          current,
+          startedAt,
+          finishedAt,
+          runOk,
+          result,
+          workflowRunId,
+        ).catch((e) => {
+          logger.warn('Failed to create scheduler deliverable', {
+            taskId: current.id,
+            error: String(e),
+          });
+          return null;
+        });
         await appendHistoryRecord(ctx.dataDir, {
           taskId: current.id,
           taskName: current.name,
+          runKey: makeSchedulerRunKey(current.id, startedAt),
           startedAt,
           finishedAt,
           ok: runOk,
           result: result.slice(0, 2000),
           agentId: current.agentId,
           workflowId: current.workflowId,
+          workflowRunId,
+          deliverableId: deliverable?.id,
         }).catch((e) => logger.warn('Failed to write task run history', { error: String(e) }));
 
         const channel =
@@ -330,6 +560,7 @@ function scheduleRuntimeTask(ctx: RpcContext, taskId: string): void {
                 runCount: t.runCount + 1,
                 lastRunAt: finishedAt,
                 lastResult: result.slice(0, 500),
+                latestDeliverableId: deliverable?.id,
               }
             : t,
         );
@@ -508,6 +739,19 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         return { id, result: { agentId, status: 'idle' } };
       }
 
+      case 'channel.list': {
+        return {
+          id,
+          result: {
+            channels: Array.from(ctx.channels.values()).map((channel) => ({
+              id: channel.id,
+              name: channel.name,
+              supportsAttachment: typeof channel.sendAttachment === 'function',
+            })),
+          },
+        };
+      }
+
       case 'session.list': {
         const sessions = await ctx.metaStore.listAll();
         sessions.sort((a, b) => b.lastActivity - a.lastActivity);
@@ -606,6 +850,8 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
           intervalMinutes?: number;
           reportTo?: string;
           outputChannel?: OutputChannel;
+          publicationTargets?: Array<{ channelId: string; threadKey: string; agentId?: string }>;
+          publicationChannels?: string[];
           enabled?: boolean;
         };
         if (!p.name || (!p.agentId && !p.workflowId) || !p.message) {
@@ -628,6 +874,23 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
           return buildErrorResponse(id, -32602, 'cronExpr or intervalMinutes is required');
         }
 
+        let publicationTargets:
+          | Array<{
+              channelId: string;
+              threadKey: string;
+              agentId?: string;
+            }>
+          | undefined;
+        let publicationChannels: string[] | undefined;
+        try {
+          publicationTargets = normalizePublicationTargets(p.publicationTargets, ctx.channels);
+          publicationChannels = publicationTargets
+            ? Array.from(new Set(publicationTargets.map((target) => target.channelId)))
+            : normalizePublicationChannels(p.publicationChannels, ctx.channels);
+        } catch (err) {
+          return buildErrorResponse(id, -32602, String(err));
+        }
+
         const task: ScheduledTaskMeta = {
           id: ulid(),
           name: p.name,
@@ -641,6 +904,8 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
             (ctx.getConfig().channels?.defaults?.schedulerOutput as OutputChannel | undefined) ??
             (ctx.getConfig().channels?.defaults?.output as OutputChannel | undefined) ??
             'logs',
+          publicationTargets,
+          publicationChannels,
           createdAt: Date.now(),
           runCount: 0,
           enabled: p.enabled !== false,
@@ -665,6 +930,8 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
           intervalMinutes?: number;
           reportTo?: string;
           outputChannel?: OutputChannel;
+          publicationTargets?: Array<{ channelId: string; threadKey: string; agentId?: string }>;
+          publicationChannels?: string[];
           enabled?: boolean;
         };
         if (!p.taskId) return buildErrorResponse(id, -32602, 'taskId is required');
@@ -692,6 +959,21 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
           (typeof p.intervalMinutes === 'number'
             ? intervalToCron(p.intervalMinutes)
             : current.cronExpr);
+        let nextPublicationTargets = current.publicationTargets;
+        let nextPublicationChannels = current.publicationChannels;
+        if ('publicationTargets' in p || 'publicationChannels' in p) {
+          try {
+            nextPublicationTargets = normalizePublicationTargets(
+              p.publicationTargets,
+              ctx.channels,
+            );
+            nextPublicationChannels = nextPublicationTargets
+              ? Array.from(new Set(nextPublicationTargets.map((target) => target.channelId)))
+              : normalizePublicationChannels(p.publicationChannels, ctx.channels);
+          } catch (err) {
+            return buildErrorResponse(id, -32602, String(err));
+          }
+        }
 
         const updated: ScheduledTaskMeta = {
           ...current,
@@ -702,6 +984,8 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
           cronExpr: nextCronExpr,
           reportTo: nextReportTo,
           outputChannel: p.outputChannel ?? current.outputChannel ?? 'logs',
+          publicationTargets: nextPublicationTargets,
+          publicationChannels: nextPublicationChannels,
           enabled: p.enabled ?? current.enabled ?? true,
         };
 
@@ -764,9 +1048,16 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
 
         let result = '';
         let runOk = false;
+        let workflowRunId: string | undefined;
         try {
           if (current.workflowId) {
-            result = await runWorkflowForScheduler(ctx, current.workflowId, current.message);
+            const workflowResult = await runWorkflowForScheduler(
+              ctx,
+              current.workflowId,
+              current.message,
+            );
+            result = workflowResult.output;
+            workflowRunId = workflowResult.workflowRunId;
           } else {
             result = await runAgentTask(ctx, current, `sched-${current.id}-manual-${startedAt}`);
           }
@@ -778,15 +1069,33 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
 
         ctx.runningTasks.delete(taskId);
         const finishedAt = Date.now();
+        const deliverable = await createSchedulerDeliverableRecord(
+          ctx,
+          current,
+          startedAt,
+          finishedAt,
+          runOk,
+          result,
+          workflowRunId,
+        ).catch((e) => {
+          logger.warn('Failed to create scheduler deliverable', {
+            taskId: current.id,
+            error: String(e),
+          });
+          return null;
+        });
         await appendHistoryRecord(ctx.dataDir, {
           taskId: current.id,
           taskName: current.name,
+          runKey: makeSchedulerRunKey(current.id, startedAt),
           startedAt,
           finishedAt,
           ok: runOk,
           result: result.slice(0, 2000),
           agentId: current.agentId,
           workflowId: current.workflowId,
+          workflowRunId,
+          deliverableId: deliverable?.id,
         }).catch((e) => logger.warn('Failed to write task run history', { error: String(e) }));
 
         const channel =
@@ -811,12 +1120,22 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
                 runCount: t.runCount + 1,
                 lastRunAt: finishedAt,
                 lastResult: result.slice(0, 500),
+                latestDeliverableId: deliverable?.id,
               }
             : t,
         );
         await writeTasksFile(ctx.dataDir, patched);
 
-        return { id, result: { ok: runOk, taskId, channel, result: result.slice(0, 500) } };
+        return {
+          id,
+          result: {
+            ok: runOk,
+            taskId,
+            channel,
+            result: result.slice(0, 500),
+            deliverableId: deliverable?.id,
+          },
+        };
       }
 
       case 'scheduler.cancel': {
@@ -876,6 +1195,58 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
       case 'content.list': {
         const items = await ctx.contentStore.list();
         return { id, result: { items } };
+      }
+
+      case 'deliverable.list': {
+        const result = await ctx.deliverableStore.summarize(
+          ((params ?? {}) as import('./deliverables.js').DeliverableListFilters) ?? {},
+        );
+        return { id, result };
+      }
+
+      case 'deliverable.get': {
+        const { deliverableId } = (params ?? {}) as { deliverableId?: string };
+        if (!deliverableId) return buildErrorResponse(id, -32602, 'deliverableId is required');
+        const deliverable = await ctx.deliverableStore.get(deliverableId);
+        if (!deliverable) {
+          return buildErrorResponse(id, 404, `Deliverable not found: ${deliverableId}`);
+        }
+        return { id, result: deliverable };
+      }
+
+      case 'deliverable.publish': {
+        const { deliverableId, publicationId } = (params ?? {}) as {
+          deliverableId?: string;
+          publicationId?: string;
+        };
+        if (!deliverableId) return buildErrorResponse(id, -32602, 'deliverableId is required');
+        if (!publicationId) return buildErrorResponse(id, -32602, 'publicationId is required');
+
+        const deliverable = await ctx.deliverableStore.get(deliverableId);
+        if (!deliverable) {
+          return buildErrorResponse(id, 404, `Deliverable not found: ${deliverableId}`);
+        }
+
+        if (!deliverable.publications?.some((item) => item.id === publicationId)) {
+          return buildErrorResponse(id, 404, `Publication target not found: ${publicationId}`);
+        }
+        try {
+          const result = await publishDeliverableToTarget(ctx, deliverable, publicationId);
+          if (!result.ok) {
+            return buildErrorResponse(id, -32603, `Publish failed: ${result.detail}`);
+          }
+          return {
+            id,
+            result: {
+              ok: result.ok,
+              deliverableId,
+              publicationId,
+              detail: result.detail,
+            },
+          };
+        } catch (publishErr) {
+          return buildErrorResponse(id, -32603, `Publish failed: ${String(publishErr)}`);
+        }
       }
 
       case 'memory.search': {
