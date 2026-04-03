@@ -69,6 +69,14 @@ export type DeliverableSource =
       workflowId?: string;
       workflowRunId?: string;
       agentId?: string;
+    }
+  | {
+      kind: 'chat_turn';
+      agentId: string;
+      threadKey: string;
+      channelId: string;
+      startedAt: number;
+      finishedAt: number;
     };
 
 export interface DeliverableListFilters {
@@ -90,6 +98,7 @@ export interface DeliverableStats {
   cancelled: number;
   workflowRuns: number;
   schedulerRuns: number;
+  chatTurns: number;
   totalArtifacts: number;
   textualArtifacts: number;
   fileArtifacts: number;
@@ -408,14 +417,92 @@ export function buildSchedulerDeliverable(
   };
 }
 
+export interface ChatTurnDeliverableOptions {
+  agentId: string;
+  threadKey: string;
+  channelId: string;
+  startedAt: number;
+  finishedAt: number;
+  replyText: string;
+  fileArtifacts: ArtifactRef[];
+  publications?: DeliverablePublicationTarget[];
+}
+
+export function buildChatTurnDeliverable(
+  options: ChatTurnDeliverableOptions,
+): CreateDeliverableInput {
+  const {
+    agentId,
+    threadKey,
+    channelId,
+    startedAt,
+    finishedAt,
+    replyText,
+    fileArtifacts,
+    publications = [],
+  } = options;
+  const fallbackSummary =
+    fileArtifacts.length > 0
+      ? `Generated ${fileArtifacts.length} file${fileArtifacts.length === 1 ? '' : 's'} in this turn.`
+      : 'Generated artifacts in this chat turn.';
+  const primaryText = replyText.trim() || fallbackSummary;
+  const textArtifact = createTextArtifact(
+    'chat-turn-result.txt',
+    primaryText,
+    finishedAt,
+    undefined,
+    {
+      role: 'primary',
+    },
+  );
+  const artifacts = [textArtifact, ...fileArtifacts];
+
+  return {
+    title: `${agentId} Chat Deliverable`,
+    summary: summarizeText(primaryText),
+    previewText: summarizeText(primaryText, 400),
+    status: 'ready',
+    source: {
+      kind: 'chat_turn',
+      agentId,
+      threadKey,
+      channelId,
+      startedAt,
+      finishedAt,
+    },
+    artifacts,
+    publications: publications.length > 0 ? publications : undefined,
+    primaryArtifactId: textArtifact.id,
+    metadata: {
+      artifactCount: artifacts.length,
+      fileArtifactCount: fileArtifacts.length,
+    },
+    createdAt: finishedAt,
+    updatedAt: finishedAt,
+  };
+}
+
 function sourceFingerprint(source: DeliverableSource): string {
-  return source.kind === 'workflow_run' ? `workflow:${source.runId}` : `scheduler:${source.runKey}`;
+  if (source.kind === 'workflow_run') {
+    return `workflow:${source.runId}`;
+  }
+  if (source.kind === 'scheduler_task_run') {
+    return `scheduler:${source.runKey}`;
+  }
+  return `chat:${source.agentId}:${source.threadKey}:${source.startedAt}`;
 }
 
 function matchesFilters(record: DeliverableRecord, filters: DeliverableListFilters): boolean {
   if (filters.sourceKind && record.source.kind !== filters.sourceKind) return false;
   if (filters.status && record.status !== filters.status) return false;
-  if (filters.workflowId && record.source.workflowId !== filters.workflowId) return false;
+  if (
+    filters.workflowId &&
+    record.source.kind !== 'chat_turn' &&
+    record.source.workflowId !== filters.workflowId
+  ) {
+    return false;
+  }
+  if (filters.workflowId && record.source.kind === 'chat_turn') return false;
   if (
     filters.runId &&
     record.source.kind === 'workflow_run' &&
@@ -446,14 +533,33 @@ function matchesFilters(record: DeliverableRecord, filters: DeliverableListFilte
   ) {
     return false;
   }
-  if (filters.agentId && record.source.kind !== 'scheduler_task_run') return false;
+  if (
+    filters.agentId &&
+    record.source.kind === 'chat_turn' &&
+    record.source.agentId !== filters.agentId
+  ) {
+    return false;
+  }
+  if (
+    filters.agentId &&
+    record.source.kind !== 'scheduler_task_run' &&
+    record.source.kind !== 'chat_turn'
+  ) {
+    return false;
+  }
   if (filters.query) {
     const query = filters.query.toLowerCase().trim();
     const haystack = [
       record.title,
       record.summary,
       record.previewText,
-      record.source.kind === 'workflow_run' ? record.source.workflowName : record.source.taskName,
+      record.source.kind === 'workflow_run'
+        ? record.source.workflowName
+        : record.source.kind === 'scheduler_task_run'
+          ? record.source.taskName
+          : record.source.agentId,
+      record.source.kind === 'chat_turn' ? record.source.threadKey : '',
+      record.source.kind === 'chat_turn' ? record.source.channelId : '',
       ...record.artifacts.map((artifact) => artifact.name),
     ]
       .join(' ')
@@ -473,6 +579,7 @@ export function buildDeliverableStats(items: DeliverableRecord[]): DeliverableSt
       if (item.status === 'cancelled') stats.cancelled += 1;
       if (item.source.kind === 'workflow_run') stats.workflowRuns += 1;
       if (item.source.kind === 'scheduler_task_run') stats.schedulerRuns += 1;
+      if (item.source.kind === 'chat_turn') stats.chatTurns += 1;
       stats.totalArtifacts += item.artifacts.length;
       stats.textualArtifacts += item.artifacts.filter((artifact) => !!artifact.textContent).length;
       stats.fileArtifacts += item.artifacts.filter((artifact) => !!artifact.filePath).length;
@@ -486,6 +593,7 @@ export function buildDeliverableStats(items: DeliverableRecord[]): DeliverableSt
       cancelled: 0,
       workflowRuns: 0,
       schedulerRuns: 0,
+      chatTurns: 0,
       totalArtifacts: 0,
       textualArtifacts: 0,
       fileArtifacts: 0,

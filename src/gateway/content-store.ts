@@ -5,9 +5,10 @@
  * on demand when `list()` is called. No filesystem watching is required.
  */
 
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
-import { extname, join } from 'node:path';
+import { extname, isAbsolute, join } from 'node:path';
 import type { Config } from '../core/config/schema.js';
 import { createLogger } from '../core/logger.js';
 
@@ -40,17 +41,25 @@ const EXT_MIME: Record<string, string> = {
   '.gif': 'image/gif',
   '.webp': 'image/webp',
   '.svg': 'image/svg+xml',
+  '.html': 'text/html',
+  '.htm': 'text/html',
   '.mp4': 'video/mp4',
   '.webm': 'video/webm',
   '.mov': 'video/quicktime',
   '.mp3': 'audio/mpeg',
   '.wav': 'audio/wav',
   '.ogg': 'audio/ogg',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.pdf': 'application/pdf',
+  '.ppt': 'application/vnd.ms-powerpoint',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   '.txt': 'text/plain',
   '.md': 'text/markdown',
   '.json': 'application/json',
   '.csv': 'text/csv',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   '.zip': 'application/zip',
 };
 
@@ -66,7 +75,45 @@ function typeForMime(mime: string): ContentItemType {
 }
 
 function makeId(agentId: string, filePath: string): string {
+  return createHash('sha256').update(`${agentId}:${filePath}`).digest('base64url');
+}
+
+function makeLegacyId(agentId: string, filePath: string): string {
   return Buffer.from(`${agentId}:${filePath}`).toString('base64url').slice(0, 24);
+}
+
+async function collectItemsForDir(
+  dir: string,
+  agentId: string,
+  maxDepth: number,
+  seenPaths: Set<string>,
+): Promise<ContentItem[]> {
+  if (!existsSync(dir)) {
+    return [];
+  }
+
+  const items: ContentItem[] = [];
+  const discovered = await scanDir(dir, 0, maxDepth);
+  for (const { filePath, name } of discovered) {
+    if (seenPaths.has(filePath)) {
+      continue;
+    }
+    seenPaths.add(filePath);
+    const ext = extname(name);
+    const mime = mimeForExt(ext);
+    const fileStat = await stat(filePath);
+    items.push({
+      id: makeId(agentId, filePath),
+      agentId,
+      name,
+      filePath,
+      mimeType: mime,
+      type: typeForMime(mime),
+      size: fileStat.size,
+      createdAt: fileStat.birthtimeMs || fileStat.mtimeMs,
+    });
+  }
+  return items;
 }
 
 // ── ContentStore ──────────────────────────────────────────────────────────────
@@ -80,7 +127,8 @@ export class ContentStore {
 
   /**
    * Scan all configured agent output directories and return a flat list of files.
-   * Deep-scans one level into subdirectories.
+   * Deep-scans two levels into subdirectories so mirrored skill artifacts under
+   * output/skill-artifacts/<skill>/... are indexed automatically.
    */
   async list(): Promise<ContentItem[]> {
     const cfg = this.getConfig();
@@ -91,27 +139,14 @@ export class ContentStore {
       if (!workspace) continue;
 
       const outputDir = agentCfg.persona?.outputDir ?? 'output';
-      const absOutput = outputDir.startsWith('/') ? outputDir : join(workspace, outputDir);
-
-      if (!existsSync(absOutput)) continue;
+      const absOutput = isAbsolute(outputDir) ? outputDir : join(workspace, outputDir);
+      const seenPaths = new Set<string>();
 
       try {
-        const discovered = await scanDir(absOutput);
-        for (const { filePath, name } of discovered) {
-          const ext = extname(name);
-          const mime = mimeForExt(ext);
-          const s = await stat(filePath);
-          items.push({
-            id: makeId(agentCfg.id, filePath),
-            agentId: agentCfg.id,
-            name,
-            filePath,
-            mimeType: mime,
-            type: typeForMime(mime),
-            size: s.size,
-            createdAt: s.birthtimeMs || s.mtimeMs,
-          });
-        }
+        items.push(...(await collectItemsForDir(absOutput, agentCfg.id, 2, seenPaths)));
+        // Also index files written directly into the workspace root. Some skills
+        // copy their final artifact to the current workspace instead of output/.
+        items.push(...(await collectItemsForDir(workspace, agentCfg.id, 0, seenPaths)));
       } catch (err) {
         logger.warn('ContentStore scan error', { agentId: agentCfg.id, error: String(err) });
       }
@@ -125,19 +160,25 @@ export class ContentStore {
   /** Find a single item by id. */
   async get(id: string): Promise<ContentItem | null> {
     const all = await this.list();
-    return all.find((item) => item.id === id) ?? null;
+    return (
+      all.find((item) => item.id === id || makeLegacyId(item.agentId, item.filePath) === id) ?? null
+    );
   }
 }
 
 /** Recursively list files one level deep under dir. */
-async function scanDir(dir: string, depth = 0): Promise<{ filePath: string; name: string }[]> {
-  if (depth > 1) return [];
+async function scanDir(
+  dir: string,
+  depth = 0,
+  maxDepth = 1,
+): Promise<{ filePath: string; name: string }[]> {
+  if (depth > maxDepth) return [];
   const entries = await readdir(dir, { withFileTypes: true });
   const results: { filePath: string; name: string }[] = [];
   for (const entry of entries) {
     const full = join(dir, entry.name);
-    if (entry.isDirectory() && depth === 0) {
-      results.push(...(await scanDir(full, depth + 1)));
+    if (entry.isDirectory() && depth < maxDepth) {
+      results.push(...(await scanDir(full, depth + 1, maxDepth)));
     } else if (entry.isFile()) {
       results.push({ filePath: full, name: entry.name });
     }

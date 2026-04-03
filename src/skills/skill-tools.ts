@@ -76,7 +76,7 @@ export function createSkillTools(registry: SkillRegistry): RegisteredTool[] {
         // RATIONALE: Prepend the skill directory so the agent knows where to cd before
         // running any scripts referenced in the SKILL.md. Without this, the agent
         // defaults to the workspace dir and cannot find scripts or config files.
-        const content = `> **IMPORTANT — Skill directory:** \`${skillDir}\`\n> All scripts and config files in this skill are relative to that directory.\n> Before running any command, execute: \`cd "${skillDir}"\`\n\n${raw}`;
+        const content = `> **IMPORTANT — Skill directory:** \`${skillDir}\`\n> All scripts and config files in this skill are relative to that directory.\n> Before running any command, execute: \`cd "${skillDir}"\`\n> Files created or updated in the skill directory during execution will be mirrored back into the agent workspace output area automatically. When practical, still prefer writing final deliverables into the agent workspace output directory.\n\n${raw}`;
         logger.info('skill_read: returning skill content', { skill_id, bytes: content.length });
         return { content, isError: false };
       } catch (err) {

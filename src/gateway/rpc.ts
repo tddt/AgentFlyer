@@ -31,11 +31,14 @@ import {
 } from './deliverable-publication.js';
 import {
   type DeliverablePublicationTarget,
+  type DeliverableRecord,
+  buildDeliverableStats,
   buildSchedulerDeliverable,
   findRecentArtifacts,
   makeSchedulerRunKey,
 } from './deliverables.js';
 import type { DeliverableStore } from './deliverables.js';
+import type { InboxBroadcaster } from './inbox-broadcaster.js';
 import {
   type WorkflowRpcMethod,
   dispatchWorkflowRpc,
@@ -46,6 +49,49 @@ const logger = createLogger('gateway:rpc');
 // Package root: src/gateway/rpc.ts → ../../  (or dist/gateway/rpc.js → ../../)
 const _pkgRoot = join(dirname(fileURLToPath(import.meta.url)), '../..');
 type OutputChannel = 'logs' | 'cli' | 'web';
+
+function repairDeliverableArtifactRefs(
+  deliverable: DeliverableRecord,
+  itemsByPath: Map<string, Awaited<ReturnType<ContentStore['list']>>[number]>,
+): DeliverableRecord {
+  let changed = false;
+  const artifacts = deliverable.artifacts.map((artifact) => {
+    if (!artifact.filePath) {
+      return artifact;
+    }
+    const item = itemsByPath.get(artifact.filePath);
+    if (!item) {
+      return artifact;
+    }
+    if (
+      artifact.contentItemId === item.id &&
+      artifact.mimeType === item.mimeType &&
+      artifact.size === item.size
+    ) {
+      return artifact;
+    }
+    changed = true;
+    return {
+      ...artifact,
+      contentItemId: item.id,
+      mimeType: item.mimeType,
+      size: item.size,
+    };
+  });
+  return changed ? { ...deliverable, artifacts } : deliverable;
+}
+
+async function repairDeliverablesForResponse(
+  ctx: RpcContext,
+  deliverables: DeliverableRecord[],
+): Promise<DeliverableRecord[]> {
+  if (deliverables.length === 0) {
+    return deliverables;
+  }
+  const contentItems = await ctx.contentStore.list();
+  const itemsByPath = new Map(contentItems.map((item) => [item.filePath, item]));
+  return deliverables.map((deliverable) => repairDeliverableArtifactRefs(deliverable, itemsByPath));
+}
 
 function normalizePublicationChannels(
   value: unknown,
@@ -209,6 +255,7 @@ export type RpcMethod =
   | 'agent.chat'
   | 'agent.reload'
   | 'agent.status'
+  | 'tool.list'
   | 'channel.list'
   | 'session.list'
   | 'session.messages'
@@ -274,6 +321,8 @@ export interface RpcContext {
   contentStore: ContentStore;
   /** Deliverable store for workflow/scheduler outputs. */
   deliverableStore: DeliverableStore;
+  /** Inbox stream broadcaster for unified chat events. */
+  inboxBroadcaster?: InboxBroadcaster;
   /** All registered channels — used for content.share. */
   channels: Map<string, Channel>;
   /** Mesh registry — used for mesh.status. */
@@ -452,7 +501,18 @@ async function createSchedulerDeliverableRecord(
     }),
   );
   await publishDeliverableTargets(ctx, deliverable);
-  return (await ctx.deliverableStore.get(deliverable.id)) ?? deliverable;
+  const latest = (await ctx.deliverableStore.get(deliverable.id)) ?? deliverable;
+  ctx.inboxBroadcaster?.publish({
+    kind: 'deliverable',
+    agentId: task.agentId,
+    title: `${task.name} deliverable ready`,
+    text: latest.summary || latest.previewText || latest.title,
+    deliverableId: latest.id,
+    publicationSummary: latest.publications
+      ?.map((item) => `${item.label}:${item.status}`)
+      .join(' · '),
+  });
+  return latest;
 }
 
 function scheduleRuntimeTask(ctx: RpcContext, taskId: string): void {
@@ -685,10 +745,52 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
               return {
                 agentId,
                 name: cfg?.name ?? agentId,
+                mentionAliases: cfg?.mentionAliases ?? [],
                 model:
                   cfg?.model ?? (ctx.getConfig().defaults as Record<string, unknown>)?.model ?? '',
                 role: (cfg as unknown as Record<string, unknown>)?.role ?? 'worker',
               };
+            }),
+          },
+        };
+      }
+
+      case 'tool.list': {
+        const tools = new Map<
+          string,
+          {
+            name: string;
+            description: string;
+            category: string;
+            agentIds: string[];
+          }
+        >();
+
+        for (const [agentId, runner] of ctx.runners) {
+          for (const tool of runner.listTools()) {
+            const existing = tools.get(tool.name);
+            if (existing) {
+              if (!existing.agentIds.includes(agentId)) {
+                existing.agentIds.push(agentId);
+              }
+              continue;
+            }
+            tools.set(tool.name, {
+              name: tool.name,
+              description: tool.description,
+              category: tool.category,
+              agentIds: [agentId],
+            });
+          }
+        }
+
+        return {
+          id,
+          result: {
+            tools: Array.from(tools.values()).sort((left, right) => {
+              const categoryCompare = left.category.localeCompare(right.category);
+              if (categoryCompare !== 0) return categoryCompare;
+              return left.name.localeCompare(right.name);
             }),
           },
         };
@@ -1198,10 +1300,17 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
       }
 
       case 'deliverable.list': {
-        const result = await ctx.deliverableStore.summarize(
+        const items = await ctx.deliverableStore.list(
           ((params ?? {}) as import('./deliverables.js').DeliverableListFilters) ?? {},
         );
-        return { id, result };
+        const repairedItems = await repairDeliverablesForResponse(ctx, items);
+        return {
+          id,
+          result: {
+            items: repairedItems,
+            stats: buildDeliverableStats(repairedItems),
+          },
+        };
       }
 
       case 'deliverable.get': {
@@ -1211,7 +1320,8 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         if (!deliverable) {
           return buildErrorResponse(id, 404, `Deliverable not found: ${deliverableId}`);
         }
-        return { id, result: deliverable };
+        const [repairedDeliverable] = await repairDeliverablesForResponse(ctx, [deliverable]);
+        return { id, result: repairedDeliverable ?? deliverable };
       }
 
       case 'deliverable.publish': {
@@ -1226,12 +1336,14 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         if (!deliverable) {
           return buildErrorResponse(id, 404, `Deliverable not found: ${deliverableId}`);
         }
+        const [repairedDeliverable] = await repairDeliverablesForResponse(ctx, [deliverable]);
+        const targetDeliverable = repairedDeliverable ?? deliverable;
 
-        if (!deliverable.publications?.some((item) => item.id === publicationId)) {
+        if (!targetDeliverable.publications?.some((item) => item.id === publicationId)) {
           return buildErrorResponse(id, 404, `Publication target not found: ${publicationId}`);
         }
         try {
-          const result = await publishDeliverableToTarget(ctx, deliverable, publicationId);
+          const result = await publishDeliverableToTarget(ctx, targetDeliverable, publicationId);
           if (!result.ok) {
             return buildErrorResponse(id, -32603, `Publish failed: ${result.detail}`);
           }

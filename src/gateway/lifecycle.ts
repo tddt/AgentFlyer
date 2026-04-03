@@ -55,9 +55,11 @@ import { buildRegistry, scanSkillsDir } from '../skills/registry.js';
 import { createSkillTools } from '../skills/skill-tools.js';
 import { AgentQueueRegistry } from './agent-queue.js';
 import { generateToken } from './auth.js';
+import { captureChatTurnDeliverable } from './chat-deliverables.js';
 import { ContentStore } from './content-store.js';
 import { DeliverableStore } from './deliverables.js';
 import { HookRegistry } from './hooks.js';
+import { InboxBroadcaster } from './inbox-broadcaster.js';
 import { IntentRouter } from './intent-router.js';
 import { logBroadcaster } from './log-buffer.js';
 import { SenderRateLimiter } from './rate-limiter.js';
@@ -323,7 +325,14 @@ function buildRunner(
     ? agentSkillRegistry.list().map((s) => dirname(s.filePath))
     : [];
   tools.registerMany(createFsTools(workspaceDir, skillAllowedDirs));
-  tools.register(createBashTool({ cwd: workspaceDir }));
+  tools.register(
+    createBashTool({
+      cwd: workspaceDir,
+      workspaceDir,
+      outputDir: agentCfg.persona?.outputDir ?? 'output',
+      mirrorDirs: skillAllowedDirs,
+    }),
+  );
   tools.registerMany(createMemoryTools(memoryStore, config.memory));
   // Skill tools — let the agent read full SKILL.md content on demand
   if (agentSkillRegistry) {
@@ -591,6 +600,8 @@ export async function startGateway(
     return reloadAgents();
   }
 
+  const inboxBroadcaster = new InboxBroadcaster();
+
   const rpcContext: RpcContext = {
     runners,
     gatewayVersion: GATEWAY_VERSION,
@@ -606,6 +617,7 @@ export async function startGateway(
     metaStore: new SessionMetaStore(join(dataDir, 'sessions')),
     contentStore: new ContentStore(() => state.config),
     deliverableStore: new DeliverableStore(dataDir),
+    inboxBroadcaster,
     channels: sharedChannels,
     runningTasks: new Map(),
   };
@@ -635,6 +647,43 @@ export async function startGateway(
     windowMs: 60_000,
   });
   rateLimiter.startCleanup();
+
+  async function sendCapturedStream(options: {
+    stream: AsyncIterable<import('../core/types.js').StreamChunk>;
+    send: (stream: AsyncIterable<import('../core/types.js').StreamChunk>) => Promise<void>;
+    agentId: string;
+    threadKey: string;
+    channelId: string;
+  }): Promise<void> {
+    let replyText = '';
+    const startedAt = Date.now();
+    async function* capture(): AsyncIterable<import('../core/types.js').StreamChunk> {
+      for await (const chunk of options.stream) {
+        if (chunk.type === 'text_delta' && chunk.text) {
+          replyText += chunk.text;
+        }
+        yield chunk;
+      }
+    }
+    await options.send(capture());
+    if (replyText.trim()) {
+      inboxBroadcaster.publish({
+        kind: 'agent_reply',
+        agentId: options.agentId,
+        threadKey: options.threadKey,
+        channelId: options.channelId,
+        title: `${options.agentId} replied`,
+        text: replyText.trim(),
+      });
+    }
+    await captureChatTurnDeliverable(rpcContext, {
+      agentId: options.agentId,
+      threadKey: options.threadKey,
+      channelId: options.channelId,
+      replyText,
+      startedAt,
+    });
+  }
 
   async function startExternalChannels(): Promise<void> {
     const channelsCfg = config.channels;
@@ -680,7 +729,14 @@ export async function startGateway(
               runner.setThread(msg.threadKey);
               const memoryText = await runner.searchMemory(msg.text);
               const stream = runner.turn(msg.text, { memoryText: memoryText || undefined });
-              await tg.sendStream({ agentId: msg.agentId, threadKey: msg.threadKey }, stream);
+              await sendCapturedStream({
+                stream,
+                send: (captured) =>
+                  tg.sendStream({ agentId: msg.agentId, threadKey: msg.threadKey }, captured),
+                agentId: msg.agentId,
+                threadKey: msg.threadKey,
+                channelId: msg.channelId,
+              });
             } catch (err: unknown) {
               logger.error('Telegram agent run error', { error: String(err) });
               await tg.sendToChat(msg.meta?.chatId as number, `❌ Error: ${String(err)}`);
@@ -739,7 +795,14 @@ export async function startGateway(
               runner.setThread(msg.threadKey);
               const memoryText = await runner.searchMemory(msg.text);
               const stream = runner.turn(msg.text, { memoryText: memoryText || undefined });
-              await dc.sendStream({ agentId: msg.agentId, threadKey: msg.threadKey }, stream);
+              await sendCapturedStream({
+                stream,
+                send: (captured) =>
+                  dc.sendStream({ agentId: msg.agentId, threadKey: msg.threadKey }, captured),
+                agentId: msg.agentId,
+                threadKey: msg.threadKey,
+                channelId: msg.channelId,
+              });
             } catch (err: unknown) {
               logger.error('Discord agent run error', { error: String(err) });
               await dc.sendToChannel(
@@ -800,7 +863,14 @@ export async function startGateway(
               runner.setThread(msg.threadKey);
               const memoryText = await runner.searchMemory(msg.text);
               const stream = runner.turn(msg.text, { memoryText: memoryText || undefined });
-              await feishu.sendStream({ agentId: msg.agentId, threadKey: msg.threadKey }, stream);
+              await sendCapturedStream({
+                stream,
+                send: (captured) =>
+                  feishu.sendStream({ agentId: msg.agentId, threadKey: msg.threadKey }, captured),
+                agentId: msg.agentId,
+                threadKey: msg.threadKey,
+                channelId: msg.channelId,
+              });
             } catch (err: unknown) {
               logger.error('Feishu agent run error', { error: String(err) });
               await feishu.sendToChat(msg.threadKey, `❌ Error: ${String(err)}`);
@@ -855,7 +925,14 @@ export async function startGateway(
               runner.setThread(msg.threadKey);
               const memoryText = await runner.searchMemory(msg.text);
               const stream = runner.turn(msg.text, { memoryText: memoryText || undefined });
-              await qq.sendStream({ agentId: msg.agentId, threadKey: msg.threadKey }, stream);
+              await sendCapturedStream({
+                stream,
+                send: (captured) =>
+                  qq.sendStream({ agentId: msg.agentId, threadKey: msg.threadKey }, captured),
+                agentId: msg.agentId,
+                threadKey: msg.threadKey,
+                channelId: msg.channelId,
+              });
             } catch (err: unknown) {
               logger.error('QQ agent run error', { error: String(err) });
               await qq.sendToThread(msg.threadKey, `❌ Error: ${String(err)}`);
@@ -892,7 +969,14 @@ export async function startGateway(
           runner.setThread(msg.threadKey);
           const memoryText = await runner.searchMemory(msg.text);
           const stream = runner.turn(msg.text, { memoryText: memoryText || undefined });
-          await webChannel.sendStream({ agentId: msg.agentId, threadKey: msg.threadKey }, stream);
+          await sendCapturedStream({
+            stream,
+            send: (captured) =>
+              webChannel.sendStream({ agentId: msg.agentId, threadKey: msg.threadKey }, captured),
+            agentId: msg.agentId,
+            threadKey: msg.threadKey,
+            channelId: msg.channelId,
+          });
         } catch (err: unknown) {
           logger.error('WebChannel agent run error', { error: String(err) });
         }
@@ -944,6 +1028,7 @@ export async function startGateway(
     authToken,
     rpcContext,
     logBroadcaster,
+    inboxBroadcaster,
     webhookHandlers: webhookHandlers.size > 0 ? webhookHandlers : undefined,
     intentRouter: config.routing.rules.length > 0 ? new IntentRouter(config.routing) : undefined,
     wsHandler,

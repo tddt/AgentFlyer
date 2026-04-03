@@ -12,6 +12,7 @@ type TabId =
   | 'overview'
   | 'agents'
   | 'chat'
+  | 'inbox'
   | 'logs'
   | 'config'
   | 'deliverables'
@@ -28,6 +29,7 @@ const OverviewTab = lazy(() =>
 );
 const AgentsTab = lazy(() => import('./tabs/AgentsTab.js').then((m) => ({ default: m.AgentsTab })));
 const ChatTab = lazy(() => import('./tabs/ChatTab.js').then((m) => ({ default: m.ChatTab })));
+const InboxTab = lazy(() => import('./tabs/ChatTab.js').then((m) => ({ default: m.InboxTab })));
 const LogsTab = lazy(() => import('./tabs/LogsTab.js').then((m) => ({ default: m.LogsTab })));
 const ConfigTab = lazy(() => import('./tabs/ConfigTab.js').then((m) => ({ default: m.ConfigTab })));
 const DeliverablesTab = lazy(() =>
@@ -53,6 +55,7 @@ const TAB_MAP: Record<TabId, React.ComponentType> = {
   overview: OverviewTab,
   agents: AgentsTab,
   chat: ChatTab,
+  inbox: InboxTab,
   logs: LogsTab,
   config: ConfigTab,
   deliverables: DeliverablesTab,
@@ -170,6 +173,16 @@ export function App() {
                     initialAgentId={chatAgentId}
                     initialThreadKey={chatThreadKey}
                     initialRecoveryContext={chatRecoveryContext}
+                    onOpenInbox={() => setActiveTab('inbox')}
+                  />
+                ) : activeTab === 'inbox' ? (
+                  <InboxTab
+                    onOpenChat={({ agentId, threadKey }) => {
+                      setChatAgentId(agentId ?? '');
+                      setChatThreadKey(threadKey ?? '');
+                      setChatRecoveryContext(null);
+                      setActiveTab('chat');
+                    }}
                   />
                 ) : activeTab === 'sessions' ? (
                   <SessionsTab

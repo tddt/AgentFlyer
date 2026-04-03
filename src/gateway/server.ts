@@ -3,6 +3,7 @@ import type * as net from 'node:net';
 import type { WebSocket } from 'ws';
 import { WebSocketServer } from 'ws';
 import { createLogger } from '../core/logger.js';
+import type { InboxBroadcaster } from './inbox-broadcaster.js';
 import type { IntentRouter } from './intent-router.js';
 import type { LogBroadcaster } from './log-buffer.js';
 import { routeRequest } from './router.js';
@@ -17,6 +18,7 @@ export interface GatewayServerOptions {
   authToken: string;
   rpcContext: RouterOptions['rpcContext'];
   logBroadcaster: LogBroadcaster;
+  inboxBroadcaster?: InboxBroadcaster;
   /** Webhook endpoint handlers for webhook-based channels (Feishu, QQ, etc.). */
   webhookHandlers?: RouterOptions['webhookHandlers'];
   /** Optional E6 intent router for automatic agent selection. */
@@ -46,6 +48,7 @@ export function createGatewayServer(opts: GatewayServerOptions): GatewayServer {
     authToken: opts.authToken,
     rpcContext: opts.rpcContext,
     logBroadcaster: opts.logBroadcaster,
+    inboxBroadcaster: opts.inboxBroadcaster,
     port: opts.port,
     webhookHandlers: opts.webhookHandlers,
     intentRouter: opts.intentRouter,

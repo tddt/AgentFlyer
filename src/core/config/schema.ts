@@ -114,6 +114,8 @@ const ToolsConfigSchema = z.object({
   deny: z.array(z.string()).default([]),
   /** Tools that require interactive user approval before execution. */
   approval: z.array(z.string()).default(['bash']),
+  /** Safety cap for the number of tool-invoking rounds in a single turn. */
+  maxRounds: z.number().int().positive().default(60),
 });
 
 // ─── Agent ───────────────────────────────────────────────────────────────────
@@ -145,6 +147,7 @@ export type AgentModelConfig = z.infer<typeof AgentModelConfigSchema>;
 export const AgentConfigSchema = z.object({
   id: z.string(),
   name: z.string().optional(),
+  mentionAliases: z.array(z.string()).default([]),
   workspace: z.string().optional(),
   skills: z.array(z.string()).default([]),
   /** Key into the models registry (string), or a failover config object. Falls back to defaults.model when absent. */

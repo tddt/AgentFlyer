@@ -3,6 +3,7 @@ type TabId =
   | 'overview'
   | 'agents'
   | 'chat'
+  | 'inbox'
   | 'logs'
   | 'config'
   | 'deliverables'
@@ -67,6 +68,22 @@ const Ico: Record<string, ReactNode> = {
       strokeLinejoin="round"
     >
       <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+    </svg>
+  ),
+  inbox: (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M4 5h16a1 1 0 0 1 1 1v9a2 2 0 0 1-2 2H8l-4 3V6a1 1 0 0 1 1-1Z" />
+      <path d="M8 10h8" />
+      <path d="M8 13h5" />
     </svg>
   ),
   logs: (
@@ -244,6 +261,7 @@ const NAV_IDS: TabId[] = [
   'overview',
   'agents',
   'chat',
+  'inbox',
   'logs',
   'config',
   'deliverables',

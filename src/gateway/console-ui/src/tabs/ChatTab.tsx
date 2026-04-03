@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Badge } from '../components/Badge.js';
 import { Button } from '../components/Button.js';
 import { CopyButton } from '../components/CopyButton.js';
+import { DeliverableModal } from '../components/DeliverableModal.js';
 import { useLocale } from '../context/i18n.js';
 import { MarkdownView } from '../components/MarkdownView.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
@@ -11,6 +12,8 @@ import type {
   AgentInfo,
   AgentListResult,
   ChatChunk,
+  InboxEvent,
+  InboxEventKind,
   SessionListResult,
   SessionMessagesResult,
   SessionMetaInfo,
@@ -35,20 +38,35 @@ interface TokenUsage {
 }
 
 interface Message {
+  id?: string;
   role: 'user' | 'assistant' | 'thinking';
   content: string;
+  timestamp?: number;
   streaming?: boolean;
   tools?: ToolCall[];
   toolResults?: ToolResult[];
   usage?: TokenUsage;
 }
 
+interface HubFocusTarget {
+  eventId: number;
+  agentId?: string;
+  threadKey?: string;
+  title: string;
+  text: string;
+  kind: InboxEventKind;
+  channelId?: string;
+  deliverableId?: string;
+}
+
 // ── Per-agent panel ──────────────────────────────────────────────────────────
 
 interface AgentPanelProps {
   agent: AgentInfo;
+  agents: AgentInfo[];
   initialThreadKey?: string;
   recoveryContext?: ChatRecoveryContext | null;
+  hubFocusTarget?: HubFocusTarget | null;
 }
 
 interface RecoveryEvidenceContext {
@@ -99,6 +117,40 @@ const TOOL_RESULT_PATTERN_PRIORITY: ToolResultPattern[] = [
 
 const RECOVERY_EVIDENCE_PREVIEW_LENGTH = 180;
 const COLLAPSIBLE_TEXT_LINE_LIMIT = 5;
+const HUB_SEEN_EVENT_IDS_STORAGE_KEY = 'af.console.chat.hubSeenEventIds';
+const HUB_PROCESSED_THREAD_KEYS_STORAGE_KEY = 'af.console.chat.hubProcessedThreads';
+
+function readStoredStringArray(key: string): string[] {
+  if (typeof window === 'undefined') {
+    return [];
+  }
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) {
+      return [];
+    }
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function readStoredNumberArray(key: string): number[] {
+  if (typeof window === 'undefined') {
+    return [];
+  }
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) {
+      return [];
+    }
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((item): item is number => typeof item === 'number') : [];
+  } catch {
+    return [];
+  }
+}
 
 function compactText(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
@@ -936,7 +988,146 @@ function timeAgo(ms: number): string {
   return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
-function AgentPanel({ agent, initialThreadKey, recoveryContext }: AgentPanelProps) {
+function compactSearchText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+}
+
+function buildHubContextPrompt(target: HubFocusTarget, t: (key: string, vars?: Record<string, string | number>) => string): string {
+  const summary = target.text.trim() || target.title.trim();
+  return t('chat.hub.contextPrompt', {
+    title: target.title || t('chat.inbox.threadFallback'),
+    summary: summary || t('chat.hub.contextEmpty'),
+  });
+}
+
+function findHubMessageMatch(messages: Message[], target: HubFocusTarget | null): string | null {
+  if (!target) {
+    return null;
+  }
+  const needles = [target.text, target.title]
+    .map((item) => compactSearchText(item))
+    .filter((item) => item.length >= 8);
+  if (needles.length === 0) {
+    return null;
+  }
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message?.id || message.role === 'thinking') {
+      continue;
+    }
+    const haystack = compactSearchText(message.content);
+    if (!haystack) {
+      continue;
+    }
+    if (needles.some((needle) => haystack.includes(needle))) {
+      return message.id;
+    }
+  }
+  return null;
+}
+
+function normalizeMention(value: string): string {
+  return value.trim().toLocaleLowerCase();
+}
+
+function getInboxThreadKey(event: InboxEvent): string {
+  if (event.threadKey) {
+    return `thread:${event.threadKey}`;
+  }
+  if (event.deliverableId) {
+    return `deliverable:${event.deliverableId}`;
+  }
+  return `${event.kind}:${event.agentId ?? 'unknown'}:${event.id}`;
+}
+
+function getAgentLabel(agentId: string | undefined, agents: AgentInfo[]): string {
+  if (!agentId) {
+    return 'system';
+  }
+  const matched = agents.find((agent) => agent.agentId === agentId);
+  return matched?.name ?? matched?.agentId ?? agentId;
+}
+
+interface HubThread {
+  key: string;
+  threadKey?: string;
+  title: string;
+  preview: string;
+  latestTs: number;
+  latestEvent: InboxEvent;
+  events: InboxEvent[];
+  replyCount: number;
+  deliverableCount: number;
+  agentIds: string[];
+}
+
+interface HubThreadView extends HubThread {
+  unreadCount: number;
+  isProcessed: boolean;
+}
+
+function buildHubThreads(events: InboxEvent[]): HubThread[] {
+  const grouped = new Map<string, HubThread>();
+  for (const event of events) {
+    const key = getInboxThreadKey(event);
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.events.push(event);
+      existing.replyCount += event.kind === 'agent_reply' ? 1 : 0;
+      existing.deliverableCount += event.kind === 'deliverable' ? 1 : 0;
+      if (event.agentId && !existing.agentIds.includes(event.agentId)) {
+        existing.agentIds.push(event.agentId);
+      }
+      if (event.ts >= existing.latestTs) {
+        existing.latestTs = event.ts;
+        existing.latestEvent = event;
+        existing.title = event.title;
+        existing.preview = event.text;
+      }
+      continue;
+    }
+    grouped.set(key, {
+      key,
+      threadKey: event.threadKey,
+      title: event.title,
+      preview: event.text,
+      latestTs: event.ts,
+      latestEvent: event,
+      events: [event],
+      replyCount: event.kind === 'agent_reply' ? 1 : 0,
+      deliverableCount: event.kind === 'deliverable' ? 1 : 0,
+      agentIds: event.agentId ? [event.agentId] : [],
+    });
+  }
+  return Array.from(grouped.values())
+    .map((thread) => ({
+      ...thread,
+      events: [...thread.events].sort((left, right) => left.ts - right.ts),
+    }))
+    .sort((left, right) => right.latestTs - left.latestTs);
+}
+
+function resolveMentionTarget(message: string, agents: AgentInfo[], fallbackAgentId: string): string {
+  const trimmed = message.trim();
+  const match = /^@([^\s]+)\s+/u.exec(trimmed);
+  if (!match) {
+    return fallbackAgentId;
+  }
+  const mention = match[1]?.trim();
+  if (!mention) {
+    return fallbackAgentId;
+  }
+  const normalizedMention = normalizeMention(mention);
+  const exact = agents.find(
+    (agent) =>
+      normalizeMention(agent.agentId) === normalizedMention ||
+      normalizeMention(agent.name ?? '') === normalizedMention ||
+      (agent.mentionAliases ?? []).some((alias) => normalizeMention(alias) === normalizedMention),
+  );
+  return exact?.agentId ?? fallbackAgentId;
+}
+
+function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocusTarget }: AgentPanelProps) {
   const { t } = useLocale();
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
@@ -944,8 +1135,11 @@ function AgentPanel({ agent, initialThreadKey, recoveryContext }: AgentPanelProp
   const [confirmRecoverySend, setConfirmRecoverySend] = useState(false);
   const [currentThread, setCurrentThread] = useState(`console:${agent.agentId}`);
   const [visibleRecoveryContext, setVisibleRecoveryContext] = useState<ChatRecoveryContext | null>(null);
+  const [focusedMessageId, setFocusedMessageId] = useState<string | null>(null);
+  const [expandedContextPanel, setExpandedContextPanel] = useState<'recovery' | 'hub' | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const focusedRecoveryEventIdRef = useRef<number | null>(null);
+  const messageRefs = useRef(new Map<string, HTMLDivElement>());
 
   useEffect(() => {
     if (initialThreadKey) {
@@ -956,6 +1150,7 @@ function AgentPanel({ agent, initialThreadKey, recoveryContext }: AgentPanelProp
   useEffect(() => {
     if (recoveryContext?.eventId) {
       setVisibleRecoveryContext(recoveryContext);
+      setExpandedContextPanel('recovery');
     }
   }, [recoveryContext?.eventId, recoveryContext]);
 
@@ -977,9 +1172,11 @@ function AgentPanel({ agent, initialThreadKey, recoveryContext }: AgentPanelProp
     rpc<SessionMessagesResult>('session.messages', { sessionKey, includeToolResults: true })
       .then((res) => {
         setMessages(
-          res.messages.map((m) => ({
+          res.messages.map((m, index) => ({
+            id: `${sessionKey}:${m.timestamp}:${index}`,
             role: m.isToolResult ? 'assistant' : m.role,
             content: m.text,
+            timestamp: m.timestamp,
             tools: m.tools?.map((t) => ({ id: '', name: t.name, input: t.input })),
             toolResults: m.toolResults,
           })),
@@ -1038,6 +1235,48 @@ function AgentPanel({ agent, initialThreadKey, recoveryContext }: AgentPanelProp
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  useEffect(() => {
+    if (!hubFocusTarget?.eventId) {
+      setFocusedMessageId(null);
+      return;
+    }
+    if (hubFocusTarget.threadKey && hubFocusTarget.threadKey !== currentThread) {
+      setFocusedMessageId(null);
+      return;
+    }
+    const matchedId = findHubMessageMatch(messages, hubFocusTarget);
+    setFocusedMessageId(matchedId);
+    if (matchedId) {
+      const element = messageRefs.current.get(matchedId);
+      if (element) {
+        window.requestAnimationFrame(() => {
+          element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        });
+      }
+    }
+  }, [messages, currentThread, hubFocusTarget]);
+
+  const applyHubContextToInput = (startNew = false) => {
+    if (!hubFocusTarget) {
+      return;
+    }
+    const nextValue = buildHubContextPrompt(hubFocusTarget, t);
+    if (startNew) {
+      const newThread = createConsoleThreadKey(agent.agentId);
+      setCurrentThread(newThread);
+      setMessages([]);
+      setFocusedMessageId(null);
+      setInput(nextValue);
+    } else {
+      setInput((prev) => (prev.trim() ? `${prev.trimEnd()}\n\n${nextValue}` : nextValue));
+    }
+    window.requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      const caret = inputRef.current?.value.length ?? 0;
+      inputRef.current?.setSelectionRange(caret, caret);
+    });
+  };
+
   const recoveryEvidence = getRecoveryEvidenceContext(messages);
   const recoveryPatterns = detectToolResultPatterns(messages);
   const recoveryPatternMetas = recoveryPatterns
@@ -1064,6 +1303,9 @@ function AgentPanel({ agent, initialThreadKey, recoveryContext }: AgentPanelProp
     ? getStructuredRecoveryVariants(recoveryEvidence.userContext, recoveryPatterns, t)
     : [];
   const recoveryEvidenceEntries = buildRecoveryEvidenceEntries(messages, t);
+  const participantAliases = agent.mentionAliases?.slice(0, 3) ?? [];
+  const showRecoveryPanel = Boolean(visibleRecoveryContext);
+  const showHubContextPanel = Boolean(hubFocusTarget);
 
   const buildRecoverySuggestionInput = (baseInput: string): string => {
     if (!suggestedRecoveryMessage) {
@@ -1154,13 +1396,14 @@ function AgentPanel({ agent, initialThreadKey, recoveryContext }: AgentPanelProp
     const PORT = window.__AF_PORT__;
 
     try {
+      const targetAgentId = resolveMentionTarget(text, agents, agent.agentId);
       const res = await fetch(`http://127.0.0.1:${PORT}/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${TOKEN}`,
         },
-        body: JSON.stringify({ agentId: agent.agentId, message: text, thread: currentThread }),
+        body: JSON.stringify({ agentId: targetAgentId, message: text, thread: currentThread }),
       });
 
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
@@ -1344,207 +1587,279 @@ function AgentPanel({ agent, initialThreadKey, recoveryContext }: AgentPanelProp
   };
 
   return (
-    <div className="absolute inset-0 flex flex-col">
-      {/* Panel header */}
-      <div className="flex items-center justify-between pb-3 shrink-0 border-b border-slate-700/50 gap-2 flex-wrap">
-        <div className="flex flex-col gap-0.5">
-          <span className="text-sm font-semibold text-slate-100">
-            {agent.name ?? agent.agentId}
-          </span>
-          <span
-            className="font-mono text-[10px] text-slate-500 truncate max-w-[240px]"
-            title={currentThread}
-          >
-            🧵 {currentThread}
-          </span>
-        </div>
-        <div className="flex items-center gap-1.5 shrink-0">
-          <div className="relative">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="shrink-0 rounded-[1.4rem] border border-white/8 bg-[linear-gradient(135deg,rgba(56,189,248,0.08),rgba(15,23,42,0.92)_45%,rgba(30,41,59,0.78))] px-4 py-4 shadow-[0_18px_60px_rgba(8,47,73,0.18)]">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm font-semibold text-slate-100">{agent.name ?? agent.agentId}</span>
+              <Badge variant="blue">{t('chat.title')}</Badge>
+              {participantAliases.map((alias) => (
+                <span
+                  key={`${agent.agentId}:${alias}`}
+                  className="rounded-full bg-white/6 px-2 py-0.5 text-[10px] text-cyan-200/80"
+                >
+                  @{alias}
+                </span>
+              ))}
+            </div>
+            <div className="mt-2 text-[11px] uppercase tracking-[0.18em] text-cyan-300/65">
+              Active Thread
+            </div>
+            <div className="mt-1 font-mono text-[11px] text-slate-300 truncate max-w-[460px]" title={currentThread}>
+              {currentThread}
+            </div>
+            <div className="mt-2 text-xs text-slate-400/80">
+              {t('chat.inbox.hint')}
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+            <Button size="sm" variant="default" onClick={startNewThread}>
+              {t('chat.newThread')}
+            </Button>
+            <div className="relative">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setShowSessions((v) => !v);
+                  void refetchSessions();
+                }}
+              >
+                {t('chat.sessions', { n: agentSessions.length })}
+              </Button>
+              {showSessions && (
+                <div className="absolute right-0 top-full mt-2 w-80 bg-slate-900 ring-1 ring-slate-700 rounded-xl shadow-2xl z-50 overflow-hidden">
+                  <div className="px-3 py-2 border-b border-slate-700/60 flex items-center justify-between">
+                    <span className="text-xs font-medium text-slate-300">{t('chat.selectThread')}</span>
+                    <button
+                      onClick={() => setShowSessions(false)}
+                      className="text-slate-500 hover:text-slate-300 text-xs"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div className="max-h-72 overflow-y-auto">
+                    <button
+                      onClick={startNewThread}
+                      className="w-full px-3 py-2.5 text-left hover:bg-slate-700/50 border-b border-slate-700/40 flex items-center gap-2"
+                    >
+                      <span className="text-emerald-400 text-xs">＋</span>
+                      <span className="text-xs text-slate-300">{t('chat.newThread')}</span>
+                    </button>
+                    {agentSessions.length === 0 && (
+                      <p className="text-xs text-slate-500 px-3 py-3">{t('chat.noSessionsYet')}</p>
+                    )}
+                    {agentSessions.map((s) => (
+                      <button
+                        key={s.sessionKey}
+                        onClick={() => loadSession(s)}
+                        className={`w-full px-3 py-2.5 text-left hover:bg-slate-700/50 flex flex-col gap-0.5 ${
+                          s.threadKey === currentThread ? 'bg-indigo-600/20' : ''
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-mono text-slate-300 truncate">{s.threadKey}</span>
+                          {s.threadKey === currentThread && (
+                            <span className="text-[10px] text-indigo-400 ml-1 shrink-0">{t('chat.active')}</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 text-[10px] text-slate-500">
+                          <span>{s.messageCount} msgs</span>
+                          <span>·</span>
+                          <span>{timeAgo(s.lastActivity)}</span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
             <Button
               size="sm"
               variant="ghost"
               onClick={() => {
-                setShowSessions((v) => !v);
-                void refetchSessions();
+                setMessages([]);
+                void rpc('session.clear', { sessionKey: `agent:${agent.agentId}:${currentThread}` });
               }}
             >
-              {t('chat.sessions', { n: agentSessions.length })}
+              {t('common.clear')}
             </Button>
-            {showSessions && (
-              <div className="absolute right-0 top-full mt-1 w-80 bg-slate-900 ring-1 ring-slate-700 rounded-xl shadow-2xl z-50 overflow-hidden">
-                <div className="px-3 py-2 border-b border-slate-700/60 flex items-center justify-between">
-                  <span className="text-xs font-medium text-slate-300">{t('chat.selectThread')}</span>
-                  <button
-                    onClick={() => setShowSessions(false)}
-                    className="text-slate-500 hover:text-slate-300 text-xs"
-                  >
-                    ✕
-                  </button>
-                </div>
-                <div className="max-h-72 overflow-y-auto">
-                  <button
-                    onClick={startNewThread}
-                    className="w-full px-3 py-2.5 text-left hover:bg-slate-700/50 border-b border-slate-700/40 flex items-center gap-2"
-                  >
-                    <span className="text-emerald-400 text-xs">＋</span>
-                    <span className="text-xs text-slate-300">{t('chat.newThread')}</span>
-                  </button>
-                  {agentSessions.length === 0 && (
-                    <p className="text-xs text-slate-500 px-3 py-3">{t('chat.noSessionsYet')}</p>
-                  )}
-                  {agentSessions.map((s) => (
-                    <button
-                      key={s.sessionKey}
-                      onClick={() => loadSession(s)}
-                      className={`w-full px-3 py-2.5 text-left hover:bg-slate-700/50 flex flex-col gap-0.5 ${
-                        s.threadKey === currentThread ? 'bg-indigo-600/20' : ''
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-mono text-slate-300 truncate">
-                          {s.threadKey}
-                        </span>
-                        {s.threadKey === currentThread && (
-                          <span className="text-[10px] text-indigo-400 ml-1 shrink-0">{t('chat.active')}</span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2 text-[10px] text-slate-500">
-                        <span>{s.messageCount} msgs</span>
-                        <span>·</span>
-                        <span>{timeAgo(s.lastActivity)}</span>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => {
-              setMessages([]);
-              void rpc('session.clear', { sessionKey: `agent:${agent.agentId}:${currentThread}` });
-            }}
-          >
-            {t('common.clear')}
-          </Button>
         </div>
-      </div>
-
-      {visibleRecoveryContext ? (
-        <div className="mt-3 rounded-xl bg-amber-950/20 ring-1 ring-amber-500/15 px-4 py-3 flex items-start justify-between gap-3 flex-wrap shrink-0">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 flex-wrap">
-              <Badge variant="red">{formatErrorCode(visibleRecoveryContext.errorCode)}</Badge>
-              <span className="text-sm font-medium text-amber-200">
-                {visibleRecoveryContext.mode === 'new_thread'
-                  ? t('chat.recovery.newThreadTitle')
-                  : t('chat.recovery.continueTitle')}
-              </span>
-            </div>
-            <div className="mt-1 text-xs text-amber-100/80 leading-5">
-              {visibleRecoveryContext.mode === 'new_thread'
-                ? t('chat.recovery.newThreadDesc')
-                : t('chat.recovery.continueDesc')}
-            </div>
-            <div className="mt-3 rounded-lg bg-slate-950/30 ring-1 ring-white/5 px-3 py-2.5">
-              <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-amber-300/80">
-                {t('chat.recovery.suggestedMessageLabel')}
-              </div>
-              <div className="mt-1 text-xs text-slate-200/90 leading-5 whitespace-pre-wrap">
-                {suggestedRecoveryMessage}
-              </div>
-            </div>
-            <div className="mt-3 rounded-lg bg-slate-950/25 ring-1 ring-white/5 px-3 py-2.5">
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-slate-300/80">
-                  {t('chat.recovery.structuredLabel')}
-                </div>
-                <Button size="sm" variant="ghost" onClick={applyStructuredRecoverySuggestion} disabled={!structuredRecoveryMessage}>
-                  {t('chat.recovery.useStructuredSuggestion')}
-                </Button>
-              </div>
-              <div className="mt-2 text-xs text-slate-200/90 leading-5 whitespace-pre-wrap break-words">
-                {structuredRecoveryMessage}
-              </div>
-              {structuredRecoveryVariants.length > 0 ? (
-                <div className="mt-3 flex flex-col gap-2">
-                  <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-slate-400/80">
-                    {t('chat.recovery.variantLabel')}
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {structuredRecoveryVariants.map((variant) => (
-                      <Button
-                        key={variant.key}
-                        size="sm"
-                        variant="default"
-                        className="!px-2 !py-1"
-                        onClick={() => applyStructuredRecoveryVariant(variant.template)}
-                      >
-                        {variant.label}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-            </div>
-            {recoveryEvidenceEntries.length > 0 ? (
-              <div className="mt-3 rounded-lg bg-slate-950/25 ring-1 ring-white/5 px-3 py-2.5">
-                <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-slate-300/80">
+        {(showRecoveryPanel || showHubContextPanel) && (
+          <div className="mt-4 grid gap-3 xl:grid-cols-2">
+            {showRecoveryPanel ? (
+              <div className="rounded-2xl border border-amber-400/18 bg-amber-950/12 px-4 py-3">
+                <div className="flex items-start justify-between gap-3 flex-wrap">
+                  <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span>{t('chat.recovery.evidenceLabel')}</span>
-                    {recoveryPatternMetas.map((meta) => (
-                      <Badge key={`${meta.variant}-${meta.label}`} variant={meta.variant}>
-                        {t('chat.recovery.patternDetected')}: {meta.label}
-                      </Badge>
-                    ))}
+                      <Badge variant="red">{formatErrorCode(visibleRecoveryContext?.errorCode)}</Badge>
+                      <span className="text-sm font-medium text-amber-100">
+                        {visibleRecoveryContext?.mode === 'new_thread'
+                          ? t('chat.recovery.newThreadTitle')
+                          : t('chat.recovery.continueTitle')}
+                      </span>
                     </div>
+                    <div className="mt-1 text-xs leading-5 text-amber-100/75">
+                      {visibleRecoveryContext?.mode === 'new_thread'
+                        ? t('chat.recovery.newThreadDesc')
+                        : t('chat.recovery.continueDesc')}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Button size="sm" variant="ghost" onClick={() => setExpandedContextPanel((current) => (current === 'recovery' ? null : 'recovery'))}>
+                      {expandedContextPanel === 'recovery' ? t('common.showLess') : t('common.showMore')}
+                    </Button>
+                    <Button size="sm" variant="default" onClick={applyRecoverySuggestion}>
+                      {t('chat.recovery.useSuggestion')}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      onClick={() => void sendRecoverySuggestion()}
+                      disabled={busy || !suggestedRecoveryMessage}
+                    >
+                      {confirmRecoverySend
+                        ? t('chat.recovery.confirmSendSuggestion')
+                        : t('chat.recovery.sendSuggestion')}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setVisibleRecoveryContext(null)}>
+                      {t('chat.recovery.dismiss')}
+                    </Button>
+                  </div>
                 </div>
-                <div className="mt-2 flex flex-col gap-2">
-                  {recoveryEvidenceEntries.map((entry) => (
-                    <RecoveryEvidenceCard key={entry.key} entry={entry} />
-                  ))}
+                <div className="mt-3 rounded-xl border border-white/6 bg-slate-950/30 px-3 py-2.5 text-xs leading-5 text-slate-200/85 whitespace-pre-wrap">
+                  {suggestedRecoveryMessage}
                 </div>
+                {expandedContextPanel === 'recovery' ? (
+                  <div className="mt-3 space-y-3">
+                    <div className="rounded-xl bg-slate-950/25 ring-1 ring-white/5 px-3 py-2.5">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-slate-300/80">
+                          {t('chat.recovery.structuredLabel')}
+                        </div>
+                        <Button size="sm" variant="ghost" onClick={applyStructuredRecoverySuggestion} disabled={!structuredRecoveryMessage}>
+                          {t('chat.recovery.useStructuredSuggestion')}
+                        </Button>
+                      </div>
+                      <div className="mt-2 text-xs text-slate-200/90 leading-5 whitespace-pre-wrap break-words">
+                        {structuredRecoveryMessage}
+                      </div>
+                      {structuredRecoveryVariants.length > 0 ? (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {structuredRecoveryVariants.map((variant) => (
+                            <Button
+                              key={variant.key}
+                              size="sm"
+                              variant="default"
+                              className="!px-2 !py-1"
+                              onClick={() => applyStructuredRecoveryVariant(variant.template)}
+                            >
+                              {variant.label}
+                            </Button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                    {recoveryEvidenceEntries.length > 0 ? (
+                      <div className="rounded-xl bg-slate-950/25 ring-1 ring-white/5 px-3 py-2.5">
+                        <div className="flex items-center gap-2 flex-wrap text-[11px] font-medium uppercase tracking-[0.08em] text-slate-300/80">
+                          <span>{t('chat.recovery.evidenceLabel')}</span>
+                          {recoveryPatternMetas.map((meta) => (
+                            <Badge key={`${meta.variant}-${meta.label}`} variant={meta.variant}>
+                              {t('chat.recovery.patternDetected')}: {meta.label}
+                            </Badge>
+                          ))}
+                        </div>
+                        <div className="mt-2 flex flex-col gap-2">
+                          {recoveryEvidenceEntries.map((entry) => (
+                            <RecoveryEvidenceCard key={entry.key} entry={entry} />
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {showHubContextPanel ? (
+              <div className="rounded-2xl border border-cyan-400/14 bg-cyan-950/8 px-4 py-3">
+                <div className="flex items-start justify-between gap-3 flex-wrap">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Badge variant={hubFocusTarget?.kind === 'deliverable' ? 'purple' : 'blue'}>
+                        {hubFocusTarget?.kind === 'deliverable'
+                          ? t('chat.inbox.kind.deliverable')
+                          : t('chat.inbox.kind.reply')}
+                      </Badge>
+                      <span className="text-sm font-medium text-cyan-100">{t('chat.hub.linkedTitle')}</span>
+                      {hubFocusTarget?.channelId ? (
+                        <span className="text-[11px] text-cyan-300/70">{hubFocusTarget.channelId}</span>
+                      ) : null}
+                    </div>
+                    <div className="mt-1 text-xs text-cyan-100/80 leading-5">
+                      {hubFocusTarget?.title || t('chat.inbox.threadFallback')}
+                    </div>
+                    <div className="mt-1 text-[11px] text-slate-400">
+                      {focusedMessageId ? t('chat.hub.matchFound') : t('chat.hub.matchPending')}
+                    </div>
+                    <div className="mt-2 text-xs text-slate-300/75 line-clamp-2">
+                      {truncateText(hubFocusTarget?.text || t('chat.hub.contextEmpty'), 110)}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Button size="sm" variant="ghost" onClick={() => setExpandedContextPanel((current) => (current === 'hub' ? null : 'hub'))}>
+                      {expandedContextPanel === 'hub' ? t('common.showLess') : t('common.showMore')}
+                    </Button>
+                    <Button size="sm" variant="default" onClick={() => applyHubContextToInput(false)}>
+                      {t('chat.hub.quoteIntoInput')}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => applyHubContextToInput(true)}>
+                      {t('chat.hub.newThreadFromEvent')}
+                    </Button>
+                  </div>
+                </div>
+                {expandedContextPanel === 'hub' ? (
+                  <div className="mt-3 rounded-xl border border-white/6 bg-slate-950/30 px-3 py-2.5 text-xs leading-5 text-slate-200/85 whitespace-pre-wrap">
+                    {hubFocusTarget?.text || t('chat.hub.contextEmpty')}
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <Button size="sm" variant="default" onClick={applyRecoverySuggestion}>
-              {t('chat.recovery.useSuggestion')}
-            </Button>
-            <Button
-              size="sm"
-              variant="primary"
-              onClick={() => void sendRecoverySuggestion()}
-              disabled={busy || !suggestedRecoveryMessage}
-            >
-              {confirmRecoverySend
-                ? t('chat.recovery.confirmSendSuggestion')
-                : t('chat.recovery.sendSuggestion')}
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => setVisibleRecoveryContext(null)}>
-              {t('chat.recovery.dismiss')}
-            </Button>
-          </div>
-        </div>
-      ) : null}
+        )}
+      </div>
 
-      <div className="flex-1 overflow-y-auto flex flex-col gap-4 pr-1 min-h-0 pt-3">
+      <div className="flex-1 overflow-y-auto flex flex-col gap-4 pr-1 min-h-0 pt-4">
         {messages.length === 0 && (
-          <div className="text-center text-slate-500 text-sm mt-12">
+          <div className="rounded-2xl border border-dashed border-white/10 bg-slate-950/25 px-5 py-8 text-center text-slate-500 text-sm mt-2">
             {t('chat.startConversation', { name: agent.name ?? agent.agentId })}
           </div>
         )}
         {messages.map((msg, i) => (
-          <ChatBubble key={i} msg={msg} />
+          <ChatBubble
+            key={msg.id ?? i}
+            msg={msg}
+            highlighted={msg.id === focusedMessageId}
+            onMount={(element) => {
+              if (!msg.id) {
+                return;
+              }
+              if (element) {
+                messageRefs.current.set(msg.id, element);
+                return;
+              }
+              messageRefs.current.delete(msg.id);
+            }}
+          />
         ))}
         <div ref={bottomRef} />
       </div>
 
-      {/* Input */}
-      <div className="pt-3 shrink-0">
-        <div className="relative flex items-end gap-2 bg-slate-800/60 ring-1 ring-slate-700/50 rounded-xl p-3">
+      <div className="pt-3 shrink-0 border-t border-white/6 mt-3">
+        <div className="relative flex items-end gap-2 bg-slate-800/60 ring-1 ring-slate-700/50 rounded-[1.25rem] p-3 shadow-[0_12px_30px_rgba(15,23,42,0.25)]">
           <textarea
             ref={inputRef}
             value={input}
@@ -1575,19 +1890,112 @@ export function ChatTab({
   initialAgentId = '',
   initialThreadKey = '',
   initialRecoveryContext = null,
+  mode = 'chat',
+  onOpenInbox,
+  onOpenChatFromInbox,
 }: {
   initialAgentId?: string;
   initialThreadKey?: string;
   initialRecoveryContext?: ChatRecoveryContext | null;
+  mode?: 'chat' | 'inbox';
+  onOpenInbox?: () => void;
+  onOpenChatFromInbox?: (options: { agentId?: string; threadKey?: string }) => void;
 }) {
   const { t } = useLocale();
   const [activeAgentId, setActiveAgentId] = useState<string>('');
+  const [selectedThreadKey, setSelectedThreadKey] = useState<string>('');
+  const [inboxEvents, setInboxEvents] = useState<InboxEvent[]>([]);
+  const [selectedHubKey, setSelectedHubKey] = useState<string>('');
+  const [hubFocusTarget, setHubFocusTarget] = useState<HubFocusTarget | null>(null);
+  const [hubQuery, setHubQuery] = useState('');
+  const [hubKindFilter, setHubKindFilter] = useState<'all' | 'reply' | 'deliverable'>('all');
+  const [hubAgentFilter, setHubAgentFilter] = useState<string>('all');
+  const [hubWindowFilter, setHubWindowFilter] = useState<'all' | '1h' | '24h' | '7d'>('all');
+  const [hubChannelFilter, setHubChannelFilter] = useState<string>('all');
+  const [deliverableId, setDeliverableId] = useState<string | null>(null);
+  const [seenInboxEventIds, setSeenInboxEventIds] = useState<number[]>(() => readStoredNumberArray(HUB_SEEN_EVENT_IDS_STORAGE_KEY));
+  const [processedHubThreadKeys, setProcessedHubThreadKeys] = useState<string[]>(() => readStoredStringArray(HUB_PROCESSED_THREAD_KEYS_STORAGE_KEY));
+  const [showProcessedThreads, setShowProcessedThreads] = useState(false);
 
   const { data: agentsResult, refetch } = useQuery<AgentListResult>(
     () => rpc<AgentListResult>('agent.list'),
     [],
   );
   const agents: AgentInfo[] = Array.isArray(agentsResult?.agents) ? agentsResult.agents : [];
+  const seenInboxEventIdSet = new Set(seenInboxEventIds);
+  const processedHubThreadKeySet = new Set(processedHubThreadKeys);
+  const hubThreads: HubThreadView[] = buildHubThreads(inboxEvents).map((thread) => ({
+    ...thread,
+    unreadCount: thread.events.reduce((count, event) => count + (seenInboxEventIdSet.has(event.id) ? 0 : 1), 0),
+    isProcessed: processedHubThreadKeySet.has(thread.key),
+  }));
+  const hubChannels = Array.from(
+    new Set(inboxEvents.map((event) => event.channelId).filter((value): value is string => Boolean(value))),
+  ).sort();
+  const normalizedHubQuery = hubQuery.trim().toLocaleLowerCase();
+  const filteredHubThreads = hubThreads.filter((thread) => {
+    if (!showProcessedThreads && thread.isProcessed) {
+      return false;
+    }
+    if (hubKindFilter === 'reply' && thread.replyCount === 0) {
+      return false;
+    }
+    if (hubKindFilter === 'deliverable' && thread.deliverableCount === 0) {
+      return false;
+    }
+    if (
+      hubAgentFilter !== 'all' &&
+      !thread.agentIds.includes(hubAgentFilter) &&
+      thread.latestEvent.agentId !== hubAgentFilter
+    ) {
+      return false;
+    }
+    if (hubChannelFilter !== 'all' && !thread.events.some((event) => event.channelId === hubChannelFilter)) {
+      return false;
+    }
+    if (hubWindowFilter !== 'all') {
+      const maxAgeMs =
+        hubWindowFilter === '1h'
+          ? 3_600_000
+          : hubWindowFilter === '24h'
+          ? 86_400_000
+          : 604_800_000;
+      if (Date.now() - thread.latestTs > maxAgeMs) {
+        return false;
+      }
+    }
+    if (!normalizedHubQuery) {
+      return true;
+    }
+    const haystacks = [
+      thread.title,
+      thread.preview,
+      thread.threadKey ?? '',
+      ...thread.agentIds,
+      ...thread.events.flatMap((event) => [event.title, event.text, event.channelId ?? '']),
+    ];
+    return haystacks.some((value) => value.toLocaleLowerCase().includes(normalizedHubQuery));
+  });
+  const selectedHubThread =
+    filteredHubThreads.find((thread) => thread.key === selectedHubKey) ?? filteredHubThreads[0] ?? null;
+  const unreadHubThreadCount = hubThreads.filter((thread) => thread.unreadCount > 0 && !thread.isProcessed).length;
+  const processedHubThreadCount = hubThreads.filter((thread) => thread.isProcessed).length;
+
+  const markThreadSeen = (thread: HubThreadView | null) => {
+    if (!thread || thread.events.length === 0) {
+      return;
+    }
+    setSeenInboxEventIds((current) => {
+      const merged = Array.from(new Set([...current, ...thread.events.map((event) => event.id)]));
+      return merged.slice(-200);
+    });
+  };
+
+  const toggleThreadProcessed = (threadKey: string) => {
+    setProcessedHubThreadKeys((current) =>
+      current.includes(threadKey) ? current.filter((key) => key !== threadKey) : [...current, threadKey],
+    );
+  };
 
   // Derive effective selected agent: fall back to first in list while state hasn't synced yet.
   // This prevents the brief flash where agents are loaded but none appears selected.
@@ -1599,6 +2007,12 @@ export function ChatTab({
     }
   }, [initialAgentId]);
 
+  useEffect(() => {
+    if (initialThreadKey) {
+      setSelectedThreadKey(initialThreadKey);
+    }
+  }, [initialThreadKey]);
+
   // Persist the selection so explicit clicks are remembered after refetch
   useEffect(() => {
     if (!activeAgentId && agents.length > 0) {
@@ -1606,46 +2020,184 @@ export function ChatTab({
     }
   }, [agents, activeAgentId]);
 
+  useEffect(() => {
+    const token = window.__AF_TOKEN__;
+    const port = window.__AF_PORT__;
+    const es = new EventSource(`http://127.0.0.1:${port}/api/inbox?token=${token}`);
+    es.onmessage = (event: MessageEvent<string>) => {
+      try {
+        const data = JSON.parse(event.data) as InboxEvent;
+        setInboxEvents((current) => {
+          const next = [data, ...current.filter((item) => item.id !== data.id)];
+          return next.slice(0, 18);
+        });
+      } catch {
+        // ignore malformed inbox events
+      }
+    };
+    return () => es.close();
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(HUB_SEEN_EVENT_IDS_STORAGE_KEY, JSON.stringify(seenInboxEventIds));
+  }, [seenInboxEventIds]);
+
+  useEffect(() => {
+    window.localStorage.setItem(HUB_PROCESSED_THREAD_KEYS_STORAGE_KEY, JSON.stringify(processedHubThreadKeys));
+  }, [processedHubThreadKeys]);
+
+  useEffect(() => {
+    if (filteredHubThreads.length === 0) {
+      if (selectedHubKey) {
+        setSelectedHubKey('');
+      }
+      return;
+    }
+    const matchingThread = selectedThreadKey
+      ? filteredHubThreads.find((thread) => thread.threadKey === selectedThreadKey)
+      : null;
+    if (matchingThread && matchingThread.key !== selectedHubKey) {
+      setSelectedHubKey(matchingThread.key);
+      return;
+    }
+    if (!selectedHubKey || !filteredHubThreads.some((thread) => thread.key === selectedHubKey)) {
+      setSelectedHubKey(matchingThread?.key ?? filteredHubThreads[0]?.key ?? '');
+    }
+  }, [filteredHubThreads, selectedHubKey, selectedThreadKey]);
+
+  useEffect(() => {
+    markThreadSeen(selectedHubThread);
+  }, [selectedHubThread?.key]);
+
+  const openThreadFromHubEvent = (event: InboxEvent, selectedThreadHubKey: string) => {
+    if (mode === 'inbox' && onOpenChatFromInbox) {
+      onOpenChatFromInbox({
+        agentId: event.agentId,
+        threadKey: event.threadKey,
+      });
+      return;
+    }
+    setSeenInboxEventIds((current) => (current.includes(event.id) ? current : [...current, event.id]));
+    setHubFocusTarget({
+      eventId: event.id,
+      agentId: event.agentId,
+      threadKey: event.threadKey,
+      title: event.title,
+      text: event.text,
+      kind: event.kind,
+      channelId: event.channelId,
+      deliverableId: event.deliverableId,
+    });
+    if (event.agentId) {
+      setActiveAgentId(event.agentId);
+    }
+    setSelectedThreadKey(event.threadKey ?? '');
+    setSelectedHubKey(selectedThreadHubKey);
+  };
+
+  if (mode === 'inbox') {
+    return (
+      <div className="flex h-[calc(100vh-4rem)] min-h-0 flex-col rounded-[1.75rem] border border-cyan-400/12 bg-[linear-gradient(180deg,rgba(8,47,73,0.32),rgba(2,6,23,0.92))] shadow-[0_24px_80px_rgba(8,47,73,0.22)]">
+        <HubWorkspaceContent
+          agents={agents}
+          hubThreads={hubThreads}
+          filteredHubThreads={filteredHubThreads}
+          selectedHubThread={selectedHubThread}
+          hubChannels={hubChannels}
+          hubQuery={hubQuery}
+          setHubQuery={setHubQuery}
+          hubKindFilter={hubKindFilter}
+          setHubKindFilter={setHubKindFilter}
+          hubAgentFilter={hubAgentFilter}
+          setHubAgentFilter={setHubAgentFilter}
+          hubWindowFilter={hubWindowFilter}
+          setHubWindowFilter={setHubWindowFilter}
+          hubChannelFilter={hubChannelFilter}
+          setHubChannelFilter={setHubChannelFilter}
+          unreadHubThreadCount={unreadHubThreadCount}
+          processedHubThreadCount={processedHubThreadCount}
+          showProcessedThreads={showProcessedThreads}
+          setShowProcessedThreads={setShowProcessedThreads}
+          markThreadSeen={markThreadSeen}
+          toggleThreadProcessed={toggleThreadProcessed}
+          setSelectedHubKey={setSelectedHubKey}
+          setHubFocusTarget={setHubFocusTarget}
+          setActiveAgentId={setActiveAgentId}
+          setSelectedThreadKey={setSelectedThreadKey}
+          onOpenThreadFromEvent={openThreadFromHubEvent}
+          seenInboxEventIdSet={seenInboxEventIdSet}
+          setSeenInboxEventIds={setSeenInboxEventIds}
+          setDeliverableId={setDeliverableId}
+        />
+        {deliverableId ? <DeliverableModal deliverableId={deliverableId} onClose={() => setDeliverableId(null)} /> : null}
+      </div>
+    );
+  }
+
   return (
-    <div className="flex h-[calc(100vh-4rem)] gap-0">
-      {/* Left: agent list sidebar */}
-      <div className="w-48 shrink-0 flex flex-col border-r border-slate-700/50 pr-2 mr-3">
-        <div className="flex items-center justify-between pb-3 shrink-0">
-          <h1 className="text-sm font-semibold text-slate-100">{t('chat.title')}</h1>
+    <div className="grid h-[calc(100vh-4rem)] gap-4 xl:grid-cols-[200px_minmax(0,1fr)]">
+      <div className="flex min-h-0 flex-col rounded-[1.75rem] border border-white/8 bg-slate-950/55 p-3 shadow-[0_24px_80px_rgba(2,6,23,0.35)]">
+        <div className="flex items-center justify-between border-b border-white/8 pb-3 shrink-0">
+          <div>
+            <h1 className="text-sm font-semibold text-slate-100">{t('chat.title')}</h1>
+            <p className="mt-1 text-[11px] uppercase tracking-[0.18em] text-slate-500">
+              Agent Deck
+            </p>
+          </div>
           <Button size="sm" variant="ghost" onClick={refetch}>
             ↺
           </Button>
         </div>
-        <div className="flex flex-col gap-1 flex-1 overflow-y-auto">
-          {agents.length === 0 && <p className="text-xs text-slate-500 pt-2">{t('chat.noAgents')}</p>}
+        <div className="mt-3 flex flex-col gap-1 overflow-y-auto pr-1 min-h-0">
+          {agents.length === 0 ? <p className="text-xs text-slate-500 pt-2">{t('chat.noAgents')}</p> : null}
           {agents.map((a) => {
             const active = a.agentId === effectiveActiveId;
             return (
               <button
                 key={a.agentId}
                 onClick={() => setActiveAgentId(a.agentId)}
-                className={`flex flex-col items-start px-2.5 py-2 rounded-lg text-left w-full transition-all duration-100 ${
+                className={`group rounded-2xl border px-3 py-3 text-left transition-all ${
                   active
-                    ? 'bg-indigo-600/30 text-indigo-200 ring-1 ring-indigo-500/40'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/40'
+                    ? 'border-indigo-400/35 bg-indigo-500/12 text-indigo-100 shadow-[0_8px_30px_rgba(99,102,241,0.18)]'
+                    : 'border-white/6 bg-slate-900/65 text-slate-400 hover:border-white/12 hover:bg-slate-900/90 hover:text-slate-200'
                 }`}
               >
-                <span className="text-xs font-medium truncate w-full">{a.name ?? a.agentId}</span>
-                {a.name && (
-                  <span className="text-[10px] font-mono text-slate-500 truncate w-full">
-                    {a.agentId}
-                  </span>
-                )}
+                <div className="text-xs font-semibold truncate">{a.name ?? a.agentId}</div>
+                <div className="mt-1 text-[10px] font-mono text-slate-500 truncate group-hover:text-slate-400">
+                  {a.agentId}
+                </div>
+                {a.mentionAliases?.length ? (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {a.mentionAliases.slice(0, 2).map((alias) => (
+                      <span
+                        key={`${a.agentId}:${alias}`}
+                        className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-slate-400"
+                      >
+                        @{alias}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
               </button>
             );
           })}
         </div>
       </div>
 
-      {/* Right: only the active agent panel is mounted */}
-      <div className="flex-1 min-w-0 relative overflow-hidden">
+      <div className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[1.75rem] border border-white/8 bg-slate-950/45 p-3 shadow-[0_24px_80px_rgba(2,6,23,0.3)]">
+        <div className="mb-3 flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-[linear-gradient(135deg,rgba(14,165,233,0.12),rgba(99,102,241,0.08)_45%,rgba(15,23,42,0.65))] px-4 py-3">
+          <div>
+            <div className="text-[11px] uppercase tracking-[0.18em] text-cyan-300/70">
+              {t('chat.inbox.title')}
+            </div>
+            <div className="mt-1 text-xs text-slate-300/80">{t('chat.hub.mobileHint')}</div>
+          </div>
+          <Button size="sm" variant="default" onClick={() => onOpenInbox?.()}>
+            {t('chat.hub.openWorkspace')}
+          </Button>
+        </div>
         {agents.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-slate-500 text-sm">
+          <div className="flex h-full items-center justify-center text-slate-500 text-sm">
             {t('chat.noAgentsAvailable')}
           </div>
         ) : (
@@ -1653,9 +2205,19 @@ export function ChatTab({
             const activeAgent = agents.find((a) => a.agentId === effectiveActiveId) ?? agents[0];
             return activeAgent ? (
               <AgentPanel
-                key={activeAgent.agentId}
+                key={`${activeAgent.agentId}:${selectedThreadKey}`}
                 agent={activeAgent}
-                initialThreadKey={activeAgent.agentId === effectiveActiveId ? initialThreadKey : ''}
+                agents={agents}
+                initialThreadKey={
+                  selectedThreadKey ||
+                  (activeAgent.agentId === effectiveActiveId ? initialThreadKey : '')
+                }
+                hubFocusTarget={
+                  hubFocusTarget?.agentId === activeAgent.agentId ||
+                  (hubFocusTarget?.threadKey && hubFocusTarget.threadKey === selectedThreadKey)
+                    ? hubFocusTarget
+                    : null
+                }
                 recoveryContext={
                   initialRecoveryContext?.agentId === activeAgent.agentId ? initialRecoveryContext : null
                 }
@@ -1664,8 +2226,14 @@ export function ChatTab({
           })()
         )}
       </div>
+
+      {deliverableId ? <DeliverableModal deliverableId={deliverableId} onClose={() => setDeliverableId(null)} /> : null}
     </div>
   );
+}
+
+export function InboxTab({ onOpenChat }: { onOpenChat?: (options: { agentId?: string; threadKey?: string }) => void }) {
+  return <ChatTab mode="inbox" onOpenChatFromInbox={onOpenChat} />;
 }
 
 function ThinkingBubble({ msg }: { msg: Message }) {
@@ -1777,6 +2345,394 @@ function ToolResultList({ toolResults }: { toolResults: ToolResult[] }) {
   );
 }
 
+function HubConversationBubble({
+  event,
+  seen,
+  agentLabel,
+  onOpenThread,
+  onOpenDeliverable,
+}: {
+  event: InboxEvent;
+  seen: boolean;
+  agentLabel: string;
+  onOpenThread: () => void;
+  onOpenDeliverable?: () => void;
+}) {
+  const { t } = useLocale();
+  const isDeliverable = event.kind === 'deliverable';
+
+  return (
+    <div className={`flex ${isDeliverable ? 'justify-end' : 'justify-start'}`}>
+      <div
+        className={`max-w-[92%] rounded-[1.4rem] border px-3 py-3 shadow-[0_14px_30px_rgba(2,6,23,0.18)] ${
+          isDeliverable
+            ? 'border-fuchsia-300/18 bg-[linear-gradient(135deg,rgba(168,85,247,0.2),rgba(91,33,182,0.16)_52%,rgba(15,23,42,0.82))] text-slate-100 rounded-br-md'
+            : 'border-cyan-300/14 bg-[linear-gradient(135deg,rgba(34,211,238,0.16),rgba(15,23,42,0.88)_52%,rgba(30,41,59,0.82))] text-slate-100 rounded-bl-md'
+        }`}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span
+              className={`flex h-7 w-7 items-center justify-center rounded-full text-[10px] font-semibold uppercase ${
+                isDeliverable ? 'bg-fuchsia-200/15 text-fuchsia-100' : 'bg-cyan-200/15 text-cyan-100'
+              }`}
+            >
+              {(agentLabel || t('chat.inbox.system')).slice(0, 1)}
+            </span>
+            <div className="flex flex-col">
+              <span className="text-[11px] font-medium text-slate-100">{agentLabel}</span>
+              <span className="text-[10px] text-slate-300/60">{new Date(event.ts).toLocaleTimeString()}</span>
+            </div>
+            <Badge variant={isDeliverable ? 'purple' : 'blue'}>
+              {isDeliverable ? t('chat.inbox.kind.deliverable') : t('chat.inbox.kind.reply')}
+            </Badge>
+            {!seen ? <Badge variant="blue">{t('chat.hub.unreadShort', { count: 1 })}</Badge> : null}
+          </div>
+        </div>
+        <div className="mt-3 text-sm font-medium text-slate-50">{event.title}</div>
+        <div className="mt-2 whitespace-pre-wrap text-xs leading-6 text-slate-100/85">{event.text}</div>
+        <div className="mt-3 flex flex-wrap gap-2 text-[10px] text-slate-300/60">
+          {event.channelId ? <span>{event.channelId}</span> : null}
+          {event.publicationSummary ? <span>{event.publicationSummary}</span> : null}
+          {event.threadKey ? <span>{event.threadKey}</span> : null}
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {event.threadKey ? (
+            <Button size="sm" variant="ghost" className="!px-2 !py-1 text-[10px]" onClick={onOpenThread}>
+              {t('chat.inbox.openThread')}
+            </Button>
+          ) : null}
+          {onOpenDeliverable ? (
+            <Button size="sm" variant="ghost" className="!px-2 !py-1 text-[10px]" onClick={onOpenDeliverable}>
+              {t('deliverables.open')}
+            </Button>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HubWorkspaceContent({
+  agents,
+  hubThreads,
+  filteredHubThreads,
+  selectedHubThread,
+  hubChannels,
+  hubQuery,
+  setHubQuery,
+  hubKindFilter,
+  setHubKindFilter,
+  hubAgentFilter,
+  setHubAgentFilter,
+  hubWindowFilter,
+  setHubWindowFilter,
+  hubChannelFilter,
+  setHubChannelFilter,
+  unreadHubThreadCount,
+  processedHubThreadCount,
+  showProcessedThreads,
+  setShowProcessedThreads,
+  markThreadSeen,
+  toggleThreadProcessed,
+  setSelectedHubKey,
+  setHubFocusTarget,
+  setActiveAgentId,
+  setSelectedThreadKey,
+  onOpenThreadFromEvent,
+  seenInboxEventIdSet,
+  setSeenInboxEventIds,
+  setDeliverableId,
+}: {
+  agents: AgentInfo[];
+  hubThreads: HubThreadView[];
+  filteredHubThreads: HubThreadView[];
+  selectedHubThread: HubThreadView | null;
+  hubChannels: string[];
+  hubQuery: string;
+  setHubQuery: (value: string) => void;
+  hubKindFilter: 'all' | 'reply' | 'deliverable';
+  setHubKindFilter: (value: 'all' | 'reply' | 'deliverable') => void;
+  hubAgentFilter: string;
+  setHubAgentFilter: (value: string) => void;
+  hubWindowFilter: 'all' | '1h' | '24h' | '7d';
+  setHubWindowFilter: (value: 'all' | '1h' | '24h' | '7d') => void;
+  hubChannelFilter: string;
+  setHubChannelFilter: (value: string) => void;
+  unreadHubThreadCount: number;
+  processedHubThreadCount: number;
+  showProcessedThreads: boolean;
+  setShowProcessedThreads: (value: boolean) => void;
+  markThreadSeen: (thread: HubThreadView | null) => void;
+  toggleThreadProcessed: (threadKey: string) => void;
+  setSelectedHubKey: (key: string) => void;
+  setHubFocusTarget: (target: HubFocusTarget | null) => void;
+  setActiveAgentId: (value: string) => void;
+  setSelectedThreadKey: (value: string) => void;
+  onOpenThreadFromEvent?: (event: InboxEvent, selectedHubThreadKey: string) => void;
+  seenInboxEventIdSet: Set<number>;
+  setSeenInboxEventIds: (updater: (current: number[]) => number[]) => void;
+  setDeliverableId: (value: string | null) => void;
+}) {
+  const { t } = useLocale();
+
+  return (
+    <>
+      <div className="relative border-b border-white/8 px-4 py-4 shrink-0">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-[11px] uppercase tracking-[0.22em] text-cyan-300/70">
+              {t('chat.inbox.title')}
+            </div>
+            <div className="mt-1 text-sm font-semibold text-slate-100">{t('chat.hub.sidebarTitle')}</div>
+            <div className="mt-1 text-xs leading-5 text-slate-300/80">{t('chat.hub.sidebarSubtitle')}</div>
+          </div>
+          <div className="flex items-center gap-2">
+            {unreadHubThreadCount > 0 ? <Badge variant="blue">{t('chat.hub.unread', { count: unreadHubThreadCount })}</Badge> : null}
+            {processedHubThreadCount > 0 ? <Badge variant="gray">{t('chat.hub.processed', { count: processedHubThreadCount })}</Badge> : null}
+          </div>
+        </div>
+        <div className="mt-4 grid gap-2">
+          <input
+            value={hubQuery}
+            onChange={(event) => setHubQuery(event.target.value)}
+            placeholder={t('chat.inbox.searchPlaceholder')}
+            className="rounded-xl bg-slate-950/55 ring-1 ring-white/8 px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-cyan-400/40"
+          />
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+            <select
+              value={hubKindFilter}
+              onChange={(event) => setHubKindFilter(event.target.value as 'all' | 'reply' | 'deliverable')}
+              className="rounded-xl bg-slate-950/55 ring-1 ring-white/8 px-3 py-2.5 text-sm text-slate-100 focus:outline-none focus:ring-cyan-400/40"
+            >
+              <option value="all">{t('chat.inbox.filter.all')}</option>
+              <option value="reply">{t('chat.inbox.filter.reply')}</option>
+              <option value="deliverable">{t('chat.inbox.filter.deliverable')}</option>
+            </select>
+            <select
+              value={hubAgentFilter}
+              onChange={(event) => setHubAgentFilter(event.target.value)}
+              className="rounded-xl bg-slate-950/55 ring-1 ring-white/8 px-3 py-2.5 text-sm text-slate-100 focus:outline-none focus:ring-cyan-400/40"
+            >
+              <option value="all">{t('chat.inbox.filter.allAgents')}</option>
+              {agents.map((agent) => (
+                <option key={agent.agentId} value={agent.agentId}>
+                  {agent.name ?? agent.agentId}
+                </option>
+              ))}
+            </select>
+            <select
+              value={hubWindowFilter}
+              onChange={(event) => setHubWindowFilter(event.target.value as 'all' | '1h' | '24h' | '7d')}
+              className="rounded-xl bg-slate-950/55 ring-1 ring-white/8 px-3 py-2.5 text-sm text-slate-100 focus:outline-none focus:ring-cyan-400/40"
+            >
+              <option value="all">{t('chat.inbox.window.all')}</option>
+              <option value="1h">{t('chat.inbox.window.1h')}</option>
+              <option value="24h">{t('chat.inbox.window.24h')}</option>
+              <option value="7d">{t('chat.inbox.window.7d')}</option>
+            </select>
+            <select
+              value={hubChannelFilter}
+              onChange={(event) => setHubChannelFilter(event.target.value)}
+              className="rounded-xl bg-slate-950/55 ring-1 ring-white/8 px-3 py-2.5 text-sm text-slate-100 focus:outline-none focus:ring-cyan-400/40"
+            >
+              <option value="all">{t('chat.inbox.filter.allChannels')}</option>
+              {hubChannels.map((channelId) => (
+                <option key={channelId} value={channelId}>
+                  {channelId}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center justify-between gap-2 rounded-xl border border-white/8 bg-slate-950/30 px-3 py-2 text-xs text-slate-300">
+            <span>{t('chat.hub.threadListTitle')}</span>
+            <Button size="sm" variant="ghost" onClick={() => setShowProcessedThreads(!showProcessedThreads)}>
+              {showProcessedThreads ? t('chat.hub.hideProcessed') : t('chat.hub.showProcessed')}
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid min-h-0 flex-1 gap-3 px-3 py-3 xl:grid-cols-[minmax(220px,0.88fr)_minmax(0,1.12fr)]">
+        <div className="min-h-0 overflow-hidden rounded-2xl border border-white/8 bg-slate-950/35">
+          <div className="flex items-center justify-between border-b border-white/8 px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-slate-500">
+            <span>{t('chat.hub.threadListTitle')}</span>
+            <span>{filteredHubThreads.length}</span>
+          </div>
+          <div className="space-y-1 overflow-y-auto px-2 py-2 h-full">
+            {filteredHubThreads.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-white/10 bg-slate-950/30 px-3 py-4 text-xs text-slate-400">
+                {hubThreads.length === 0 ? t('chat.inbox.empty') : t('chat.inbox.emptyFiltered')}
+              </div>
+            ) : (
+              filteredHubThreads.map((thread) => {
+                const isActive = thread.key === selectedHubThread?.key;
+                const participantSummary =
+                  thread.agentIds.length > 0
+                    ? thread.agentIds.map((agentId) => getAgentLabel(agentId, agents)).join(' · ')
+                    : t('chat.inbox.system');
+                return (
+                  <button
+                    key={thread.key}
+                    onClick={() => {
+                      markThreadSeen(thread);
+                      setSelectedHubKey(thread.key);
+                      setHubFocusTarget({
+                        eventId: thread.latestEvent.id,
+                        agentId: thread.latestEvent.agentId,
+                        threadKey: thread.latestEvent.threadKey,
+                        title: thread.latestEvent.title,
+                        text: thread.latestEvent.text,
+                        kind: thread.latestEvent.kind,
+                        channelId: thread.latestEvent.channelId,
+                        deliverableId: thread.latestEvent.deliverableId,
+                      });
+                      if (thread.latestEvent.agentId) {
+                        setActiveAgentId(thread.latestEvent.agentId);
+                      }
+                      if (thread.threadKey) {
+                        setSelectedThreadKey(thread.threadKey);
+                      }
+                    }}
+                    className={`w-full rounded-[1.35rem] border px-3 py-3 text-left transition-all ${
+                      isActive
+                        ? 'border-cyan-300/35 bg-cyan-400/10 shadow-[0_12px_30px_rgba(34,211,238,0.08)]'
+                        : thread.isProcessed
+                        ? 'border-white/8 bg-slate-950/20 text-slate-400 hover:border-white/14 hover:bg-slate-900/55'
+                        : 'border-white/8 bg-slate-950/35 hover:border-white/14 hover:bg-slate-900/80'
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${isActive ? 'bg-cyan-300/18 text-cyan-100' : 'bg-white/6 text-slate-200'}`}>
+                        {participantSummary.slice(0, 1)}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className={`truncate text-sm font-medium ${thread.isProcessed ? 'text-slate-400' : 'text-slate-100'}`}>
+                            {thread.title || t('chat.inbox.threadFallback')}
+                          </div>
+                          <span className="shrink-0 text-[10px] text-slate-500">{timeAgo(thread.latestTs)}</span>
+                        </div>
+                        <div className={`mt-1 line-clamp-2 text-xs leading-5 ${thread.isProcessed ? 'text-slate-500' : 'text-slate-300'}`}>
+                          {thread.preview}
+                        </div>
+                        <div className="mt-2 flex items-center gap-2 flex-wrap text-[10px] text-slate-500">
+                          <span className="truncate max-w-[150px]">{participantSummary}</span>
+                          {thread.unreadCount > 0 ? (
+                            <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-cyan-400/20 px-1.5 text-[10px] text-cyan-100">
+                              {thread.unreadCount}
+                            </span>
+                          ) : null}
+                          {thread.isProcessed ? <Badge variant="gray">{t('chat.hub.processedShort')}</Badge> : null}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2 pl-[3.25rem] text-[10px] text-slate-500">
+                      <Badge variant={thread.deliverableCount > 0 ? 'purple' : 'green'}>
+                        {thread.deliverableCount > 0 && thread.replyCount > 0
+                          ? `${thread.replyCount}+${thread.deliverableCount}`
+                          : thread.deliverableCount > 0
+                          ? t('chat.inbox.kind.deliverable')
+                          : t('chat.inbox.kind.reply')}
+                      </Badge>
+                      <span>{t('chat.inbox.events', { count: thread.events.length })}</span>
+                      {thread.threadKey ? <span>{thread.threadKey}</span> : null}
+                    </div>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        <div className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-white/8 bg-slate-950/35">
+          {selectedHubThread ? (
+            <>
+              <div className="shrink-0 border-b border-white/8 bg-[linear-gradient(135deg,rgba(34,211,238,0.12),rgba(15,23,42,0.92)_58%,rgba(30,41,59,0.82))] px-4 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-[11px] uppercase tracking-[0.16em] text-slate-500">
+                      {t('chat.inbox.activityTitle')}
+                    </div>
+                    <div className="mt-1 truncate text-sm font-semibold text-slate-100">
+                      {selectedHubThread.title || t('chat.inbox.threadFallback')}
+                    </div>
+                    <div className="mt-1 line-clamp-2 text-xs text-slate-400">
+                      {selectedHubThread.agentIds.length > 0
+                        ? selectedHubThread.agentIds.map((agentId) => getAgentLabel(agentId, agents)).join(' · ')
+                        : t('chat.inbox.system')}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <Badge variant="green">{t('chat.inbox.replyCount', { count: selectedHubThread.replyCount })}</Badge>
+                    <Badge variant="purple">{t('chat.inbox.deliverableCount', { count: selectedHubThread.deliverableCount })}</Badge>
+                    {selectedHubThread.unreadCount > 0 ? (
+                      <Badge variant="blue">{t('chat.hub.unreadShort', { count: selectedHubThread.unreadCount })}</Badge>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant={selectedHubThread.isProcessed ? 'default' : 'ghost'}
+                    onClick={() => toggleThreadProcessed(selectedHubThread.key)}
+                  >
+                    {selectedHubThread.isProcessed ? t('chat.hub.reopenThread') : t('chat.hub.markProcessed')}
+                  </Button>
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.06),transparent_42%),linear-gradient(180deg,rgba(2,6,23,0.2),rgba(2,6,23,0.55))] px-3 py-3">
+                <div className="flex min-h-full flex-col justify-end gap-3">
+                  {selectedHubThread.events.map((event) => {
+                    const eventSeen = seenInboxEventIdSet.has(event.id);
+                    return (
+                      <HubConversationBubble
+                        key={event.id}
+                        event={event}
+                        seen={eventSeen}
+                        agentLabel={getAgentLabel(event.agentId, agents)}
+                        onOpenThread={() => {
+                          if (onOpenThreadFromEvent) {
+                            onOpenThreadFromEvent(event, selectedHubThread.key);
+                            return;
+                          }
+                          setSeenInboxEventIds((current) => (current.includes(event.id) ? current : [...current, event.id]));
+                          setHubFocusTarget({
+                            eventId: event.id,
+                            agentId: event.agentId,
+                            threadKey: event.threadKey,
+                            title: event.title,
+                            text: event.text,
+                            kind: event.kind,
+                            channelId: event.channelId,
+                            deliverableId: event.deliverableId,
+                          });
+                          if (event.agentId) {
+                            setActiveAgentId(event.agentId);
+                          }
+                          setSelectedThreadKey(event.threadKey ?? '');
+                          setSelectedHubKey(selectedHubThread.key);
+                        }}
+                        onOpenDeliverable={
+                          event.deliverableId ? () => setDeliverableId(event.deliverableId ?? null) : undefined
+                        }
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="m-3 rounded-xl border border-dashed border-white/10 bg-slate-950/30 px-3 py-4 text-xs text-slate-400">
+              {hubThreads.length === 0 ? t('chat.inbox.empty') : t('chat.inbox.emptyFiltered')}
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
 function TokenBadge({ usage }: { usage: TokenUsage }) {
   const total = usage.input + usage.output;
   const cacheNote = usage.cacheRead ? ` · ${usage.cacheRead.toLocaleString()} cached` : '';
@@ -1788,16 +2744,26 @@ function TokenBadge({ usage }: { usage: TokenUsage }) {
   );
 }
 
-function ChatBubble({ msg }: { msg: Message }) {
+function ChatBubble({
+  msg,
+  highlighted = false,
+  onMount,
+}: {
+  msg: Message;
+  highlighted?: boolean;
+  onMount?: (element: HTMLDivElement | null) => void;
+}) {
   if (msg.role === 'thinking') {
     return <ThinkingBubble msg={msg} />;
   }
 
   const isUser = msg.role === 'user';
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`} ref={onMount}>
       <div
-        className={`max-w-[80%] rounded-2xl px-4 py-3 ${
+        className={`max-w-[80%] rounded-2xl px-4 py-3 transition-all ${
+          highlighted ? 'ring-2 ring-cyan-400/60 shadow-lg shadow-cyan-500/10' : ''
+        } ${
           isUser
             ? 'bg-indigo-600/80 text-slate-100 rounded-br-sm'
             : 'bg-slate-800/80 ring-1 ring-slate-700/50 rounded-bl-sm'

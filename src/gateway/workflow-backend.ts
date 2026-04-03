@@ -249,6 +249,16 @@ async function createWorkflowDeliverableRecord(
     buildWorkflowDeliverable(workflow, run, fileArtifacts, publications),
   );
   await publishDeliverableTargets(ctx, deliverable);
+  const latestDeliverable = (await ctx.deliverableStore.get(deliverable.id)) ?? deliverable;
+  ctx.inboxBroadcaster?.publish({
+    kind: 'deliverable',
+    title: `${workflow.name} deliverable ready`,
+    text: latestDeliverable.summary || latestDeliverable.previewText || latestDeliverable.title,
+    deliverableId: latestDeliverable.id,
+    publicationSummary: latestDeliverable.publications
+      ?.map((item) => `${item.label}:${item.status}`)
+      .join(' · '),
+  });
   run.latestDeliverableId = deliverable.id;
 }
 

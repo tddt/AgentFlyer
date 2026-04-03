@@ -10,14 +10,22 @@ export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 export interface AgentInfo {
   agentId: string;
   name?: string;
+  mentionAliases?: string[];
 }
 
 export interface AgentConfig {
   id: string;
   name?: string;
+  mentionAliases?: string[];
   model?: string;
   workspace?: string;
   mesh?: Record<string, unknown>;
+  tools?: {
+    allow?: string[];
+    deny?: string[];
+    approval?: string[];
+    maxRounds?: number;
+  };
   persona?: {
     language?: string;
     outputDir?: string;
@@ -226,6 +234,21 @@ export interface ChatRecoveryContext {
   mode: ChatRecoveryMode;
 }
 
+export type InboxEventKind = 'agent_reply' | 'deliverable';
+
+export interface InboxEvent {
+  id: number;
+  ts: number;
+  kind: InboxEventKind;
+  agentId?: string;
+  threadKey?: string;
+  channelId?: string;
+  title: string;
+  text: string;
+  deliverableId?: string;
+  publicationSummary?: string;
+}
+
 export interface DisplayMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -407,6 +430,14 @@ export type DeliverableSource =
       workflowId?: string;
       workflowRunId?: string;
       agentId?: string;
+    }
+  | {
+      kind: 'chat_turn';
+      agentId: string;
+      threadKey: string;
+      channelId: string;
+      startedAt: number;
+      finishedAt: number;
     };
 
 export interface DeliverableStats {
@@ -416,6 +447,7 @@ export interface DeliverableStats {
   cancelled: number;
   workflowRuns: number;
   schedulerRuns: number;
+  chatTurns: number;
   totalArtifacts: number;
   textualArtifacts: number;
   fileArtifacts: number;

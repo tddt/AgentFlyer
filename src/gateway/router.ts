@@ -6,7 +6,9 @@ import { createLogger } from '../core/logger.js';
 import { summarizeSessionErrors } from '../core/session/error-stats.js';
 import { type StreamChunk, asAgentId } from '../core/types.js';
 import { validateToken } from './auth.js';
+import { captureChatTurnDeliverable } from './chat-deliverables.js';
 import { buildConsoleHtml } from './console/index.js';
+import type { InboxBroadcaster } from './inbox-broadcaster.js';
 import type { IntentRouter } from './intent-router.js';
 import type { LogBroadcaster } from './log-buffer.js';
 import { type RpcContext, dispatchRpc } from './rpc.js';
@@ -17,6 +19,7 @@ export interface RouterOptions {
   authToken: string;
   rpcContext: RpcContext;
   logBroadcaster: LogBroadcaster;
+  inboxBroadcaster?: InboxBroadcaster;
   port: number;
   /**
    * Channel webhook handlers that bypass gateway auth.
@@ -30,6 +33,53 @@ export interface RouterOptions {
    * automatically (E6 intent-aware routing).
    */
   intentRouter?: IntentRouter;
+}
+
+function normalizeMention(value: string): string {
+  return value.trim().toLocaleLowerCase();
+}
+
+function resolveMentionedAgent(
+  message: string,
+  agents: Array<{ id: string; name?: string; mentionAliases?: string[] }>,
+): { agentId?: string; text: string } {
+  const trimmed = message.trim();
+  const match = /^@([^\s]+)\s+([\s\S]*)$/u.exec(trimmed);
+  if (!match) {
+    return { text: trimmed };
+  }
+  const mention = match[1]?.trim() ?? '';
+  const nextText = match[2]?.trim() ?? '';
+  if (!mention || !nextText) {
+    return { text: trimmed };
+  }
+  const normalizedMention = normalizeMention(mention);
+  const matchedAgent = agents.find((item) => {
+    if (normalizeMention(item.id) === normalizedMention) {
+      return true;
+    }
+    if (item.name && normalizeMention(item.name) === normalizedMention) {
+      return true;
+    }
+    return (item.mentionAliases ?? []).some(
+      (alias) => normalizeMention(alias) === normalizedMention,
+    );
+  });
+  return matchedAgent ? { agentId: matchedAgent.id, text: nextText } : { text: trimmed };
+}
+
+function isLikelyTextMime(mimeType: string): boolean {
+  return (
+    mimeType.startsWith('text/') ||
+    mimeType === 'application/json' ||
+    mimeType === 'application/javascript' ||
+    mimeType === 'application/xml' ||
+    mimeType === 'image/svg+xml'
+  );
+}
+
+function responseContentType(mimeType: string): string {
+  return isLikelyTextMime(mimeType) ? `${mimeType}; charset=utf-8` : mimeType;
 }
 
 /** Parse request body as JSON (resolves null on empty body). */
@@ -109,7 +159,7 @@ async function streamContentItem(
     }
 
     res.writeHead(206, {
-      'Content-Type': item.mimeType,
+      'Content-Type': responseContentType(item.mimeType),
       'Content-Length': end - start + 1,
       'Content-Range': `bytes ${start}-${end}/${fileStat.size}`,
       'Accept-Ranges': 'bytes',
@@ -121,7 +171,7 @@ async function streamContentItem(
   }
 
   res.writeHead(200, {
-    'Content-Type': item.mimeType,
+    'Content-Type': responseContentType(item.mimeType),
     'Content-Length': fileStat.size,
     'Accept-Ranges': 'bytes',
     'Cache-Control': 'no-store',
@@ -220,6 +270,27 @@ export async function routeRequest(
     return true;
   }
 
+  if (url.startsWith('/api/inbox') && method === 'GET') {
+    const queryToken = queryTokenFromUrl(url);
+    const authCheck = validateToken(`Bearer ${queryToken}`, opts.authToken);
+    if (!authCheck.ok) {
+      writeUnauthorized(res);
+      return true;
+    }
+    if (!opts.inboxBroadcaster) {
+      json(res, 503, { error: 'Inbox stream unavailable' });
+      return true;
+    }
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'Transfer-Encoding': 'chunked',
+    });
+    opts.inboxBroadcaster.subscribe(res);
+    return true;
+  }
+
   // GET /api/content/<itemId>?token=<token>  — browser-safe media/file preview
   if (url.startsWith('/api/content/') && method === 'GET') {
     const itemId = url.slice('/api/content/'.length).split('?')[0] ?? '';
@@ -276,11 +347,26 @@ export async function routeRequest(
     }
 
     // E6: if agentId omitted, use intent router (falls back to 'main' if no rule matches).
-    let agentId = rawAgentId;
+    const mention = resolveMentionedAgent(
+      message,
+      opts.rpcContext
+        .getConfig()
+        .agents.filter((agent) => opts.rpcContext.runners.has(agent.id))
+        .map((agent) => ({
+          id: agent.id,
+          name: agent.name,
+          mentionAliases: agent.mentionAliases,
+        })),
+    );
+    const inboundMessage = mention.text;
+    let agentId = mention.agentId ?? rawAgentId;
     if (!agentId && opts.intentRouter) {
-      const routed = opts.intentRouter.routeWithFallback(message);
+      const routed = opts.intentRouter.routeWithFallback(inboundMessage);
       agentId = opts.rpcContext.runners.has(routed.agent) ? routed.agent : routed.fallback;
-      logger.debug('Intent router selected agent', { agentId, message: message.slice(0, 60) });
+      logger.debug('Intent router selected agent', {
+        agentId,
+        message: inboundMessage.slice(0, 60),
+      });
     }
     if (!agentId) {
       json(res, 400, { error: 'agentId is required' });
@@ -307,12 +393,35 @@ export async function routeRequest(
     };
 
     try {
-      const gen = runner.turn(message);
+      let replyText = '';
+      const startedAt = Date.now();
+      const gen = runner.turn(inboundMessage);
       let next = await gen.next();
       while (!next.done) {
-        sendEvent(next.value as StreamChunk);
+        const chunk = next.value as StreamChunk;
+        if (chunk.type === 'text_delta' && chunk.text) {
+          replyText += chunk.text;
+        }
+        sendEvent(chunk);
         next = await gen.next();
       }
+      if (replyText.trim() && opts.inboxBroadcaster) {
+        opts.inboxBroadcaster.publish({
+          kind: 'agent_reply',
+          agentId,
+          threadKey: thread,
+          channelId: 'chat',
+          title: `${agentId} replied`,
+          text: replyText.trim(),
+        });
+      }
+      await captureChatTurnDeliverable(opts.rpcContext, {
+        agentId,
+        threadKey: thread ?? '',
+        channelId: 'chat',
+        replyText,
+        startedAt,
+      });
     } catch (err) {
       logger.error('Streaming chat error', { agentId, error: String(err) });
       sendEvent({ type: 'error', error: String(err) });

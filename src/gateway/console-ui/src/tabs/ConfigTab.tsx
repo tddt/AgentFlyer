@@ -236,18 +236,46 @@ const ConfigIco: Record<ConfigSection, ReactNode> = {
 
 const CAPABILITY_OPTIONS = ['code', 'analysis', 'web_search', 'writing'] as const;
 const ACCEPT_OPTIONS = ['task', 'query', 'notification'] as const;
-const TOOL_OPTIONS = [
+const FALLBACK_TOOL_OPTIONS = [
   'bash',
-  'read_file',
-  'grep_search',
   'fetch_webpage',
-  'web_search',
+  'file_stat',
+  'grep_search',
+  'list_directory',
+  'memory_delete',
+  'memory_search',
+  'memory_write',
+  'mesh_broadcast',
+  'mesh_cancel',
+  'mesh_discuss',
   'mesh_list',
+  'mesh_plan',
   'mesh_send',
   'mesh_spawn',
   'mesh_status',
+  'read_file',
+  'send_file_to_channel',
+  'send_text_to_channel',
+  'skill_list',
+  'skill_read',
+  'task_cancel',
+  'task_list',
+  'task_schedule',
+  'fetch_webpage',
+  'web_search',
   'write_file',
 ] as const;
+
+interface ToolInfo {
+  name: string;
+  description: string;
+  category: string;
+  agentIds: string[];
+}
+
+interface ToolListResult {
+  tools?: ToolInfo[];
+}
 
 interface GroupedModelDef {
   id: string;
@@ -350,6 +378,7 @@ interface FederationConfig {
 interface AgentConfig {
   id: string;
   name?: string;
+  mentionAliases?: string[];
   workspace?: string;
   skills: string[];
   model?: string;
@@ -361,7 +390,7 @@ interface AgentConfig {
     triggers: string[];
   };
   owners: string[];
-  tools: { allow?: string[]; deny: string[]; approval: string[] };
+  tools: { allow?: string[]; deny: string[]; approval: string[]; maxRounds: number };
   persona: { language: string; outputDir: string };
   soulFile?: string;
   agentsFile?: string;
@@ -491,6 +520,7 @@ function defaultAgent(index: number): AgentConfig {
   return {
     id: `agent-${index + 1}`,
     name: `Agent ${index + 1}`,
+    mentionAliases: [],
     workspace: '',
     skills: [],
     model: '',
@@ -502,7 +532,7 @@ function defaultAgent(index: number): AgentConfig {
       triggers: [],
     },
     owners: [],
-    tools: { allow: [], deny: [], approval: ['bash'] },
+    tools: { allow: [], deny: [], approval: ['bash'], maxRounds: 60 },
     persona: { language: 'zh-CN', outputDir: 'output' },
   };
 }
@@ -1684,7 +1714,7 @@ function AgentsPanel({
                     draft: {
                       ...agent,
                       mesh: { ...agent.mesh },
-                      tools: { ...agent.tools },
+                      tools: { ...agent.tools, maxRounds: agent.tools.maxRounds ?? 60 },
                       persona: { ...agent.persona },
                     },
                   })
@@ -2323,6 +2353,7 @@ export function ConfigTab() {
     () => rpc<SkillListResult>('skill.list'),
     [],
   );
+  const { data: toolListData } = useQuery<ToolListResult>(() => rpc<ToolListResult>('tool.list'), []);
 
   useEffect(() => {
     if (data !== null && data !== undefined) {
@@ -2333,6 +2364,20 @@ export function ConfigTab() {
   }, [data]);
 
   const availableSkills: SkillInfo[] = useMemo(() => skillListData?.skills ?? [], [skillListData]);
+  const toolOptions = useMemo(() => {
+    const catalog = toolListData?.tools ?? [];
+    if (catalog.length === 0) {
+      return [...new Set(FALLBACK_TOOL_OPTIONS)];
+    }
+    return catalog
+      .slice()
+      .sort((left, right) => {
+        const categoryCompare = left.category.localeCompare(right.category);
+        if (categoryCompare !== 0) return categoryCompare;
+        return left.name.localeCompare(right.name);
+      })
+      .map((tool) => tool.name);
+  }, [toolListData]);
   const modelKeys = useMemo(() => {
     if (!cfg) return [];
     return Object.entries(cfg.models).flatMap(([g, grp]) =>
@@ -2681,6 +2726,20 @@ export function ConfigTab() {
             }
           />
           <TextRow
+            label="Mention aliases"
+            help="Comma-separated aliases accepted by the chat Hub and @mention routing."
+            value={toCsv(agentModal.draft.mentionAliases)}
+            onChange={(mentionAliases) =>
+              setAgentModal({
+                ...agentModal,
+                draft: {
+                  ...agentModal.draft,
+                  mentionAliases: asStringArray(mentionAliases),
+                },
+              })
+            }
+          />
+          <TextRow
             label="Workspace"
             help="Agent workspace path."
             value={agentModal.draft.workspace ?? ''}
@@ -2765,7 +2824,7 @@ export function ConfigTab() {
           <MultiChoiceRow
             label="Tools approval"
             help="Tools requiring interactive user approval."
-            options={TOOL_OPTIONS}
+            options={toolOptions}
             selected={agentModal.draft.tools.approval}
             onChange={(approval) =>
               setAgentModal({
@@ -2778,7 +2837,7 @@ export function ConfigTab() {
             label="Tools allow"
             help="Optional tool allowlist — checked preset or custom name. Empty = all tools allowed."
             values={agentModal.draft.tools.allow ?? []}
-            presets={TOOL_OPTIONS}
+            presets={toolOptions}
             onChange={(allow) =>
               setAgentModal({
                 ...agentModal,
@@ -2790,11 +2849,29 @@ export function ConfigTab() {
             label="Tools deny"
             help="Tool denylist — these tools are blocked for this agent."
             values={agentModal.draft.tools.deny}
-            presets={TOOL_OPTIONS}
+            presets={toolOptions}
             onChange={(deny) =>
               setAgentModal({
                 ...agentModal,
                 draft: { ...agentModal.draft, tools: { ...agentModal.draft.tools, deny } },
+              })
+            }
+          />
+          <NumberRow
+            label="Tool round cap"
+            help="Safety cap for tool-invoking rounds in one turn. Increase this for longer autonomous tasks."
+            value={agentModal.draft.tools.maxRounds}
+            min={1}
+            onChange={(maxRounds) =>
+              setAgentModal({
+                ...agentModal,
+                draft: {
+                  ...agentModal.draft,
+                  tools: {
+                    ...agentModal.draft.tools,
+                    maxRounds: Number.isFinite(maxRounds) && maxRounds > 0 ? maxRounds : 60,
+                  },
+                },
               })
             }
           />

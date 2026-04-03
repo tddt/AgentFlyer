@@ -12,6 +12,7 @@ import type {
   StreamChunk,
   ThreadKey,
   ToolCallResult,
+  ToolDefinition,
   ToolResultContent,
   ToolUseContent,
 } from '../core/types.js';
@@ -265,6 +266,14 @@ export class AgentRunner {
     return this._running;
   }
 
+  /** Return the current tool catalog registered for this runner. */
+  listTools(): Array<ToolDefinition & { category: string }> {
+    return this.deps.toolRegistry.list().map((tool) => ({
+      ...tool.definition,
+      category: tool.category,
+    }));
+  }
+
   /**
    * Force-clear the busy flag after an orphaned turn (e.g. LLM provider unreachable).
    * Only call when you are certain the previous turn will never complete.
@@ -431,8 +440,8 @@ export class AgentRunner {
       let recoverableStreamRetries = 0;
       let toolRoundLimitHit = false;
 
-      const MAX_TOOL_ROUNDS = 20; // safety cap
-      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      const maxToolRounds = this.config.tools.maxRounds ?? 60;
+      for (let round = 0; round < maxToolRounds; round++) {
         const allToolsWithCategory = toolRegistry.list();
         // Pre-filter by policy so the LLM only sees tools it is allowed to call.
         // Without this, blocked tools appear in the schema and the model tries to
@@ -678,13 +687,13 @@ export class AgentRunner {
         messages = [...messages, { role: 'user', content: toolResults }];
 
         if (finalFailureMessage) break;
-        if (round === MAX_TOOL_ROUNDS - 1) {
+        if (round === maxToolRounds - 1) {
           toolRoundLimitHit = true;
         }
       }
 
       if (toolRoundLimitHit && !finalFailureMessage) {
-        finalFailureMessage = `工具调用轮次已达到上限（${MAX_TOOL_ROUNDS}），已停止本轮以避免失控执行。`;
+        finalFailureMessage = `工具调用轮次已达到上限（${maxToolRounds}），已停止本轮以避免失控执行。`;
         finalFailureCode = 'tool_round_limit';
       }
 

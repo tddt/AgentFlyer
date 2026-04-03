@@ -16,15 +16,18 @@ type SourceFilter = 'all' | DeliverableSource['kind'];
 type StatusFilter = 'all' | DeliverableStatus;
 type TimeRange = 'all' | '24h' | '7d' | '30d';
 type HighlightFilter = 'all' | 'media' | 'problem';
-type ViewMode = 'stack' | 'cards';
 
 function groupLabel(
   kind: DeliverableSource['kind'],
   t: (key: string, vars?: Record<string, string>) => string,
 ): string {
-  return kind === 'workflow_run'
-    ? t('deliverables.group.workflow')
-    : t('deliverables.group.scheduler');
+  if (kind === 'workflow_run') {
+    return t('deliverables.group.workflow');
+  }
+  if (kind === 'scheduler_task_run') {
+    return t('deliverables.group.scheduler');
+  }
+  return t('deliverables.group.chat');
 }
 
 function metricTone(index: number): string {
@@ -34,6 +37,18 @@ function metricTone(index: number): string {
     'border-fuchsia-400/15 bg-fuchsia-500/10 text-fuchsia-100',
     'border-amber-400/15 bg-amber-500/10 text-amber-100',
   ][index % 4];
+}
+
+function sourceBadgeVariant(kind: DeliverableSource['kind']): 'blue' | 'purple' | 'green' {
+  return kind === 'workflow_run' ? 'blue' : kind === 'scheduler_task_run' ? 'purple' : 'green';
+}
+
+function sourceKeyLabel(kind: DeliverableSource['kind']): string {
+  return kind === 'workflow_run'
+    ? 'workflow_run'
+    : kind === 'scheduler_task_run'
+      ? 'scheduler_task_run'
+      : 'chat_turn';
 }
 
 function hasMediaArtifacts(item: DeliverableRecord): boolean {
@@ -52,9 +67,9 @@ function mediaArtifactCount(item: DeliverableRecord): number {
   ).length;
 }
 
-function inTimeRange(createdAt: string, range: TimeRange): boolean {
+function inTimeRange(createdAt: number, range: TimeRange): boolean {
   if (range === 'all') return true;
-  const created = new Date(createdAt).getTime();
+  const created = Number(createdAt);
   if (!Number.isFinite(created)) return false;
   const now = Date.now();
   const windowMs =
@@ -74,7 +89,6 @@ export function DeliverablesTab() {
   const [query, setQuery] = useState('');
   const [timeRange, setTimeRange] = useState<TimeRange>('all');
   const [highlightFilter, setHighlightFilter] = useState<HighlightFilter>('all');
-  const [viewMode, setViewMode] = useState<ViewMode>('cards');
   const [data, setData] = useState<DeliverableListResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -155,6 +169,10 @@ export function DeliverablesTab() {
       value: String(data?.stats.schedulerRuns ?? 0),
     },
     {
+      label: t('deliverables.metrics.chatTurns'),
+      value: String(data?.stats.chatTurns ?? 0),
+    },
+    {
       label: t('deliverables.metrics.totalArtifacts'),
       value: String(data?.stats.totalArtifacts ?? 0),
     },
@@ -176,6 +194,11 @@ export function DeliverablesTab() {
         kind: 'scheduler_task_run' as const,
         label: groupLabel('scheduler_task_run', t),
         items: items.filter((item) => item.source.kind === 'scheduler_task_run'),
+      },
+      {
+        kind: 'chat_turn' as const,
+        label: groupLabel('chat_turn', t),
+        items: items.filter((item) => item.source.kind === 'chat_turn'),
       },
     ].filter((group) => group.items.length > 0);
   }, [filteredItems, t]);
@@ -229,7 +252,7 @@ export function DeliverablesTab() {
             className="min-w-[220px] flex-1 rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-2.5 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-cyan-400/40"
           />
           <div className="flex flex-wrap gap-2">
-            {(['all', 'workflow_run', 'scheduler_task_run'] as SourceFilter[]).map((value) => (
+            {(['all', 'workflow_run', 'scheduler_task_run', 'chat_turn'] as SourceFilter[]).map((value) => (
               <button
                 key={value}
                 onClick={() => setSourceFilter(value)}
@@ -291,21 +314,6 @@ export function DeliverablesTab() {
               </button>
             ))}
           </div>
-          <div className="ml-auto flex flex-wrap gap-2">
-            {(['cards', 'stack'] as ViewMode[]).map((value) => (
-              <button
-                key={value}
-                onClick={() => setViewMode(value)}
-                className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
-                  viewMode === value
-                    ? 'bg-cyan-500/15 text-cyan-200 ring-1 ring-cyan-400/30'
-                    : 'bg-white/[0.04] text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                {t(`deliverables.viewMode.${value}`)}
-              </button>
-            ))}
-          </div>
         </div>
       </div>
 
@@ -346,7 +354,7 @@ export function DeliverablesTab() {
               <div key={group.kind} className="rounded-2xl border border-white/8 bg-slate-950/55 p-4">
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-sm font-medium text-slate-100">{group.label}</div>
-                  <Badge variant={group.kind === 'workflow_run' ? 'blue' : 'purple'}>
+                  <Badge variant={sourceBadgeVariant(group.kind)}>
                     {group.items.length}
                   </Badge>
                 </div>
@@ -390,7 +398,7 @@ export function DeliverablesTab() {
         </div>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
+      <div className="grid gap-6 xl:grid-cols-[300px_minmax(0,1fr)]">
         <div className="rounded-[28px] border border-white/8 bg-slate-900/70 p-4 backdrop-blur-xl">
           <div className="mb-3 flex items-center justify-between">
             <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">
@@ -407,118 +415,65 @@ export function DeliverablesTab() {
             </div>
           )}
 
-          <div className="flex max-h-[860px] flex-col gap-5 overflow-auto pr-1">
-            {grouped.map((group) => (
-              <div key={group.kind} className="flex flex-col gap-3">
-                <div className="sticky top-0 z-10 rounded-2xl border border-white/8 bg-slate-950/90 px-4 py-2 backdrop-blur-xl">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">
-                      {group.label}
-                    </div>
-                    <Badge variant={group.kind === 'workflow_run' ? 'blue' : 'purple'}>
-                      {group.items.length}
+          <div className="mb-3 rounded-2xl border border-white/8 bg-slate-950/60 px-4 py-3">
+            <div className="flex items-center justify-between gap-2 text-xs text-slate-400">
+              <span>{t('deliverables.listTitle')}</span>
+              <span>{filteredItems.length}</span>
+            </div>
+            <div className="mt-2 text-[11px] leading-5 text-slate-500">
+              {grouped
+                .filter((group) => group.items.length > 0)
+                .map((group) => `${group.label} ${group.items.length}`)
+                .join(' · ')}
+            </div>
+          </div>
+
+          <div className="flex max-h-[860px] flex-col gap-2 overflow-auto pr-1">
+            {filteredItems.map((item) => {
+              const active = item.id === selected?.id;
+              const mediaCount = mediaArtifactCount(item);
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => setSelectedId(item.id)}
+                  className={`rounded-2xl border px-4 py-3 text-left transition-all ${
+                    active
+                      ? 'border-cyan-400/35 bg-cyan-500/10 shadow-[0_20px_50px_rgba(6,182,212,0.08)]'
+                      : 'border-white/8 bg-slate-950/55 hover:border-white/15 hover:bg-white/[0.03]'
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge
+                      variant={
+                        item.status === 'ready'
+                          ? 'green'
+                          : item.status === 'error'
+                            ? 'red'
+                            : 'gray'
+                      }
+                    >
+                      {item.status}
                     </Badge>
+                    <Badge variant={sourceBadgeVariant(item.source.kind)}>
+                      {t(`deliverables.source.${sourceKeyLabel(item.source.kind)}`)}
+                    </Badge>
+                    {mediaCount > 0 && (
+                      <Badge variant="green">{t('deliverables.card.mediaCount', { n: String(mediaCount) })}</Badge>
+                    )}
                   </div>
-                </div>
-                <div className={viewMode === 'cards' ? 'grid gap-3 md:grid-cols-2' : 'flex flex-col gap-3'}>
-                  {group.items.map((item) => {
-                    const active = item.id === selected?.id;
-                    const mediaCount = mediaArtifactCount(item);
-                    return (
-                      <button
-                        key={item.id}
-                        onClick={() => setSelectedId(item.id)}
-                        className={`rounded-2xl border text-left transition-all ${
-                          active
-                            ? 'border-cyan-400/35 bg-cyan-500/10 shadow-[0_20px_50px_rgba(6,182,212,0.08)]'
-                            : 'border-white/8 bg-slate-950/55 hover:border-white/15 hover:bg-white/[0.03]'
-                        } ${viewMode === 'cards' ? 'overflow-hidden p-0' : 'px-4 py-3'}`}
-                      >
-                        {viewMode === 'cards' ? (
-                          <>
-                            <div className="relative overflow-hidden border-b border-white/8 bg-[radial-gradient(circle_at_top_left,rgba(14,165,233,0.22),transparent_36%),radial-gradient(circle_at_bottom_right,rgba(168,85,247,0.18),transparent_28%),linear-gradient(135deg,rgba(15,23,42,0.98),rgba(2,6,23,0.92))] px-4 py-4">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <Badge
-                                  variant={
-                                    item.status === 'ready'
-                                      ? 'green'
-                                      : item.status === 'error'
-                                        ? 'red'
-                                        : 'gray'
-                                  }
-                                >
-                                  {item.status}
-                                </Badge>
-                                <Badge variant={item.source.kind === 'workflow_run' ? 'blue' : 'purple'}>
-                                  {item.source.kind === 'workflow_run'
-                                    ? t('deliverables.source.workflow_run')
-                                    : t('deliverables.source.scheduler_task_run')}
-                                </Badge>
-                                {mediaCount > 0 && <Badge variant="green">{t('deliverables.card.mediaCount', { n: String(mediaCount) })}</Badge>}
-                              </div>
-                              <div className="mt-4 text-base font-semibold text-slate-50">{item.title}</div>
-                              <div className="mt-2 line-clamp-3 text-sm leading-6 text-slate-300">
-                                {item.previewText || item.summary}
-                              </div>
-                            </div>
-                            <div className="px-4 py-3">
-                              <div className="grid grid-cols-2 gap-3 text-xs text-slate-400">
-                                <div>
-                                  <div className="uppercase tracking-[0.18em] text-slate-500">
-                                    {t('deliverables.card.createdAt')}
-                                  </div>
-                                  <div className="mt-1 text-slate-300">
-                                    {new Date(item.createdAt).toLocaleString()}
-                                  </div>
-                                </div>
-                                <div>
-                                  <div className="uppercase tracking-[0.18em] text-slate-500">
-                                    {t('deliverables.card.artifacts')}
-                                  </div>
-                                  <div className="mt-1 text-slate-300">{item.artifacts.length}</div>
-                                </div>
-                              </div>
-                            </div>
-                          </>
-                        ) : (
-                          <>
-                            <div className="flex flex-wrap items-center gap-2">
-                              <Badge
-                                variant={
-                                  item.status === 'ready'
-                                    ? 'green'
-                                    : item.status === 'error'
-                                      ? 'red'
-                                      : 'gray'
-                                }
-                              >
-                                {item.status}
-                              </Badge>
-                              <Badge variant={item.source.kind === 'workflow_run' ? 'blue' : 'purple'}>
-                                {item.source.kind === 'workflow_run'
-                                  ? t('deliverables.source.workflow_run')
-                                  : t('deliverables.source.scheduler_task_run')}
-                              </Badge>
-                              {mediaCount > 0 && <Badge variant="green">{t('deliverables.card.mediaCount', { n: String(mediaCount) })}</Badge>}
-                            </div>
-                            <div className="mt-3 text-sm font-semibold text-slate-100">{item.title}</div>
-                            <div className="mt-2 line-clamp-3 text-xs leading-5 text-slate-400">
-                              {item.previewText || item.summary}
-                            </div>
-                            <div className="mt-3 flex items-center justify-between text-[11px] text-slate-500">
-                              <span>{new Date(item.createdAt).toLocaleString()}</span>
-                              <span>
-                                {item.artifacts.length} {t('deliverables.metrics.totalArtifacts')}
-                              </span>
-                            </div>
-                          </>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
+                  <div className="mt-3 line-clamp-2 text-sm font-semibold text-slate-100">
+                    {item.title}
+                  </div>
+                  <div className="mt-2 line-clamp-2 text-xs leading-5 text-slate-400">
+                    {item.previewText || item.summary}
+                  </div>
+                  <div className="mt-3 flex items-center justify-between text-[11px] text-slate-500">
+                    <span>{new Date(item.createdAt).toLocaleString()}</span>
+                    <span>{item.artifacts.length}</span>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </div>
 

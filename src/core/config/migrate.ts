@@ -200,6 +200,7 @@ export function migrateFromOpenclaw(openclawPath: string): Config {
   const agentList: AgentConfig[] = (oc.agents?.list ?? []).map((a) => ({
     id: a.id ?? 'main',
     name: a.id,
+    mentionAliases: [],
     workspace: a.workspace,
     skills: a.skills ?? [],
     model:
@@ -215,6 +216,7 @@ export function migrateFromOpenclaw(openclawPath: string): Config {
     tools: {
       deny: a.toolPolicy?.denylist ?? [],
       approval: a.toolPolicy?.requireApproval ?? ['bash'],
+      maxRounds: 60,
     },
     persona: { language: 'zh-CN', outputDir: 'output' },
   }));
@@ -222,6 +224,7 @@ export function migrateFromOpenclaw(openclawPath: string): Config {
   if (agentList.length === 0) {
     agentList.push({
       id: 'main',
+      mentionAliases: [],
       skills: [],
       mesh: {
         role: 'coordinator',
@@ -231,7 +234,7 @@ export function migrateFromOpenclaw(openclawPath: string): Config {
         triggers: [],
       },
       owners: [],
-      tools: { deny: [], approval: ['bash'] },
+      tools: { deny: [], approval: ['bash'], maxRounds: 60 },
       persona: { language: 'zh-CN', outputDir: 'output' },
     });
   }
