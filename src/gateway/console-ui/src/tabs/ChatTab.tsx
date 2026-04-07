@@ -5,6 +5,7 @@ import { CopyButton } from '../components/CopyButton.js';
 import { DeliverableModal } from '../components/DeliverableModal.js';
 import { useLocale } from '../context/i18n.js';
 import { MarkdownView } from '../components/MarkdownView.js';
+import { formatProblemCode, problemCodeBadgeVariant } from '../problem-code-display.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
 import { createConsoleThreadKey } from '../thread-keys.js';
 import type { ChatRecoveryContext } from '../types.js';
@@ -847,10 +848,6 @@ function getRecoveryEvidenceContext(messages: Message[]): RecoveryEvidenceContex
   };
 }
 
-function formatErrorCode(errorCode: string): string {
-  return errorCode.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
-}
-
 function getRecoveryInputPlaceholder(
   recoveryContext: ChatRecoveryContext | null,
   t: (key: string) => string,
@@ -1415,11 +1412,9 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
       let thinkingContent = '';
       const pendingTools = new Map<string, ToolCall>();
 
-      setMessages((prev) => [...prev, { role: 'assistant', content: '', streaming: true }]);
-
-      while (true) {
+      const readNextChunk = async (): Promise<void> => {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) return;
         buf += dec.decode(value, { stream: true });
 
         const parts = buf.split('\n');
@@ -1428,7 +1423,7 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
         for (const line of parts) {
           if (!line.startsWith('data: ')) continue;
           const payload = line.slice(6).trim();
-          if (payload === '[DONE]') break;
+          if (payload === '[DONE]') return;
           let chunk: ChatChunk;
           try {
             chunk = JSON.parse(payload) as ChatChunk;
@@ -1545,7 +1540,12 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
             throw new Error(chunk.message);
           }
         }
-      }
+
+        return await readNextChunk();
+      };
+
+      setMessages((prev) => [...prev, { role: 'assistant', content: '', streaming: true }]);
+      await readNextChunk();
 
       setMessages((prev) => {
         const next = [...prev];
@@ -1694,7 +1694,9 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
                 <div className="flex items-start justify-between gap-3 flex-wrap">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <Badge variant="red">{formatErrorCode(visibleRecoveryContext?.errorCode)}</Badge>
+                      <Badge variant={problemCodeBadgeVariant(visibleRecoveryContext?.errorCode ?? 'generic')}>
+                        {formatProblemCode(visibleRecoveryContext?.errorCode ?? 'generic', t)}
+                      </Badge>
                       <span className="text-sm font-medium text-amber-100">
                         {visibleRecoveryContext?.mode === 'new_thread'
                           ? t('chat.recovery.newThreadTitle')

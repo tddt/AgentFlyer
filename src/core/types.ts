@@ -8,6 +8,7 @@ export type NodeId = string & { readonly _brand: 'NodeId' };
 export type SkillId = string & { readonly _brand: 'SkillId' };
 export type MemoryEntryId = string & { readonly _brand: 'MemoryEntryId' };
 export type TaskId = string & { readonly _brand: 'TaskId' };
+export type ProcessId = string & { readonly _brand: 'ProcessId' };
 export type ReceiptId = string & { readonly _brand: 'ReceiptId' };
 
 // ─── Enums ───────────────────────────────────────────────────────────────────
@@ -96,6 +97,10 @@ export function asMemoryEntryId(s: string): MemoryEntryId {
 
 export function asTaskId(s: string): TaskId {
   return ensureNonBlankString(s, 'TaskId') as TaskId;
+}
+
+export function asProcessId(s: string): ProcessId {
+  return ensureNonBlankString(s, 'ProcessId') as ProcessId;
 }
 
 export function asReceiptId(s: string): ReceiptId {

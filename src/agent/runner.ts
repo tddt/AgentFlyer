@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { ulid } from 'ulid';
 import type { AgentConfig } from '../core/config/schema.js';
+import type { ProcessErrorEvent, SyscallRequest, SyscallResolution } from '../core/kernel/types.js';
 import { createLogger } from '../core/logger.js';
 import type { SessionMetaStore } from '../core/session/meta.js';
 import type { SessionErrorCode } from '../core/session/meta.js';
@@ -21,16 +22,17 @@ import type { MemoryOrganizer } from '../memory/organizer.js';
 import type { MemoryStore } from '../memory/store.js';
 import { checkCompactionNeeded, runCompaction } from './compactor/index.js';
 import { classifyAgentFailure } from './llm/error-classification.js';
-import type { LLMProvider } from './llm/provider.js';
+import type { LLMProvider, RunParams } from './llm/provider.js';
 import { isRecoverableStreamError } from './llm/stream-error.js';
 import { buildSystemPrompt } from './prompt/builder.js';
 import { layer0Identity, layer1Workspace, layer2Skills, layer3Memory } from './prompt/layers.js';
 import { buildPersonaContent } from './prompt/soul.js';
 import { readWorkspaceDocCached } from './prompt/workspace.js';
 import { recordTokenBill } from './stats.js';
-import { ToolLoopDetector } from './tools/loop-detection.js';
+import { type SerializedToolLoopDetectorState, ToolLoopDetector } from './tools/loop-detection.js';
 import {
   type ApprovalHandler,
+  type PolicyEnforcedResult,
   type ToolPolicy,
   checkPolicy,
   filterAllowedTools,
@@ -219,6 +221,183 @@ export interface TurnResult {
   outputTokens: number;
 }
 
+export interface SerializedToolResultCacheEntry {
+  key: string;
+  value: ToolCallResult;
+}
+
+export interface SerializedAgentRunnerState {
+  threadKey: string;
+  promptLayerHashes: Array<[number, string]>;
+  cachedSystemPrompt: string | null;
+  toolResultCache: SerializedToolResultCacheEntry[];
+  activeKernelRunId: string | null;
+}
+
+export interface SerializedPendingToolCall {
+  id: string;
+  name: string;
+  inputJson: string;
+}
+
+export interface SerializedToolSyscallResult {
+  toolUseId: string;
+  content: string;
+  isError: boolean;
+}
+
+export interface SerializedToolSyscallPayload {
+  results: SerializedToolSyscallResult[];
+  runnerState: SerializedAgentRunnerState;
+}
+
+export interface SerializedLlmSyscallPayload {
+  chunks: StreamChunk[];
+  recoverableStreamRetries: number;
+}
+
+export interface SerializedApprovalSyscallDecision {
+  toolUseId: string;
+  approved: boolean;
+}
+
+export interface SerializedApprovalSyscallPayload {
+  decisions: SerializedApprovalSyscallDecision[];
+}
+
+export interface SerializedAgentTurnExecutionState {
+  runId: string;
+  userMessage: string;
+  options?: RunnerOptions;
+  model: string;
+  maxTokens: number;
+  systemPrompt: string;
+  messages: Message[];
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheReadTokens: number;
+  totalText: string;
+  toolRounds: number;
+  toolFailureMessages: string[];
+  finalFailureMessage: string | null;
+  finalFailureCode?: SessionErrorCode;
+  recoverableStreamRetries: number;
+  toolLoopDetector: SerializedToolLoopDetectorState;
+  pendingToolCalls?: SerializedPendingToolCall[];
+}
+
+export interface KernelTurnStepResult {
+  state: SerializedAgentTurnExecutionState;
+  chunks: StreamChunk[];
+  done: boolean;
+  result?: TurnResult;
+  syscall?: SyscallRequest;
+  suspended?: ProcessErrorEvent;
+  nextRunAt?: number;
+}
+
+function parseToolCallInput(inputJson: string): unknown {
+  try {
+    return JSON.parse(inputJson || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function buildToolCallSyscall(
+  runId: string,
+  pendingToolCalls: SerializedPendingToolCall[],
+): SyscallRequest {
+  return {
+    id: `tool-call:${runId}:${ulid()}`,
+    kind: 'tool.call',
+    operation: 'agent.turn.tool-call-batch',
+    payload: {
+      runId,
+      toolCalls: pendingToolCalls,
+    },
+    createdAt: Date.now(),
+  };
+}
+
+function buildLlmGenerateSyscall(
+  state: SerializedAgentTurnExecutionState,
+  toolCount: number,
+): SyscallRequest {
+  return {
+    id: `llm-generate:${state.runId}:${ulid()}`,
+    kind: 'llm.generate',
+    operation: 'agent.turn.generate',
+    payload: {
+      runId: state.runId,
+      model: state.model,
+      maxTokens: state.maxTokens,
+      messageCount: state.messages.length,
+      toolCount,
+    },
+    createdAt: Date.now(),
+  };
+}
+
+function buildApprovalRequestSyscall(
+  state: SerializedAgentTurnExecutionState,
+  pendingToolCalls: SerializedPendingToolCall[],
+): SyscallRequest {
+  return {
+    id: `approval-request:${state.runId}:${ulid()}`,
+    kind: 'custom',
+    operation: 'agent.turn.approval-request',
+    payload: {
+      runId: state.runId,
+      toolCalls: pendingToolCalls.map((toolCall) => ({
+        id: toolCall.id,
+        name: toolCall.name,
+        input: parseToolCallInput(toolCall.inputJson),
+      })),
+    },
+    createdAt: Date.now(),
+  };
+}
+
+function buildSuspendedError(code: string, message: string): ProcessErrorEvent {
+  return {
+    code,
+    message,
+    retryable: false,
+  };
+}
+
+function toSuspendedSessionError(error: ProcessErrorEvent): {
+  error: string;
+  errorCode: SessionErrorCode;
+} {
+  if (error.code === 'AGENT_TOOL_APPROVAL_DENIED') {
+    return {
+      error: error.message,
+      errorCode: 'approval_required',
+    };
+  }
+
+  const failure = classifyAgentFailure(error.message);
+  return {
+    error: error.message,
+    errorCode: failure.code,
+  };
+}
+
+function shouldSuspendLlmFailureBeforeOutput(params: {
+  failure: AgentFailureClassification;
+  accumulatedText: string;
+  toolUseCount: number;
+}): boolean {
+  return (
+    params.failure.suspendableBeforeOutput &&
+    params.accumulatedText.trim().length === 0 &&
+    params.toolUseCount === 0
+  );
+}
+import type { AgentFailureClassification } from './llm/error-classification.js';
+
 /**
  * AgentRunner manages one conversation thread for a single agent.
  * All public methods are safe to call concurrently from different turns.
@@ -238,6 +417,7 @@ export class AgentRunner {
   // (threadKey, sessionKey, promptLayerHashes, toolResultCache). A single runner
   // processes one turn at a time; callers should check isRunning before calling.
   private _running = false;
+  private activeKernelRunId: string | null = null;
 
   constructor(
     private readonly config: AgentConfig,
@@ -257,13 +437,40 @@ export class AgentRunner {
     this.toolResultCache.clear();
   }
 
+  serializeState(): SerializedAgentRunnerState {
+    return {
+      threadKey: this.threadKey,
+      promptLayerHashes: Array.from(this.promptLayerHashes.entries()),
+      cachedSystemPrompt: this.cachedSystemPrompt,
+      toolResultCache: Array.from(this.toolResultCache.entries()).map(([key, value]) => ({
+        key,
+        value: value as ToolCallResult,
+      })),
+      activeKernelRunId: this.activeKernelRunId,
+    };
+  }
+
+  restoreState(state: SerializedAgentRunnerState): void {
+    this.threadKey = asThreadKey(state.threadKey);
+    this.sessionKey = makeSessionKey(this.agentId, this.threadKey);
+    this.promptLayerHashes = new Map(state.promptLayerHashes);
+    this.cachedSystemPrompt = state.cachedSystemPrompt;
+    this.toolResultCache = new Map(
+      state.toolResultCache.map(
+        (entry) => [entry.key, entry.value] satisfies [string, ToolCallResult],
+      ),
+    );
+    this.activeKernelRunId = state.activeKernelRunId;
+    this._running = false;
+  }
+
   get currentSessionKey(): SessionKey {
     return this.sessionKey;
   }
 
   /** True while a `turn()` is actively running. Check this before dispatching a new task. */
   get isRunning(): boolean {
-    return this._running;
+    return this._running || this.activeKernelRunId !== null;
   }
 
   /** Return the current tool catalog registered for this runner. */
@@ -279,57 +486,134 @@ export class AgentRunner {
    * Only call when you are certain the previous turn will never complete.
    */
   forceReset(): void {
-    if (this._running) {
+    if (this._running || this.activeKernelRunId !== null) {
       logger.warn('AgentRunner.forceReset(): clearing orphaned running flag', {
         agentId: this.agentId,
       });
       this._running = false;
+      this.activeKernelRunId = null;
     }
   }
 
-  /**
-   * BM25-search the agent's memory store for context relevant to the query.
-   * Returns a newline-joined text block ready for injection as `memoryText`.
-   * Returns an empty string if no store is configured or no results found.
-   *
-   * RATIONALE: called before each turn so the runner can inject relevant
-   * memories into the system prompt's Layer 3 without requiring an LLM round-trip.
-   */
-  async searchMemory(query: string, limit = 5): Promise<string> {
-    const store = this.deps.memoryStore;
-    if (!store) return '';
+  private buildPermittedToolDefinitions(): ToolDefinition[] {
+    const allToolsWithCategory = this.deps.toolRegistry.list();
+    const agentPolicy: ToolPolicy = {
+      allowlist: this.config.tools.allow,
+      denylist: this.config.tools.deny,
+      requireApproval: this.config.tools.approval,
+    };
+    const permittedNames = new Set(
+      allToolsWithCategory
+        .filter((tool) => {
+          if (tool.category === 'skill') {
+            return !agentPolicy.denylist.includes(tool.definition.name);
+          }
+          return filterAllowedTools([tool.definition.name], agentPolicy).length > 0;
+        })
+        .map((tool) => tool.definition.name),
+    );
+    return allToolsWithCategory
+      .map((tool) => tool.definition)
+      .filter((definition) => permittedNames.has(definition.name));
+  }
+
+  private getToolPolicyResult(toolName: string): PolicyEnforcedResult {
+    const tools = this.config.tools;
+    const isSkillTool = this.deps.toolRegistry.get(toolName)?.category === 'skill';
+    const effectiveAllowlist = isSkillTool ? undefined : tools.allow;
+    return checkPolicy(toolName, {
+      allowlist: effectiveAllowlist,
+      denylist: tools.deny,
+      requireApproval: tools.approval,
+    });
+  }
+
+  private hasApprovalPending(pendingToolCalls: SerializedPendingToolCall[]): boolean {
+    return pendingToolCalls.some(
+      (toolCall) => this.getToolPolicyResult(toolCall.name).requiresApproval,
+    );
+  }
+
+  private async runLlmGeneration(
+    params: RunParams,
+    initialRetries: number,
+  ): Promise<{ chunks: StreamChunk[]; recoverableStreamRetries: number }> {
+    return await this.runLlmGenerationAttempt(params, initialRetries);
+  }
+
+  private async runLlmGenerationAttempt(
+    params: RunParams,
+    recoverableStreamRetries: number,
+  ): Promise<{ chunks: StreamChunk[]; recoverableStreamRetries: number }> {
+    const { provider } = this.deps;
+    const chunks: StreamChunk[] = [];
+    let sawTextDelta = false;
+    let sawToolUseDelta = false;
+    let sawToolCall = false;
+    let streamErrorMessage: string | null = null;
+
     try {
-      const results = store.searchFts(query, undefined, limit);
-      if (results.length === 0) return '';
-      return results.map((e, i) => `[${i + 1}] ${e.content}`).join('\n\n');
-    } catch (err) {
-      logger.debug('Memory search failed (non-fatal)', { error: String(err) });
-      return '';
+      for await (const chunk of provider.run(params)) {
+        chunks.push(chunk);
+        if (chunk.type === 'text_delta') {
+          sawTextDelta = true;
+        } else if (chunk.type === 'tool_use_delta') {
+          sawToolUseDelta = true;
+          sawToolCall = true;
+        } else if (chunk.type === 'error') {
+          logger.error('LLM error', { message: chunk.message });
+          streamErrorMessage = chunk.message;
+          break;
+        }
+      }
+    } catch (error) {
+      streamErrorMessage = error instanceof Error ? error.message : String(error);
+      logger.error('LLM stream threw unexpectedly', {
+        agentId: this.agentId,
+        message: streamErrorMessage,
+      });
     }
+
+    const canRetryRecoverableStream =
+      streamErrorMessage !== null &&
+      !sawTextDelta &&
+      !sawToolUseDelta &&
+      !sawToolCall &&
+      recoverableStreamRetries < MAX_RECOVERABLE_STREAM_RETRIES &&
+      isRecoverableStreamError(streamErrorMessage);
+
+    if (!canRetryRecoverableStream) {
+      return { chunks, recoverableStreamRetries };
+    }
+
+    const nextRetryCount = recoverableStreamRetries + 1;
+    logger.warn('Retrying recoverable LLM stream failure', {
+      agentId: this.agentId,
+      retry: nextRetryCount,
+      delayMs: RECOVERABLE_STREAM_RETRY_DELAY_MS,
+      message: streamErrorMessage,
+    });
+    await sleep(RECOVERABLE_STREAM_RETRY_DELAY_MS);
+    return await this.runLlmGenerationAttempt(params, nextRetryCount);
   }
 
-  /**
-   * Run one conversational turn.
-   * Yields StreamChunk objects and resolves to a TurnResult when done.
-   */
-  async *turn(
+  async beginKernelTurn(
+    runId: string,
     userMessage: string,
     opts: RunnerOptions = {},
-  ): AsyncGenerator<StreamChunk, TurnResult> {
-    if (this._running) {
+  ): Promise<SerializedAgentTurnExecutionState> {
+    if (this.isRunning) {
       throw new Error(`Agent '${this.agentId}' is already processing a turn`);
     }
-    this._running = true;
-    let totalInputTokens = 0;
-    let totalOutputTokens = 0;
+
+    this.activeKernelRunId = runId;
     try {
-      const { provider, toolRegistry, sessionStore, metaStore, approvalHandler } = this.deps;
+      const { provider, sessionStore, metaStore } = this.deps;
       const configModel =
         typeof this.config.model === 'object' ? this.config.model.primary : this.config.model;
       const model = opts.model ?? this.deps.resolvedModel?.id ?? configModel ?? 'claude-haiku-3-5';
       const maxTokens = opts.maxTokens ?? this.deps.resolvedModel?.maxTokens ?? 8192;
 
-      // ── 1. Build system prompt ──────────────────────────────────────────────
       const agentName = this.config.name ?? this.agentId;
       const workspace = this.config.workspace;
 
@@ -338,9 +622,6 @@ export class AgentRunner {
         workspaceDoc = await readWorkspaceDocCached(workspace).catch(() => null);
       }
 
-      // Build base layers once; hash their content to detect changes between
-      // turns. If all hashes match and there is no per-turn taskContext, reuse
-      // the cached systemPrompt to skip the trimming pass in buildSystemPrompt.
       const baseLayers = [
         layer0Identity(
           agentName,
@@ -352,13 +633,13 @@ export class AgentRunner {
         layer2Skills(opts.skillsText ?? this.deps.skillsText ?? ''),
         layer3Memory(opts.memoryText ?? ''),
       ];
-      const newLayerHashes = baseLayers.map((l) =>
-        createHash('sha256').update(l.content).digest('hex').slice(0, 16),
+      const newLayerHashes = baseLayers.map((layer) =>
+        createHash('sha256').update(layer.content).digest('hex').slice(0, 16),
       );
       const allBaseUnchanged =
         !opts.taskContext &&
         this.cachedSystemPrompt !== null &&
-        newLayerHashes.every((h, i) => this.promptLayerHashes.get(i) === h);
+        newLayerHashes.every((hash, index) => this.promptLayerHashes.get(index) === hash);
 
       let systemPrompt: string;
       if (allBaseUnchanged) {
@@ -384,17 +665,20 @@ export class AgentRunner {
           ],
           this.deps.systemPromptMaxTokens,
         ));
-        newLayerHashes.forEach((h, i) => this.promptLayerHashes.set(i, h));
+        newLayerHashes.forEach((hash, index) => this.promptLayerHashes.set(index, hash));
         this.cachedSystemPrompt = systemPrompt;
       }
 
-      // ── 2. Load conversation history ────────────────────────────────────────
       const history = await sessionStore.readAll(this.sessionKey);
       let messages: Message[] = sanitizeMessages(
-        history.filter((s) => s.content != null).map((s) => ({ role: s.role, content: s.content })),
+        history
+          .filter((entry) => entry.content != null)
+          .map((entry) => ({
+            role: entry.role,
+            content: entry.content,
+          })),
       );
 
-      // Append the new user message
       const userMsg: StoredMessage = {
         id: ulid(),
         sessionKey: this.sessionKey,
@@ -405,7 +689,6 @@ export class AgentRunner {
       await sessionStore.append(this.sessionKey, userMsg);
       messages = [...messages, { role: 'user', content: userMessage }];
 
-      // Check compaction
       const compactionCheck = checkCompactionNeeded(messages, { model });
       if (compactionCheck.shouldCompact) {
         logger.info('Compacting conversation', { sessionKey: this.sessionKey });
@@ -418,7 +701,9 @@ export class AgentRunner {
             tools: [],
             maxTokens: 2048,
           })) {
-            if (chunk.type === 'text_delta') text += chunk.text;
+            if (chunk.type === 'text_delta') {
+              text += chunk.text;
+            }
           }
           return text;
         });
@@ -429,310 +714,553 @@ export class AgentRunner {
         });
       }
 
-      // ── 3. Main agentic loop ────────────────────────────────────────────────
-      let totalCacheReadTokens = 0;
-      let totalText = '';
-      let toolRounds = 0; // rounds that actually invoked tools
-      const toolFailureMessages: string[] = [];
-      let finalFailureMessage: string | null = null;
-      let finalFailureCode: SessionErrorCode | undefined;
-      const toolLoopDetector = new ToolLoopDetector();
-      let recoverableStreamRetries = 0;
-      let toolRoundLimitHit = false;
+      return {
+        runId,
+        userMessage,
+        options: opts,
+        model,
+        maxTokens,
+        systemPrompt,
+        messages,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalCacheReadTokens: 0,
+        totalText: '',
+        toolRounds: 0,
+        toolFailureMessages: [],
+        finalFailureMessage: null,
+        finalFailureCode: undefined,
+        recoverableStreamRetries: 0,
+        toolLoopDetector: { lastEntry: null, consecutiveRepeats: 0 },
+        pendingToolCalls: undefined,
+      };
+    } catch (error) {
+      this.activeKernelRunId = null;
+      throw error;
+    }
+  }
 
-      const maxToolRounds = this.config.tools.maxRounds ?? 60;
-      for (let round = 0; round < maxToolRounds; round++) {
-        const allToolsWithCategory = toolRegistry.list();
-        // Pre-filter by policy so the LLM only sees tools it is allowed to call.
-        // Without this, blocked tools appear in the schema and the model tries to
-        // invoke them, which just returns a policy-error tool_result.
-        // RATIONALE: skill-category tools (skill_list, skill_read) are exempt from
-        // the allowlist — they're already scoped to this agent's assigned skills and
-        // must always be visible when skills are configured. They remain subject to
-        // the denylist.
-        const agentPolicy: ToolPolicy = {
-          allowlist: this.config.tools.allow,
-          denylist: this.config.tools.deny,
-          requireApproval: this.config.tools.approval,
+  async continueKernelTurn(
+    state: SerializedAgentTurnExecutionState,
+  ): Promise<KernelTurnStepResult> {
+    if (this.activeKernelRunId !== state.runId) {
+      throw new Error(`Agent '${this.agentId}' kernel lease mismatch for run '${state.runId}'`);
+    }
+    if ((state.pendingToolCalls?.length ?? 0) > 0) {
+      throw new Error(
+        `Agent '${this.agentId}' is waiting for tool syscall resolution for run '${state.runId}'`,
+      );
+    }
+
+    return {
+      state,
+      chunks: [],
+      done: false,
+      syscall: buildLlmGenerateSyscall(state, this.buildPermittedToolDefinitions().length),
+    };
+  }
+
+  async resumeKernelTurn(state: SerializedAgentTurnExecutionState): Promise<KernelTurnStepResult> {
+    if (this.activeKernelRunId !== state.runId) {
+      throw new Error(`Agent '${this.agentId}' kernel lease mismatch for run '${state.runId}'`);
+    }
+
+    if ((state.pendingToolCalls?.length ?? 0) > 0) {
+      if (this.hasApprovalPending(state.pendingToolCalls ?? [])) {
+        return {
+          state,
+          chunks: [],
+          done: false,
+          syscall: buildApprovalRequestSyscall(state, state.pendingToolCalls ?? []),
         };
-        const permittedNames = new Set(
-          allToolsWithCategory
-            .filter((t) => {
-              if (t.category === 'skill') {
-                // Skill tools: only subject to denylist, not allowlist
-                return !agentPolicy.denylist.includes(t.definition.name);
-              }
-              return filterAllowedTools([t.definition.name], agentPolicy).length > 0;
-            })
-            .map((t) => t.definition.name),
+      }
+
+      return {
+        state,
+        chunks: [],
+        done: false,
+        syscall: buildToolCallSyscall(state.runId, state.pendingToolCalls ?? []),
+      };
+    }
+
+    return {
+      state,
+      chunks: [],
+      done: false,
+      syscall: buildLlmGenerateSyscall(state, this.buildPermittedToolDefinitions().length),
+    };
+  }
+
+  async executeKernelLlmGenerateSyscall(
+    state: SerializedAgentTurnExecutionState,
+    request: SyscallRequest,
+    resolvedAt: number,
+  ): Promise<SyscallResolution> {
+    if (request.kind !== 'llm.generate') {
+      return {
+        requestId: request.id,
+        ok: false,
+        error: {
+          code: 'AGENT_LLM_SYSCALL_KIND_MISMATCH',
+          message: `Unsupported syscall kind '${request.kind}' for agent llm execution`,
+          retryable: false,
+        },
+        resolvedAt,
+      };
+    }
+
+    const { chunks, recoverableStreamRetries } = await this.runLlmGeneration(
+      {
+        model: state.model,
+        systemPrompt: state.systemPrompt,
+        messages: state.messages,
+        tools: this.buildPermittedToolDefinitions(),
+        maxTokens: state.maxTokens,
+        temperature: this.deps.resolvedModel?.temperature,
+      },
+      state.recoverableStreamRetries,
+    );
+
+    return {
+      requestId: request.id,
+      ok: true,
+      payload: {
+        chunks,
+        recoverableStreamRetries,
+      } satisfies SerializedLlmSyscallPayload,
+      resolvedAt,
+    };
+  }
+
+  async applyKernelLlmGenerateSyscall(
+    state: SerializedAgentTurnExecutionState,
+    resolution: SyscallResolution,
+  ): Promise<KernelTurnStepResult> {
+    const { sessionStore } = this.deps;
+    const payload = resolution.payload as SerializedLlmSyscallPayload | undefined;
+    const chunks = payload?.chunks ?? [];
+
+    if (!resolution.ok) {
+      state.finalFailureMessage = resolution.error?.message ?? 'LLM 调用执行失败';
+      state.finalFailureCode = 'generic';
+      return await this.finalizeKernelTurn(state, chunks);
+    }
+
+    const toolCallMap = new Map<string, { name: string; inputJson: string }>();
+    let accText = '';
+    let stopReason: 'end_turn' | 'tool_use' | 'max_tokens' | 'stop_sequence' = 'end_turn';
+    let streamErrorMessage: string | null = null;
+    const indexToId = new Map<string, string>();
+
+    for (const chunk of chunks) {
+      if (chunk.type === 'text_delta') {
+        accText += chunk.text;
+      } else if (chunk.type === 'tool_use_delta') {
+        const id = chunk.id || indexToId.get(chunk.name) || chunk.name;
+        if (chunk.id) {
+          indexToId.set(chunk.name, chunk.id);
+        }
+        const existing = toolCallMap.get(id) ?? { name: chunk.name, inputJson: '' };
+        if (chunk.name && !existing.name) {
+          existing.name = chunk.name;
+        }
+        existing.inputJson += chunk.inputJson;
+        toolCallMap.set(id, existing);
+      } else if (chunk.type === 'done') {
+        state.totalInputTokens += chunk.inputTokens;
+        state.totalOutputTokens += chunk.outputTokens;
+        state.totalCacheReadTokens += chunk.cacheReadTokens ?? 0;
+        stopReason = chunk.stopReason;
+      } else if (chunk.type === 'error') {
+        logger.error('LLM error', { message: chunk.message });
+        streamErrorMessage = chunk.message;
+      }
+    }
+
+    state.recoverableStreamRetries =
+      payload?.recoverableStreamRetries ?? state.recoverableStreamRetries;
+    state.totalText += accText;
+
+    const assistantToolUse: ToolUseContent[] = [];
+    for (const [id, toolCall] of toolCallMap) {
+      assistantToolUse.push({
+        type: 'tool_use',
+        id,
+        name: toolCall.name,
+        input: parseToolCallInput(toolCall.inputJson),
+      });
+    }
+
+    const assistantContent =
+      assistantToolUse.length > 0
+        ? [...(accText ? [{ type: 'text' as const, text: accText }] : []), ...assistantToolUse]
+        : accText;
+
+    if (assistantToolUse.length > 0 || accText.trim().length > 0) {
+      const assistantMsg: StoredMessage = {
+        id: ulid(),
+        sessionKey: this.sessionKey,
+        role: 'assistant',
+        content: assistantContent,
+        timestamp: Date.now(),
+      };
+      await sessionStore.append(this.sessionKey, assistantMsg);
+      state.messages = [...state.messages, { role: 'assistant', content: assistantContent }];
+    }
+
+    if (streamErrorMessage) {
+      const failure = classifyAgentFailure(streamErrorMessage);
+      if (
+        shouldSuspendLlmFailureBeforeOutput({
+          failure,
+          accumulatedText: accText,
+          toolUseCount: assistantToolUse.length,
+        })
+      ) {
+        const suspended = buildSuspendedError(
+          'AGENT_LLM_RESOURCE_BLOCKED',
+          `${failure.summary} 当前运行已挂起，可在外部条件恢复后继续。`,
         );
-        const toolDefs = allToolsWithCategory
-          .map((t) => t.definition)
-          .filter((d) => permittedNames.has(d.name));
-
-        let toolCallMap = new Map<string, { name: string; inputJson: string }>();
-        let accText = '';
-        let stopReason: 'end_turn' | 'tool_use' | 'max_tokens' | 'stop_sequence' = 'end_turn';
-        let streamErrorMessage: string | null = null;
-
-        while (true) {
-          toolCallMap = new Map<string, { name: string; inputJson: string }>();
-          accText = '';
-          stopReason = 'end_turn';
-          streamErrorMessage = null;
-          let sawTextDelta = false;
-          let sawToolUseDelta = false;
-
-          // Track ids by index (OpenAI sends partial ids per index)
-          const indexToId = new Map<string, string>();
-
-          try {
-            for await (const chunk of provider.run({
-              model,
-              systemPrompt,
-              messages,
-              tools: toolDefs,
-              maxTokens,
-              temperature: this.deps.resolvedModel?.temperature,
-            })) {
-              yield chunk;
-
-              if (chunk.type === 'text_delta') {
-                accText += chunk.text;
-                sawTextDelta = true;
-              } else if (chunk.type === 'tool_use_delta') {
-                sawToolUseDelta = true;
-                const id = chunk.id || indexToId.get(chunk.name) || chunk.name;
-                if (chunk.id) indexToId.set(chunk.name, chunk.id);
-                const existing = toolCallMap.get(id) ?? { name: chunk.name, inputJson: '' };
-                if (chunk.name && !existing.name) existing.name = chunk.name;
-                existing.inputJson += chunk.inputJson;
-                toolCallMap.set(id, existing);
-              } else if (chunk.type === 'done') {
-                totalInputTokens += chunk.inputTokens;
-                totalOutputTokens += chunk.outputTokens;
-                totalCacheReadTokens += chunk.cacheReadTokens ?? 0;
-                stopReason = chunk.stopReason;
-              } else if (chunk.type === 'error') {
-                logger.error('LLM error', { message: chunk.message });
-                // Clear accumulated tool calls so we never persist an orphaned
-                // assistant message (tool_calls without tool_results).
-                toolCallMap.clear();
-                streamErrorMessage = chunk.message;
-                break;
-              }
-            }
-          } catch (err) {
-            streamErrorMessage = err instanceof Error ? err.message : String(err);
-            logger.error('LLM stream threw unexpectedly', {
-              agentId: this.agentId,
-              message: streamErrorMessage,
-            });
-          }
-
-          const canRetryRecoverableStream =
-            streamErrorMessage !== null &&
-            !sawTextDelta &&
-            !sawToolUseDelta &&
-            toolCallMap.size === 0 &&
-            recoverableStreamRetries < MAX_RECOVERABLE_STREAM_RETRIES &&
-            isRecoverableStreamError(streamErrorMessage);
-
-          if (!canRetryRecoverableStream) break;
-
-          recoverableStreamRetries += 1;
-          logger.warn('Retrying recoverable LLM stream failure', {
-            agentId: this.agentId,
-            retry: recoverableStreamRetries,
-            delayMs: RECOVERABLE_STREAM_RETRY_DELAY_MS,
-            message: streamErrorMessage,
-          });
-          await sleep(RECOVERABLE_STREAM_RETRY_DELAY_MS);
-        }
-
-        totalText += accText;
-
-        // Persist assistant message
-        const assistantToolUse: ToolUseContent[] = [];
-        for (const [id, tc] of toolCallMap) {
-          let parsedInput: unknown = {};
-          try {
-            parsedInput = JSON.parse(tc.inputJson || '{}');
-          } catch {
-            /* use empty object on bad JSON */
-          }
-          assistantToolUse.push({ type: 'tool_use', id, name: tc.name, input: parsedInput });
-        }
-
-        const assistantContent =
-          assistantToolUse.length > 0
-            ? [...(accText ? [{ type: 'text' as const, text: accText }] : []), ...assistantToolUse]
-            : accText;
-
-        if (assistantToolUse.length > 0 || accText.trim().length > 0) {
-          const assistantMsg: StoredMessage = {
-            id: ulid(),
-            sessionKey: this.sessionKey,
-            role: 'assistant',
-            content: assistantContent,
-            timestamp: Date.now(),
-          };
-          await sessionStore.append(this.sessionKey, assistantMsg);
-          messages = [...messages, { role: 'assistant', content: assistantContent }];
-        }
-
-        if (streamErrorMessage) {
-          const failure = classifyAgentFailure(streamErrorMessage);
-          finalFailureMessage = failure.summary;
-          finalFailureCode = failure.code;
-          break;
-        }
-
-        // ── No more tool calls — done ────────────────────────────────────────
-        if (stopReason !== 'tool_use' || toolCallMap.size === 0) break;
-
-        toolRounds++;
-        // ── Execute tool calls ───────────────────────────────────────────────
-        const toolResults: ToolResultContent[] = [];
-
-        for (const [id, tc] of toolCallMap) {
-          let parsedInput: unknown = {};
-          try {
-            parsedInput = JSON.parse(tc.inputJson || '{}');
-          } catch {
-            /* ignore */
-          }
-
-          const tools = this.config.tools;
-          // Skill-category tools are exempt from the allowlist (they're scoped to
-          // the agent's own skills already); build an effective policy accordingly.
-          const isSkillTool = toolRegistry.get(tc.name)?.category === 'skill';
-          const effectiveAllowlist = isSkillTool ? undefined : tools.allow;
-          const policyResult = checkPolicy(tc.name, {
-            allowlist: effectiveAllowlist,
-            denylist: tools.deny,
-            requireApproval: tools.approval,
-          });
-
-          let callResult: ToolCallResult;
-          if (!policyResult.allowed) {
-            callResult = policyBlockedResult(policyResult.reason ?? 'blocked');
-          } else if (policyResult.requiresApproval && approvalHandler) {
-            const approved = await approvalHandler(tc.name, parsedInput);
-            callResult = approved
-              ? await toolRegistry.execute(tc.name, parsedInput)
-              : policyBlockedResult('User declined approval');
-          } else {
-            // Check read-only cache; populate cache after success.
-            const cacheKey = `${tc.name}|${tc.inputJson}`;
-            const cachedResult = READ_ONLY_TOOLS.has(tc.name)
-              ? (this.toolResultCache.get(cacheKey) as ToolCallResult | undefined)
-              : undefined;
-            if (cachedResult !== undefined) {
-              callResult = cachedResult;
-            } else {
-              callResult = await toolRegistry.execute(tc.name, parsedInput);
-              if (READ_ONLY_TOOLS.has(tc.name) && !callResult.isError) {
-                this.toolResultCache.set(cacheKey, callResult);
-              }
-              if (MUTATION_TOOLS.has(tc.name)) {
-                this.toolResultCache.clear();
-              }
-            }
-          }
-
-          toolResults.push({
-            type: 'tool_result',
-            tool_use_id: id,
-            content: callResult.content,
-            is_error: callResult.isError,
-          });
-
-          if (callResult.isError) {
-            toolFailureMessages.push(callResult.content);
-          }
-
-          const loopSignal = toolLoopDetector.record(
-            tc.name,
-            parsedInput,
-            callResult.content,
-            callResult.isError,
-          );
-          if (loopSignal.level === 'warn') {
-            logger.warn('Potential no-progress tool loop detected', {
-              agentId: this.agentId,
-              toolName: tc.name,
-              repeatCount: loopSignal.repeatCount,
-            });
-          } else if (loopSignal.level === 'block') {
-            logger.error('Blocked repeated no-progress tool loop', {
-              agentId: this.agentId,
-              toolName: tc.name,
-              repeatCount: loopSignal.repeatCount,
-            });
-            finalFailureMessage = loopSignal.message ?? '检测到无进展工具循环';
-            finalFailureCode = 'tool_loop';
-          }
-        }
-
-        // Persist tool results as user message
-        const toolResultMsg: StoredMessage = {
-          id: ulid(),
-          sessionKey: this.sessionKey,
-          role: 'user',
-          content: toolResults,
-          timestamp: Date.now(),
+        await this.persistSuspendedSession(suspended);
+        return {
+          state,
+          chunks,
+          done: false,
+          suspended,
         };
-        await sessionStore.append(this.sessionKey, toolResultMsg);
-        messages = [...messages, { role: 'user', content: toolResults }];
+      }
+      state.finalFailureMessage = failure.summary;
+      state.finalFailureCode = failure.code;
+      return await this.finalizeKernelTurn(state, chunks);
+    }
 
-        if (finalFailureMessage) break;
-        if (round === maxToolRounds - 1) {
-          toolRoundLimitHit = true;
+    if (stopReason !== 'tool_use' || toolCallMap.size === 0) {
+      return await this.finalizeKernelTurn(state, chunks);
+    }
+
+    state.toolRounds += 1;
+    state.pendingToolCalls = Array.from(toolCallMap.entries()).map(([id, toolCall]) => ({
+      id,
+      name: toolCall.name,
+      inputJson: toolCall.inputJson,
+    }));
+
+    if (this.hasApprovalPending(state.pendingToolCalls)) {
+      return {
+        state,
+        chunks,
+        done: false,
+        syscall: buildApprovalRequestSyscall(state, state.pendingToolCalls),
+      };
+    }
+
+    return {
+      state,
+      chunks,
+      done: false,
+      syscall: buildToolCallSyscall(state.runId, state.pendingToolCalls),
+    };
+  }
+
+  async executeKernelToolCallSyscall(
+    state: SerializedAgentTurnExecutionState,
+    request: SyscallRequest,
+    resolvedAt: number,
+  ): Promise<SyscallResolution> {
+    const pendingToolCalls = state.pendingToolCalls ?? [];
+    if (request.kind !== 'tool.call') {
+      return {
+        requestId: request.id,
+        ok: false,
+        error: {
+          code: 'AGENT_TOOL_SYSCALL_KIND_MISMATCH',
+          message: `Unsupported syscall kind '${request.kind}' for agent tool execution`,
+          retryable: false,
+        },
+        resolvedAt,
+      };
+    }
+    if (pendingToolCalls.length === 0) {
+      return {
+        requestId: request.id,
+        ok: false,
+        error: {
+          code: 'AGENT_TOOL_SYSCALL_MISSING_STATE',
+          message: `No pending tool calls for run '${state.runId}'`,
+          retryable: false,
+        },
+        resolvedAt,
+      };
+    }
+
+    const { toolRegistry } = this.deps;
+    const toolResults: SerializedToolSyscallResult[] = [];
+
+    for (const toolCall of pendingToolCalls) {
+      const parsedInput = parseToolCallInput(toolCall.inputJson);
+      const policyResult = this.getToolPolicyResult(toolCall.name);
+
+      let callResult: ToolCallResult;
+      if (!policyResult.allowed) {
+        callResult = policyBlockedResult(policyResult.reason ?? 'blocked');
+      } else {
+        const cacheKey = `${toolCall.name}|${toolCall.inputJson}`;
+        const cachedResult = READ_ONLY_TOOLS.has(toolCall.name)
+          ? (this.toolResultCache.get(cacheKey) as ToolCallResult | undefined)
+          : undefined;
+        if (cachedResult !== undefined) {
+          callResult = cachedResult;
+        } else {
+          callResult = await toolRegistry.execute(toolCall.name, parsedInput);
+          if (READ_ONLY_TOOLS.has(toolCall.name) && !callResult.isError) {
+            this.toolResultCache.set(cacheKey, callResult);
+          }
+          if (MUTATION_TOOLS.has(toolCall.name)) {
+            this.toolResultCache.clear();
+          }
         }
       }
 
-      if (toolRoundLimitHit && !finalFailureMessage) {
-        finalFailureMessage = `工具调用轮次已达到上限（${maxToolRounds}），已停止本轮以避免失控执行。`;
-        finalFailureCode = 'tool_round_limit';
+      toolResults.push({
+        toolUseId: toolCall.id,
+        content: callResult.content,
+        isError: callResult.isError,
+      });
+    }
+
+    return {
+      requestId: request.id,
+      ok: true,
+      payload: {
+        results: toolResults,
+        runnerState: this.serializeState(),
+      } satisfies SerializedToolSyscallPayload,
+      resolvedAt,
+    };
+  }
+
+  async executeKernelApprovalSyscall(
+    state: SerializedAgentTurnExecutionState,
+    request: SyscallRequest,
+    resolvedAt: number,
+  ): Promise<SyscallResolution> {
+    const pendingToolCalls = state.pendingToolCalls ?? [];
+    if (request.kind !== 'custom' || request.operation !== 'agent.turn.approval-request') {
+      return {
+        requestId: request.id,
+        ok: false,
+        error: {
+          code: 'AGENT_APPROVAL_SYSCALL_KIND_MISMATCH',
+          message: `Unsupported syscall '${request.kind}:${request.operation}' for agent approval`,
+          retryable: false,
+        },
+        resolvedAt,
+      };
+    }
+
+    const decisions: SerializedApprovalSyscallDecision[] = [];
+    for (const toolCall of pendingToolCalls) {
+      const policyResult = this.getToolPolicyResult(toolCall.name);
+      if (!policyResult.requiresApproval) {
+        decisions.push({ toolUseId: toolCall.id, approved: true });
+        continue;
       }
 
-      // ── 3.5. Closing message if agent produced no text output ──────────────
-      // When a task is completed entirely through tool calls and the final LLM
-      // response contains no text, channel sendStream() receives no text_delta
-      // chunks and sends nothing to the user.  Yield a brief notice so every
-      // channel always delivers a visible completion signal.
-      if (finalFailureMessage) {
-        const failureText = totalText
-          ? `\n\n${formatFailureReply(finalFailureMessage)}`
-          : formatFailureReply(finalFailureMessage);
-        yield { type: 'text_delta' as const, text: failureText };
-        totalText += failureText;
-        const failureMsg: StoredMessage = {
-          id: ulid(),
-          sessionKey: this.sessionKey,
-          role: 'assistant',
-          content: failureText,
-          timestamp: Date.now(),
+      const approved = this.deps.approvalHandler
+        ? await this.deps.approvalHandler(toolCall.name, parseToolCallInput(toolCall.inputJson))
+        : true;
+      decisions.push({ toolUseId: toolCall.id, approved });
+    }
+
+    return {
+      requestId: request.id,
+      ok: true,
+      payload: {
+        decisions,
+      } satisfies SerializedApprovalSyscallPayload,
+      resolvedAt,
+    };
+  }
+
+  async applyKernelApprovalSyscall(
+    state: SerializedAgentTurnExecutionState,
+    resolution: SyscallResolution,
+  ): Promise<KernelTurnStepResult> {
+    const chunks: StreamChunk[] = [];
+    const pendingToolCalls = state.pendingToolCalls ?? [];
+    if (pendingToolCalls.length === 0) {
+      throw new Error(`Agent approval state is missing pending tool calls for '${state.runId}'`);
+    }
+    if (!resolution.ok) {
+      state.finalFailureMessage = resolution.error?.message ?? '审批请求执行失败';
+      state.finalFailureCode = 'generic';
+      return await this.finalizeKernelTurn(state, chunks);
+    }
+
+    const payload = resolution.payload as SerializedApprovalSyscallPayload | undefined;
+    const decisionMap = new Map(
+      payload?.decisions?.map((decision) => [decision.toolUseId, decision.approved]) ?? [],
+    );
+
+    for (const toolCall of pendingToolCalls) {
+      const approved = decisionMap.get(toolCall.id);
+      if (approved === false) {
+        const suspended = buildSuspendedError(
+          'AGENT_TOOL_APPROVAL_DENIED',
+          `工具调用需要审批，当前处于挂起状态：${toolCall.name}`,
+        );
+        await this.persistSuspendedSession(suspended);
+        return {
+          state,
+          chunks,
+          done: false,
+          suspended,
         };
-        await sessionStore.append(this.sessionKey, failureMsg);
-      } else if (!totalText) {
-        const closingText = finalFailureMessage
-          ? formatFailureReply(finalFailureMessage)
-          : toolFailureMessages.length > 0
-            ? formatFailureReply(toolFailureMessages[toolFailureMessages.length - 1] ?? '')
-            : toolRounds > 0
-              ? '✅ 任务执行完毕。'
-              : '';
-        if (!closingText) {
-          return {
-            sessionKey: this.sessionKey,
-            text: totalText,
-            inputTokens: totalInputTokens,
-            outputTokens: totalOutputTokens,
-          };
-        }
-        yield { type: 'text_delta' as const, text: closingText };
+      }
+    }
+
+    return {
+      state,
+      chunks,
+      done: false,
+      syscall: buildToolCallSyscall(state.runId, pendingToolCalls),
+    };
+  }
+
+  async applyKernelToolCallSyscall(
+    state: SerializedAgentTurnExecutionState,
+    resolution: SyscallResolution,
+  ): Promise<KernelTurnStepResult> {
+    const { sessionStore } = this.deps;
+    const chunks: StreamChunk[] = [];
+    const maxToolRounds = this.config.tools.maxRounds ?? 60;
+    const pendingToolCalls = state.pendingToolCalls ?? [];
+    if (pendingToolCalls.length === 0) {
+      throw new Error(
+        `Agent turn execution state is missing pending tool calls for '${state.runId}'`,
+      );
+    }
+
+    state.pendingToolCalls = undefined;
+    if (!resolution.ok) {
+      state.finalFailureMessage = resolution.error?.message ?? '工具调用执行失败';
+      state.finalFailureCode = 'generic';
+      return await this.finalizeKernelTurn(state, chunks);
+    }
+
+    const payload = resolution.payload as SerializedToolSyscallPayload | undefined;
+    if (payload?.runnerState) {
+      this.restoreState(payload.runnerState);
+    }
+
+    const resultMap = new Map(payload?.results?.map((result) => [result.toolUseId, result]) ?? []);
+    const toolResults: ToolResultContent[] = [];
+    const toolLoopDetector = new ToolLoopDetector();
+    toolLoopDetector.restoreState(state.toolLoopDetector);
+
+    for (const toolCall of pendingToolCalls) {
+      const resolvedResult = resultMap.get(toolCall.id);
+      if (!resolvedResult) {
+        state.finalFailureMessage = `工具调用结果缺失：${toolCall.name}`;
+        state.finalFailureCode = 'generic';
+        return await this.finalizeKernelTurn(state, chunks);
+      }
+
+      toolResults.push({
+        type: 'tool_result',
+        tool_use_id: toolCall.id,
+        content: resolvedResult.content,
+        is_error: resolvedResult.isError,
+      });
+
+      if (resolvedResult.isError) {
+        state.toolFailureMessages.push(resolvedResult.content);
+      }
+
+      const loopSignal = toolLoopDetector.record(
+        toolCall.name,
+        parseToolCallInput(toolCall.inputJson),
+        resolvedResult.content,
+        resolvedResult.isError,
+      );
+      if (loopSignal.level === 'warn') {
+        logger.warn('Potential no-progress tool loop detected', {
+          agentId: this.agentId,
+          toolName: toolCall.name,
+          repeatCount: loopSignal.repeatCount,
+        });
+      } else if (loopSignal.level === 'block') {
+        logger.error('Blocked repeated no-progress tool loop', {
+          agentId: this.agentId,
+          toolName: toolCall.name,
+          repeatCount: loopSignal.repeatCount,
+        });
+        state.finalFailureMessage = loopSignal.message ?? '检测到无进展工具循环';
+        state.finalFailureCode = 'tool_loop';
+      }
+    }
+
+    state.toolLoopDetector = toolLoopDetector.serializeState();
+
+    const toolResultMsg: StoredMessage = {
+      id: ulid(),
+      sessionKey: this.sessionKey,
+      role: 'user',
+      content: toolResults,
+      timestamp: Date.now(),
+    };
+    await sessionStore.append(this.sessionKey, toolResultMsg);
+    state.messages = [...state.messages, { role: 'user', content: toolResults }];
+
+    if (state.finalFailureMessage) {
+      return await this.finalizeKernelTurn(state, chunks);
+    }
+    if (state.toolRounds >= maxToolRounds) {
+      state.finalFailureMessage = `工具调用轮次已达到上限（${maxToolRounds}），已停止本轮以避免失控执行。`;
+      state.finalFailureCode = 'tool_round_limit';
+      return await this.finalizeKernelTurn(state, chunks);
+    }
+
+    return {
+      state,
+      chunks,
+      done: false,
+      syscall: buildLlmGenerateSyscall(state, this.buildPermittedToolDefinitions().length),
+    };
+  }
+
+  private async finalizeKernelTurn(
+    state: SerializedAgentTurnExecutionState,
+    chunks: StreamChunk[],
+  ): Promise<KernelTurnStepResult> {
+    const { metaStore } = this.deps;
+    let totalText = state.totalText;
+
+    if (state.finalFailureMessage) {
+      const failureText = totalText
+        ? `\n\n${formatFailureReply(state.finalFailureMessage)}`
+        : formatFailureReply(state.finalFailureMessage);
+      chunks.push({ type: 'text_delta', text: failureText });
+      totalText += failureText;
+      const failureMsg: StoredMessage = {
+        id: ulid(),
+        sessionKey: this.sessionKey,
+        role: 'assistant',
+        content: failureText,
+        timestamp: Date.now(),
+      };
+      await this.deps.sessionStore.append(this.sessionKey, failureMsg);
+    } else if (!totalText) {
+      const closingText =
+        state.toolFailureMessages.length > 0
+          ? formatFailureReply(
+              state.toolFailureMessages[state.toolFailureMessages.length - 1] ?? '',
+            )
+          : state.toolRounds > 0
+            ? '✅ 任务执行完毕。'
+            : '';
+      if (closingText) {
+        chunks.push({ type: 'text_delta', text: closingText });
         totalText = closingText;
         const closingMsg: StoredMessage = {
           id: ulid(),
@@ -741,42 +1269,136 @@ export class AgentRunner {
           content: closingText,
           timestamp: Date.now(),
         };
-        await sessionStore.append(this.sessionKey, closingMsg);
+        await this.deps.sessionStore.append(this.sessionKey, closingMsg);
       }
+    }
 
-      // ── 4. Update session meta ──────────────────────────────────────────────
-      await metaStore.update(this.sessionKey, {
+    await metaStore.update(this.sessionKey, {
+      agentId: this.agentId,
+      threadKey: this.threadKey,
+      status: state.finalFailureMessage ? 'error' : 'idle',
+      lastActivity: Date.now(),
+      contextTokensEstimate: state.totalInputTokens,
+      error: state.finalFailureMessage ? formatFailureReply(state.finalFailureMessage) : undefined,
+      errorCode: state.finalFailureMessage ? (state.finalFailureCode ?? 'generic') : undefined,
+    });
+
+    if (this.deps.dataDir) {
+      void recordTokenBill(this.deps.dataDir, {
+        ts: new Date().toISOString(),
         agentId: this.agentId,
-        threadKey: this.threadKey,
-        status: finalFailureMessage ? 'error' : 'idle',
-        lastActivity: Date.now(),
-        contextTokensEstimate: totalInputTokens,
-        error: finalFailureMessage ? formatFailureReply(finalFailureMessage) : undefined,
-        errorCode: finalFailureMessage ? (finalFailureCode ?? 'generic') : undefined,
+        model: state.model,
+        inputTokens: state.totalInputTokens,
+        outputTokens: state.totalOutputTokens,
+        cacheReadTokens: state.totalCacheReadTokens,
+        totalTokens: state.totalInputTokens + state.totalOutputTokens,
       });
+    }
 
-      // ── 5. Record token bill (fire-and-forget; never throws) ───────────────
-      if (this.deps.dataDir) {
-        void recordTokenBill(this.deps.dataDir, {
-          ts: new Date().toISOString(),
-          agentId: this.agentId,
-          model,
-          inputTokens: totalInputTokens,
-          outputTokens: totalOutputTokens,
-          cacheReadTokens: totalCacheReadTokens,
-          totalTokens: totalInputTokens + totalOutputTokens,
-        });
-      }
+    void this.deps.memoryOrganizer?.maybeOrganize();
+    this.activeKernelRunId = null;
 
-      // ── 6. Trigger memory organization (E3.2, fire-and-forget) ────────────
-      void this.deps.memoryOrganizer?.maybeOrganize();
-
-      return {
+    return {
+      state: {
+        ...state,
+        totalText,
+      },
+      chunks,
+      done: true,
+      result: {
         sessionKey: this.sessionKey,
         text: totalText,
-        inputTokens: totalInputTokens,
-        outputTokens: totalOutputTokens,
+        inputTokens: state.totalInputTokens,
+        outputTokens: state.totalOutputTokens,
+      },
+    };
+  }
+
+  /**
+   * BM25-search the agent's memory store for context relevant to the query.
+   * Returns a newline-joined text block ready for injection as `memoryText`.
+   * Returns an empty string if no store is configured or no results found.
+   *
+   * RATIONALE: called before each turn so the runner can inject relevant
+   * memories into the system prompt's Layer 3 without requiring an LLM round-trip.
+   */
+  async searchMemory(query: string, limit = 5): Promise<string> {
+    const store = this.deps.memoryStore;
+    if (!store) return '';
+    try {
+      const results = store.searchFts(query, undefined, limit);
+      if (results.length === 0) return '';
+      return results.map((e, i) => `[${i + 1}] ${e.content}`).join('\n\n');
+    } catch (err) {
+      logger.debug('Memory search failed (non-fatal)', { error: String(err) });
+      return '';
+    }
+  }
+
+  private async *driveDirectKernelStep(
+    step: KernelTurnStepResult,
+  ): AsyncGenerator<StreamChunk, TurnResult> {
+    for (const chunk of step.chunks) {
+      yield chunk;
+    }
+
+    if (step.suspended) {
+      const suspendedText = formatFailureReply(step.suspended.message);
+      yield { type: 'error', message: step.suspended.message };
+      yield { type: 'text_delta', text: suspendedText };
+      return {
+        sessionKey: this.sessionKey,
+        text: suspendedText,
+        inputTokens: step.state.totalInputTokens,
+        outputTokens: step.state.totalOutputTokens,
       };
+    }
+
+    if (step.done && step.result) {
+      return step.result;
+    }
+
+    if (!step.syscall) {
+      const continuedStep = await this.continueKernelTurn(step.state);
+      return yield* this.driveDirectKernelStep(continuedStep);
+    }
+
+    const request = step.syscall;
+    const resolvedAt = Date.now();
+    const resolution =
+      request.kind === 'llm.generate'
+        ? await this.executeKernelLlmGenerateSyscall(step.state, request, resolvedAt)
+        : request.kind === 'tool.call'
+          ? await this.executeKernelToolCallSyscall(step.state, request, resolvedAt)
+          : await this.executeKernelApprovalSyscall(step.state, request, resolvedAt);
+
+    const nextStep =
+      request.kind === 'llm.generate'
+        ? await this.applyKernelLlmGenerateSyscall(step.state, resolution)
+        : request.kind === 'tool.call'
+          ? await this.applyKernelToolCallSyscall(step.state, resolution)
+          : await this.applyKernelApprovalSyscall(step.state, resolution);
+
+    return yield* this.driveDirectKernelStep(nextStep);
+  }
+
+  /**
+   * Run one conversational turn.
+   * Yields StreamChunk objects and resolves to a TurnResult when done.
+   */
+  async *turn(
+    userMessage: string,
+    opts: RunnerOptions = {},
+  ): AsyncGenerator<StreamChunk, TurnResult> {
+    if (this.isRunning) {
+      throw new Error(`Agent '${this.agentId}' is already processing a turn`);
+    }
+    let executionState: SerializedAgentTurnExecutionState | null = null;
+    try {
+      executionState = await this.beginKernelTurn(`direct:${ulid()}`, userMessage, opts);
+      this._running = true;
+      const initialStep = await this.continueKernelTurn(executionState);
+      return yield* this.driveDirectKernelStep(initialStep);
     } catch (err) {
       const failure = classifyAgentFailure(err instanceof Error ? err.message : String(err));
       const failureText = formatFailureReply(failure.summary);
@@ -804,11 +1426,14 @@ export class AgentRunner {
       return {
         sessionKey: this.sessionKey,
         text: failureText,
-        inputTokens: totalInputTokens,
-        outputTokens: totalOutputTokens,
+        inputTokens: executionState?.totalInputTokens ?? 0,
+        outputTokens: executionState?.totalOutputTokens ?? 0,
       };
     } finally {
       this._running = false;
+      if (this.activeKernelRunId?.startsWith('direct:')) {
+        this.activeKernelRunId = null;
+      }
     }
   }
 
@@ -829,6 +1454,18 @@ export class AgentRunner {
       messageCount: 0,
       contextTokensEstimate: 0,
       compactionCount: 0,
+    });
+  }
+
+  private async persistSuspendedSession(error: ProcessErrorEvent): Promise<void> {
+    const suspended = toSuspendedSessionError(error);
+    await this.deps.metaStore.update(this.sessionKey, {
+      agentId: this.agentId,
+      threadKey: this.threadKey,
+      status: 'suspended',
+      lastActivity: Date.now(),
+      error: suspended.error,
+      errorCode: suspended.errorCode,
     });
   }
 }

@@ -6,6 +6,7 @@ import { useLocale } from '../context/i18n.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
 import { useToast } from '../hooks/useToast.js';
 import { useUptime } from '../hooks/useUptime.js';
+import { formatProblemCode, isSuspendedProblemCode, problemCodeBadgeVariant } from '../problem-code-display.js';
 import { getRecoveryHint } from '../recovery-hints.js';
 import type {
   AgentInfo,
@@ -26,22 +27,26 @@ function timeAgo(ms: number): string {
   return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
-function formatErrorCode(errorCode: string): string {
-  return errorCode.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
-}
-
 function formatTrendLabel(date: string): string {
   return date.slice(5).replace('-', '/');
+}
+
+function problemPanelTone(errorCode: string): string {
+  return isSuspendedProblemCode(errorCode)
+    ? 'hover:ring-amber-500/30'
+    : 'hover:ring-red-500/30';
 }
 
 function AgentTrendMini({
   trend,
   summary,
   windowDays,
+  accent,
 }: {
   trend: Array<{ date: string; count: number }>;
   summary: string;
   windowDays: number;
+  accent: 'amber' | 'red';
 }) {
   if (trend.length === 0) return null;
 
@@ -53,7 +58,11 @@ function AgentTrendMini({
         {trend.map((point) => (
           <div key={point.date} className="flex-1 h-full flex items-end" title={`${point.date}: ${point.count}`}>
             <div
-              className="w-full rounded-sm bg-gradient-to-t from-red-500/70 to-orange-300/75"
+              className={
+                accent === 'amber'
+                  ? 'w-full rounded-sm bg-gradient-to-t from-amber-500/70 to-yellow-200/80'
+                  : 'w-full rounded-sm bg-gradient-to-t from-red-500/70 to-orange-300/75'
+              }
               style={{ height: `${Math.max(8, peakCount > 0 ? (point.count / peakCount) * 100 : 8)}%` }}
             />
           </div>
@@ -94,6 +103,10 @@ function formatDateTime(ms: number): string {
   return new Date(ms).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
 }
 
+function statusBadgeVariant(status: string): 'yellow' | 'red' {
+  return status === 'suspended' ? 'yellow' : 'red';
+}
+
 function buildOverviewClearResultMessage(
   t: (key: string, vars?: Record<string, string | number>) => string,
   result: SessionClearResult,
@@ -106,14 +119,14 @@ function buildOverviewClearResultMessage(
   if (remainingForAgent > 0) {
     return t('overview.clearTopErrorResultRemaining')
       .replace('{count}', String(clearedCount))
-      .replace('{errorCode}', formatErrorCode(errorCode))
+      .replace('{errorCode}', formatProblemCode(errorCode, t))
       .replace('{agentId}', agentId)
       .replace('{remaining}', String(remainingForAgent));
   }
 
   return t('overview.clearTopErrorResultClean')
     .replace('{count}', String(clearedCount))
-    .replace('{errorCode}', formatErrorCode(errorCode))
+    .replace('{errorCode}', formatProblemCode(errorCode, t))
     .replace('{agentId}', agentId);
 }
 
@@ -260,11 +273,14 @@ export function OverviewTab({
   // Aggregate stats
   const totalMsgs = sessions.reduce((s, x) => s + x.messageCount, 0);
   const totalTokens = sessions.reduce((s, x) => s + (x.totalTokens ?? 0), 0);
-  const errorSessions = errorStats?.totalErrorSessions ?? sessions.filter((s) => s.status === 'error').length;
+  const problemSessions =
+    errorStats?.totalErrorSessions ??
+    sessions.filter((s) => s.status === 'error' || s.status === 'suspended').length;
   const errorBreakdown = errorStats?.breakdown ?? [];
   const errorTrend = errorStats?.trend ?? [];
   const hotAgents = errorStats?.byAgent.slice(0, 5) ?? [];
   const maxTrendCount = Math.max(...errorTrend.map((point) => point.count), 1);
+  const hasApprovalRequiredProblems = errorBreakdown.some((entry) => entry.code === 'approval_required');
 
   // Per-agent session bars
   const agentBars: AgentSessionBar[] = agents
@@ -328,7 +344,7 @@ export function OverviewTab({
         <StatCard label={t('overview.agents')} value={agentCount} accent="text-indigo-400" />
         <StatCard label={t('overview.sessions')} value={sessions.length} accent="text-blue-400" />
         <StatCard label={t('overview.messages')} value={totalMsgs} accent="text-violet-400" />
-        <StatCard label={t('overview.errorSessions')} value={errorSessions} accent="text-red-400" />
+        <StatCard label={t('overview.errorSessions')} value={problemSessions} accent="text-red-400" />
         <StatCard
           label={t('overview.tokens')}
           value={totalTokens > 1000 ? `${(totalTokens / 1000).toFixed(1)}k` : totalTokens}
@@ -453,7 +469,7 @@ export function OverviewTab({
                           }
                           className="inline-flex"
                         >
-                          <Badge variant="red">{formatErrorCode(s.errorCode)}</Badge>
+                          <Badge variant={statusBadgeVariant(s.status)}>{formatProblemCode(s.errorCode, t)}</Badge>
                         </button>
                       ) : null}
                     </div>
@@ -528,7 +544,11 @@ export function OverviewTab({
                   style={{ background: 'rgba(255,255,255,0.05)', height: 56 }}
                 >
                   <div
-                    className="w-full bg-red-500/70 rounded-md transition-all duration-500"
+                    className={
+                      hasApprovalRequiredProblems
+                        ? 'w-full bg-amber-500/70 rounded-md transition-all duration-500'
+                        : 'w-full bg-red-500/70 rounded-md transition-all duration-500'
+                    }
                     style={{ height: `${Math.max(10, (point.count / maxTrendCount) * 100)}%` }}
                     title={`${point.date}: ${point.count}`}
                   />
@@ -551,8 +571,8 @@ export function OverviewTab({
                 className="inline-flex"
                 title={t('overview.openFilteredSessions')}
               >
-                <Badge variant="red">
-                  {formatErrorCode(code)} · {count}
+                <Badge variant={problemCodeBadgeVariant(code)}>
+                  {formatProblemCode(code, t)} · {count}
                 </Badge>
               </button>
             ))}
@@ -581,12 +601,14 @@ export function OverviewTab({
             {hotAgents.map((entry) => {
               const agent = agents.find((item) => item.agentId === entry.agentId);
               const label = agent?.name ?? entry.agentId;
+              const topProblemVariant = problemCodeBadgeVariant(entry.topErrorCode);
+              const topProblemAccent = isSuspendedProblemCode(entry.topErrorCode) ? 'amber' : 'red';
               const trendPeak = Math.max(...entry.trend.map((point) => point.count), 0);
               const trendToday = entry.trend.at(-1)?.count ?? 0;
               return (
                 <div
                   key={entry.agentId}
-                  className="flex items-start gap-3 rounded-lg bg-white/[0.02] ring-1 ring-white/[0.05] px-3 py-2.5 text-left hover:ring-red-500/30 transition-colors"
+                  className={`flex items-start gap-3 rounded-lg bg-white/[0.02] ring-1 ring-white/[0.05] px-3 py-2.5 text-left transition-colors ${problemPanelTone(entry.topErrorCode)}`}
                 >
                   <button
                     type="button"
@@ -614,6 +636,7 @@ export function OverviewTab({
                     <AgentTrendMini
                       trend={entry.trend}
                       windowDays={errorStats?.windowDays ?? 14}
+                      accent={topProblemAccent}
                       summary={
                         trendPeak > 0
                           ? t('overview.agentTrendActive')
@@ -624,7 +647,7 @@ export function OverviewTab({
                     />
                   </button>
                   <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end pt-0.5">
-                    <Badge variant="red">{formatErrorCode(entry.topErrorCode)}</Badge>
+                    <Badge variant={topProblemVariant}>{formatProblemCode(entry.topErrorCode, t)}</Badge>
                     <Badge variant="gray">{entry.recentErrorSessions}</Badge>
                     <Button
                       size="sm"

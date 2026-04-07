@@ -1,7 +1,11 @@
 import type { SessionErrorCode, SessionMeta } from './meta.js';
 
-function normalizeSessionErrorCode(session: SessionMeta): SessionErrorCode | undefined {
-  if (session.status !== 'error') return undefined;
+export function isProblemSession(session: SessionMeta): boolean {
+  return session.status === 'error' || session.status === 'suspended';
+}
+
+export function normalizeSessionErrorCode(session: SessionMeta): SessionErrorCode | undefined {
+  if (!isProblemSession(session)) return undefined;
   return session.errorCode ?? 'generic';
 }
 
@@ -13,7 +17,7 @@ export function findFailedSessionsForAgent(
   return sessions.filter(
     (session) =>
       session.agentId === agentId &&
-      session.status === 'error' &&
+      isProblemSession(session) &&
       (errorCode === undefined || normalizeSessionErrorCode(session) === errorCode),
   );
 }

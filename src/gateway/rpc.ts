@@ -24,6 +24,7 @@ import type { MemoryStore } from '../memory/store.js';
 import type { MeshRegistry } from '../mesh/registry.js';
 import type { CronScheduler } from '../scheduler/cron.js';
 import { scanSkillsDir } from '../skills/registry.js';
+import { getAgentKernelService } from './agent-kernel.js';
 import type { ContentStore } from './content-store.js';
 import {
   publishDeliverableTargets,
@@ -252,7 +253,10 @@ function buildSchedulerPublicationTargets(
 /** Supported RPC methods. */
 export type RpcMethod =
   | 'agent.list'
+  | 'agent.run'
   | 'agent.chat'
+  | 'agent.runStatus'
+  | 'agent.resume'
   | 'agent.reload'
   | 'agent.status'
   | 'tool.list'
@@ -410,25 +414,13 @@ async function runAgentTask(
 ): Promise<string> {
   const agentId = task.agentId;
   if (!agentId) throw new Error(`Task ${task.id} has no agentId`);
-  const runner = ctx.runners.get(agentId);
-  if (!runner) throw new Error(`Agent not found: ${agentId}`);
-
-  const previous = runner.currentSessionKey;
-  runner.setThread(thread);
-  try {
-    let output = '';
-    const gen = runner.turn(task.message);
-    let next = await gen.next();
-    while (!next.done) {
-      const chunk = next.value;
-      if (chunk.type === 'text_delta') output += chunk.text;
-      next = await gen.next();
-    }
-    return next.value.text || output || '(no output)';
-  } finally {
-    const parts = previous.split(':');
-    if (parts.length >= 3) runner.setThread(parts.slice(2).join(':'));
-  }
+  const agentKernel = await getAgentKernelService(ctx);
+  const result = await agentKernel.executeTurn({
+    agentId,
+    userMessage: task.message,
+    threadKey: thread,
+  });
+  return result.text || '(no output)';
 }
 
 interface TaskRunRecord {
@@ -805,26 +797,81 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         if (!agentId || !message) {
           return buildErrorResponse(id, -32602, 'agentId and message are required');
         }
-        const runner = ctx.runners.get(agentId);
-        if (!runner) {
+        if (!ctx.runners.has(agentId)) {
           return buildErrorResponse(id, 404, `Agent not found: ${agentId}`);
         }
-        if (thread) runner.setThread(thread);
-
-        let replyText = '';
         try {
-          const gen = runner.turn(message);
-          let next = await gen.next();
-          while (!next.done) {
-            const chunk = next.value as { type: string; text?: string; message?: string };
-            if (chunk.type === 'text_delta' && chunk.text) replyText += chunk.text;
-            else if (chunk.type === 'error') throw new Error(chunk.message ?? 'Agent error');
-            next = await gen.next();
-          }
+          const agentKernel = await getAgentKernelService(ctx);
+          const result = await agentKernel.executeTurn({
+            agentId,
+            userMessage: message,
+            threadKey: thread,
+          });
+          return { id, result: { reply: result.text.trim() } };
         } catch (err) {
           return buildErrorResponse(id, -32603, `Agent error: ${String(err)}`);
         }
-        return { id, result: { reply: replyText.trim() } };
+      }
+
+      case 'agent.run': {
+        const { agentId, message, thread } = (params ?? {}) as {
+          agentId?: string;
+          message?: string;
+          thread?: string;
+        };
+        if (!agentId || !message) {
+          return buildErrorResponse(id, -32602, 'agentId and message are required');
+        }
+        if (!ctx.runners.has(agentId)) {
+          return buildErrorResponse(id, 404, `Agent not found: ${agentId}`);
+        }
+        const agentKernel = await getAgentKernelService(ctx);
+        const started = await agentKernel.startTurn({
+          agentId,
+          userMessage: message,
+          threadKey: thread,
+        });
+        return { id, result: started };
+      }
+
+      case 'agent.runStatus': {
+        const { runId } = (params ?? {}) as { runId?: string };
+        if (!runId) {
+          return buildErrorResponse(id, -32602, 'runId is required');
+        }
+        const agentKernel = await getAgentKernelService(ctx);
+        return { id, result: agentKernel.getRun(runId) };
+      }
+
+      case 'agent.resume': {
+        const { runId } = (params ?? {}) as { runId?: string };
+        if (!runId) {
+          return buildErrorResponse(id, -32602, 'runId is required');
+        }
+        const agentKernel = await getAgentKernelService(ctx);
+        const current = agentKernel.getRun(runId);
+        if (!current) {
+          return buildErrorResponse(id, 404, `Run not found: ${runId}`);
+        }
+        if (current.processStatus !== 'suspended') {
+          return {
+            id,
+            result: {
+              resumed: false,
+              reason: `Run status is already '${current.phase}'`,
+              run: current,
+            },
+          };
+        }
+        const resumed = await agentKernel.resumeTurn(runId);
+        return {
+          id,
+          result: {
+            resumed: true,
+            runId,
+            run: resumed,
+          },
+        };
       }
 
       case 'agent.reload': {

@@ -1,6 +1,7 @@
 # Dependencies
 node_modules/
 tmp-*/
+.tmp-*/
 .pnpm-store/
 Docs/
 # Build output

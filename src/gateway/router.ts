@@ -4,7 +4,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { loadStats } from '../agent/stats.js';
 import { createLogger } from '../core/logger.js';
 import { summarizeSessionErrors } from '../core/session/error-stats.js';
-import { type StreamChunk, asAgentId } from '../core/types.js';
+import { type StreamChunk, asAgentId, parseSessionKey } from '../core/types.js';
+import { getAgentKernelService } from './agent-kernel.js';
 import { validateToken } from './auth.js';
 import { captureChatTurnDeliverable } from './chat-deliverables.js';
 import { buildConsoleHtml } from './console/index.js';
@@ -379,8 +380,6 @@ export async function routeRequest(
       return true;
     }
 
-    if (thread) runner.setThread(thread);
-
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
@@ -395,8 +394,14 @@ export async function routeRequest(
     try {
       let replyText = '';
       const startedAt = Date.now();
-      const gen = runner.turn(inboundMessage);
+      const agentKernel = await getAgentKernelService(opts.rpcContext);
+      const gen = agentKernel.streamTurn({
+        agentId,
+        userMessage: inboundMessage,
+        threadKey: thread,
+      });
       let next = await gen.next();
+      let finalResult = next.done ? next.value : null;
       while (!next.done) {
         const chunk = next.value as StreamChunk;
         if (chunk.type === 'text_delta' && chunk.text) {
@@ -404,12 +409,19 @@ export async function routeRequest(
         }
         sendEvent(chunk);
         next = await gen.next();
+        if (next.done) {
+          finalResult = next.value;
+        }
       }
+      const resolvedThreadKey =
+        finalResult && parseSessionKey(finalResult.sessionKey)?.threadKey
+          ? (parseSessionKey(finalResult.sessionKey)?.threadKey as unknown as string)
+          : (thread ?? '');
       if (replyText.trim() && opts.inboxBroadcaster) {
         opts.inboxBroadcaster.publish({
           kind: 'agent_reply',
           agentId,
-          threadKey: thread,
+          threadKey: resolvedThreadKey,
           channelId: 'chat',
           title: `${agentId} replied`,
           text: replyText.trim(),
@@ -417,7 +429,7 @@ export async function routeRequest(
       }
       await captureChatTurnDeliverable(opts.rpcContext, {
         agentId,
-        threadKey: thread ?? '',
+        threadKey: resolvedThreadKey,
         channelId: 'chat',
         replyText,
         startedAt,
@@ -526,6 +538,7 @@ export async function routeRequest(
 
     const completionId = `chatcmpl-${Date.now()}`;
     const createdAt = Math.floor(Date.now() / 1000);
+    const agentKernel = await getAgentKernelService(opts.rpcContext);
 
     if (wantStream) {
       res.writeHead(200, {
@@ -547,7 +560,10 @@ export async function routeRequest(
       };
 
       try {
-        const gen = ocRunner.turn(lastUserMsg.content);
+        const gen = agentKernel.streamTurn({
+          agentId: model,
+          userMessage: lastUserMsg.content,
+        });
         let next = await gen.next();
         while (!next.done) {
           const chunk = next.value as StreamChunk;
@@ -563,13 +579,11 @@ export async function routeRequest(
     } else {
       const parts: string[] = [];
       try {
-        const gen = ocRunner.turn(lastUserMsg.content);
-        let next = await gen.next();
-        while (!next.done) {
-          const chunk = next.value as StreamChunk;
-          if (chunk.type === 'text_delta') parts.push(chunk.text);
-          next = await gen.next();
-        }
+        const result = await agentKernel.executeTurn({
+          agentId: model,
+          userMessage: lastUserMsg.content,
+        });
+        parts.push(result.text);
       } catch (err) {
         logger.error('OpenAI compat chat error', { model, error: String(err) });
         json(res, 500, { error: { message: String(err), type: 'server_error' } });
@@ -617,22 +631,19 @@ export async function routeRequest(
       json(res, 404, { error: `Agent not found: ${hookAgentId}` });
       return true;
     }
-    const hookParts: string[] = [];
     try {
-      const gen = hookRunner.turn(hookMessage);
-      let next = await gen.next();
-      while (!next.done) {
-        const chunk = next.value as StreamChunk;
-        if (chunk.type === 'text_delta') hookParts.push(chunk.text);
-        next = await gen.next();
-      }
+      const agentKernel = await getAgentKernelService(opts.rpcContext);
+      const result = await agentKernel.executeTurn({
+        agentId: hookAgentId,
+        userMessage: hookMessage,
+      });
+      json(res, 200, { ok: true, agentId: hookAgentId, response: result.text });
+      return true;
     } catch (err) {
       logger.error('Webhook trigger error', { agentId: hookAgentId, error: String(err) });
       json(res, 500, { error: String(err) });
       return true;
     }
-    json(res, 200, { ok: true, agentId: hookAgentId, response: hookParts.join('') });
-    return true;
   }
 
   // ── Token usage stats ─────────────────────────────────────────────────

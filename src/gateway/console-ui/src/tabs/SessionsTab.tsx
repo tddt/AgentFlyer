@@ -5,6 +5,7 @@ import { useLocale } from '../context/i18n.js';
 import { MarkdownView } from '../components/MarkdownView.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
 import { useToast } from '../hooks/useToast.js';
+import { formatProblemCode } from '../problem-code-display.js';
 import { getRecoveryHint } from '../recovery-hints.js';
 import { createConsoleThreadKey } from '../thread-keys.js';
 import type { ChatRecoveryMode } from '../types.js';
@@ -36,15 +37,16 @@ function formatRelativeDate(ms: number | null): string {
   return fmtDate(ms);
 }
 
-function statusVariant(status: string): 'green' | 'blue' | 'red' | 'gray' {
-  if (status === 'active') return 'green';
-  if (status === 'idle') return 'blue';
-  if (status === 'error') return 'red';
-  return 'gray';
+function isProblemSession(status: string): boolean {
+  return status === 'error' || status === 'suspended';
 }
 
-function formatErrorCode(errorCode: string): string {
-  return errorCode.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
+function statusVariant(status: string): 'green' | 'blue' | 'yellow' | 'red' | 'gray' {
+  if (status === 'active') return 'green';
+  if (status === 'idle') return 'blue';
+  if (status === 'suspended') return 'yellow';
+  if (status === 'error') return 'red';
+  return 'gray';
 }
 
 function sessionToMarkdown(session: SessionMetaInfo, messages: DisplayMessage[]): string {
@@ -196,6 +198,14 @@ function SessionDetail({ session, onClear, onNavigate }: SessionDetailProps) {
   };
 
   const recoveryHint = session.errorCode ? getRecoveryHint(session.errorCode, t) : null;
+  const issueVariant = session.status === 'suspended' ? 'yellow' : 'red';
+  const issueLabel =
+    session.status === 'suspended' ? t('sessions.suspendedReason') : t('sessions.errorCode');
+  const issueToneClass =
+    session.status === 'suspended'
+      ? 'rounded-lg bg-amber-950/20 ring-1 ring-amber-500/20 px-3 py-2 text-xs'
+      : 'rounded-lg bg-red-950/30 ring-1 ring-red-500/20 px-3 py-2 text-xs';
+  const issueTextClass = session.status === 'suspended' ? 'text-amber-200/90' : 'text-red-200/90';
 
   return (
     <div className="flex flex-col gap-4">
@@ -237,12 +247,14 @@ function SessionDetail({ session, onClear, onNavigate }: SessionDetailProps) {
       </div>
 
       {session.errorCode && (
-        <div className="rounded-lg bg-red-950/30 ring-1 ring-red-500/20 px-3 py-2 text-xs">
+        <div className={issueToneClass}>
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-red-300/80">{t('sessions.errorCode')}</span>
-            <Badge variant="red">{formatErrorCode(session.errorCode)}</Badge>
+            <span className={session.status === 'suspended' ? 'text-amber-300/80' : 'text-red-300/80'}>
+              {issueLabel}
+            </span>
+            <Badge variant={issueVariant}>{formatProblemCode(session.errorCode, t)}</Badge>
           </div>
-          {session.error && <div className="mt-1 text-red-200/90 leading-5">{session.error}</div>}
+          {session.error && <div className={`mt-1 leading-5 ${issueTextClass}`}>{session.error}</div>}
         </div>
       )}
 
@@ -359,8 +371,10 @@ function SessionRow({ session, expanded, onToggle, onCleared, onNavigate }: Sess
             <span className="text-slate-600">·</span>
             <span className="font-mono text-xs text-slate-400 truncate">{session.threadKey}</span>
             <Badge variant={statusVariant(session.status)}>{session.status}</Badge>
-            {session.errorCode && session.status === 'error' ? (
-              <Badge variant="red">{t('sessions.errorCode')}: {formatErrorCode(session.errorCode)}</Badge>
+            {session.errorCode && isProblemSession(session.status) ? (
+              <Badge variant={statusVariant(session.status)}>
+                {t('sessions.errorCode')}: {formatProblemCode(session.errorCode, t)}
+              </Badge>
             ) : null}
           </div>
           <div className="flex items-center gap-3 mt-0.5 text-[11px] text-slate-500">
@@ -446,7 +460,7 @@ export function SessionsTab({
   const sessions = useMemo(() => {
     let list = allSessions;
     if (filterAgent !== 'all') list = list.filter((s) => s.agentId === filterAgent);
-    if (filterErrorCode === '__errors_only__') list = list.filter((s) => s.status === 'error');
+    if (filterErrorCode === '__errors_only__') list = list.filter((s) => isProblemSession(s.status));
     else if (filterErrorCode !== 'all') list = list.filter((s) => s.errorCode === filterErrorCode);
     if (search.trim()) {
       const q = search.toLowerCase();
@@ -464,12 +478,13 @@ export function SessionsTab({
 
   const totalMessages = allSessions.reduce((s, x) => s + x.messageCount, 0);
   const totalTokens = allSessions.reduce((s, x) => s + x.contextTokensEstimate, 0);
+  const problemSessions = allSessions.filter((s) => isProblemSession(s.status)).length;
   const errorSessions = errorStats?.totalErrorSessions ?? allSessions.filter((s) => s.status === 'error').length;
   const topErrorCodes = (errorStats?.breakdown ?? []).slice(0, 4);
 
   const handleSessionCleared = (clearedSession: SessionMetaInfo): void => {
     const remainingFailures = sessions.filter(
-      (session) => session.sessionKey !== clearedSession.sessionKey && session.status === 'error',
+      (session) => session.sessionKey !== clearedSession.sessionKey && isProblemSession(session.status),
     );
     setClearFollowUp({
       agentId: clearedSession.agentId,
@@ -488,7 +503,7 @@ export function SessionsTab({
           <h1 className="text-lg font-semibold text-slate-100">{t('sessions.title')}</h1>
           <p className="text-xs text-slate-500 mt-0.5">
             {allSessions.length} sessions · {totalMessages} messages · ~
-            {totalTokens.toLocaleString()} tokens · {errorSessions} {t('sessions.errorSessions')}
+            {totalTokens.toLocaleString()} tokens · {problemSessions} {t('sessions.problemSessions')}
           </p>
         </div>
         <Button
@@ -528,7 +543,7 @@ export function SessionsTab({
                   className="inline-flex"
                 >
                   <Badge variant={filterErrorCode === code ? 'blue' : 'red'}>
-                    {formatErrorCode(code)} · {count}
+                    {formatProblemCode(code, t)} · {count}
                   </Badge>
                 </button>
               ))}
@@ -577,7 +592,7 @@ export function SessionsTab({
           <option value="all">{t('sessions.allErrors')}</option>
           {errorCodes.map((code) => (
             <option key={code} value={code}>
-              {formatErrorCode(code)}
+              {formatProblemCode(code, t)}
             </option>
           ))}
         </select>

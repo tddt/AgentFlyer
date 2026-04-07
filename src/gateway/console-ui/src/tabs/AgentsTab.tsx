@@ -4,6 +4,7 @@ import { Button } from '../components/Button.js';
 import { useLocale } from '../context/i18n.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
 import { useToast } from '../hooks/useToast.js';
+import { formatProblemCode, isSuspendedProblemCode, problemCodeBadgeVariant } from '../problem-code-display.js';
 import { getRecoveryHint } from '../recovery-hints.js';
 import type {
   AgentConfig,
@@ -139,12 +140,17 @@ function EditModal({
   );
 }
 
-function formatErrorCode(errorCode: string): string {
-  return errorCode.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
-}
-
 function formatTrendLabel(date: string): string {
   return date.slice(5).replace('-', '/');
+}
+
+function problemCardTone(params: { hasProblems: boolean; topErrorCode?: string }): string {
+  if (!params.hasProblems) {
+    return 'ring-slate-700/50 hover:ring-indigo-500/30';
+  }
+  return isSuspendedProblemCode(params.topErrorCode ?? '')
+    ? 'ring-amber-500/30 hover:ring-amber-500/45'
+    : 'ring-red-500/30 hover:ring-red-500/45';
 }
 
 function buildClearResultMessage(
@@ -160,14 +166,14 @@ function buildClearResultMessage(
     if (remainingForAgent > 0) {
       return t('agents.clearTopErrorResultRemaining')
         .replace('{count}', String(clearedCount))
-        .replace('{errorCode}', formatErrorCode(errorCode))
+        .replace('{errorCode}', formatProblemCode(errorCode, t))
         .replace('{agentId}', agentId)
         .replace('{remaining}', String(remainingForAgent));
     }
 
     return t('agents.clearTopErrorResultClean')
       .replace('{count}', String(clearedCount))
-      .replace('{errorCode}', formatErrorCode(errorCode))
+      .replace('{errorCode}', formatProblemCode(errorCode, t))
       .replace('{agentId}', agentId);
   }
 
@@ -418,7 +424,10 @@ export function AgentsTab({
               const isSelected = selected === a.agentId;
               const sessCount = sessionCounts[a.agentId] ?? 0;
               const errorStats = errorStatsByAgent.get(a.agentId);
-              const hasRecentErrors = (errorStats?.recentErrorSessions ?? 0) > 0;
+              const hasRecentProblems = (errorStats?.recentErrorSessions ?? 0) > 0;
+              const topProblemCode = errorStats?.topErrorCode;
+              const topProblemVariant = topProblemCode ? problemCodeBadgeVariant(topProblemCode) : 'red';
+              const topProblemTone = topProblemCode && isSuspendedProblemCode(topProblemCode);
               const trendPeak = Math.max(...(errorStats?.trend ?? []).map((point) => point.count), 0);
               const trendToday = errorStats?.trend.at(-1)?.count ?? 0;
               return (
@@ -427,9 +436,7 @@ export function AgentsTab({
                     className={`rounded-xl bg-slate-800/60 ring-1 transition-all p-4 flex flex-col gap-3 cursor-pointer ${
                       isSelected
                         ? 'ring-indigo-500/60 bg-slate-800'
-                        : hasRecentErrors
-                          ? 'ring-red-500/30 hover:ring-red-500/45'
-                          : 'ring-slate-700/50 hover:ring-indigo-500/30'
+                        : problemCardTone({ hasProblems: hasRecentProblems, topErrorCode: topProblemCode })
                     }`}
                     onClick={() => setSelected(isSelected ? null : a.agentId)}
                   >
@@ -444,8 +451,8 @@ export function AgentsTab({
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
                         <Badge variant="green">{t('agents.runningBadge')}</Badge>
-                        {hasRecentErrors ? (
-                          <Badge variant="red">
+                        {hasRecentProblems ? (
+                          <Badge variant={topProblemVariant}>
                             {t('agents.recentErrorsBadge').replace(
                               '{n}',
                               String(errorStats?.recentErrorSessions ?? 0),
@@ -460,12 +467,18 @@ export function AgentsTab({
                       {cfg?.persona && <Badge variant="purple">{t('agents.personaBadge')}</Badge>}
                       {sessCount > 0 && <Badge variant="gray">{t('agents.sessionsBadge', { n: sessCount })}</Badge>}
                       {errorStats ? (
-                        <Badge variant="red">{formatErrorCode(errorStats.topErrorCode)}</Badge>
+                        <Badge variant={topProblemVariant}>{formatProblemCode(errorStats.topErrorCode, t)}</Badge>
                       ) : null}
                     </div>
 
                     {errorStats ? (
-                      <div className="rounded-lg bg-red-950/20 ring-1 ring-red-500/15 px-3 py-2 text-[11px] text-slate-300">
+                      <div
+                        className={
+                          topProblemTone
+                            ? 'rounded-lg bg-amber-950/20 ring-1 ring-amber-500/15 px-3 py-2 text-[11px] text-amber-100/85'
+                            : 'rounded-lg bg-red-950/20 ring-1 ring-red-500/15 px-3 py-2 text-[11px] text-slate-300'
+                        }
+                      >
                         <div className="flex items-center gap-2 flex-wrap">
                           <span>
                             {t('agents.errorSummary')
@@ -473,7 +486,7 @@ export function AgentsTab({
                               .replace('{total}', String(errorStats.totalErrorSessions))}
                           </span>
                           <span className="text-slate-500">·</span>
-                          <span className="text-slate-400">{formatErrorCode(errorStats.topErrorCode)}</span>
+                          <Badge variant={topProblemVariant}>{formatProblemCode(errorStats.topErrorCode, t)}</Badge>
                         </div>
                       </div>
                     ) : null}

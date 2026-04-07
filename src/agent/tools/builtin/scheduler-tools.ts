@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { ulid } from 'ulid';
 import { createLogger } from '../../../core/logger.js';
 import type { CronScheduler } from '../../../scheduler/cron.js';
+import { executeAgentTurnViaKernel } from '../../kernel-turn-executor.js';
 import type { AgentRunner } from '../../runner.js';
 import type { RegisteredTool } from '../registry.js';
 
@@ -20,24 +21,23 @@ function intervalToCron(minutes: number): string {
 }
 
 /** Drain an AgentRunner turn and return the final text reply. */
-async function runTurn(runner: AgentRunner, message: string, thread: string): Promise<string> {
-  const prev = runner.currentSessionKey;
-  runner.setThread(thread);
-  try {
-    let output = '';
-    const gen = runner.turn(message);
-    let next = await gen.next();
-    while (!next.done) {
-      const chunk = next.value;
-      if (chunk.type === 'text_delta') output += chunk.text;
-      next = await gen.next();
-    }
-    return next.value.text || output || '(no output)';
-  } finally {
-    // Restore original thread – parse "agent:<id>:<thread>" format
-    const parts = prev.split(':');
-    if (parts.length >= 3) runner.setThread(parts.slice(2).join(':'));
-  }
+async function runTurn(
+  agentId: string,
+  runner: AgentRunner,
+  message: string,
+  thread: string,
+  dataDir: string,
+): Promise<string> {
+  const result = await executeAgentTurnViaKernel({
+    runners: new Map([[agentId, runner]]),
+    dataDir,
+    input: {
+      agentId,
+      userMessage: message,
+      threadKey: thread,
+    },
+  });
+  return result.text || '(no output)';
 }
 
 // ── task metadata store (persistent JSON) ─────────────────────────────────
@@ -192,7 +192,7 @@ export function createSchedulerTools(
         const thread = `sched-${meta.id}-run-${current.runCount + 1}`;
         let result: string;
         try {
-          result = await runTurn(workerRunner, current.message, thread);
+          result = await runTurn(current.agentId, workerRunner, current.message, thread, dataDir);
           taskStore.update(meta.id, {
             runCount: current.runCount + 1,
             lastRunAt: Date.now(),
@@ -214,7 +214,7 @@ export function createSchedulerTools(
             const reportThread = `sched-report-${meta.id}`;
             const reportMsg = `[定时任务汇报] 任务名称: ${current.name}\n执行智能体: ${current.agentId}\n\n${result}`;
             try {
-              await runTurn(reporterRunner, reportMsg, reportThread);
+              await runTurn(current.reportTo, reporterRunner, reportMsg, reportThread, dataDir);
               logger.info('Task report sent', { taskId: meta.id, reportTo: current.reportTo });
             } catch (err) {
               logger.error('Failed to send task report', {

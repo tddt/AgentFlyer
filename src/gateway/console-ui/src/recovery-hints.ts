@@ -59,6 +59,13 @@ export function getRecoveryHint(
         description: t('sessions.recovery.billingDesc'),
         actionLabel: t('sessions.recovery.action.credentials'),
       };
+    case 'approval_required':
+      return {
+        title: t('sessions.recovery.approvalRequiredTitle'),
+        description: t('sessions.recovery.approvalRequiredDesc'),
+        action: 'chat',
+        actionLabel: t('sessions.recovery.action.inspect'),
+      };
     default:
       return {
         title: t('sessions.recovery.genericTitle'),

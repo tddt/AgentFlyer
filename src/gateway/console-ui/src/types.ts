@@ -290,6 +290,8 @@ export interface WorkflowStep {
   id: string;
   /** Node type — defaults to 'agent' for backward compatibility. */
   type?: StepType;
+  /** Explicit next step id or '$end'; falls back to array order when omitted. */
+  nextStepId?: string;
   /** Required for 'agent' steps. */
   agentId?: string;
   label?: string;

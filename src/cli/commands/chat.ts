@@ -7,6 +7,7 @@ import { loadConfig } from '../../core/config/loader.js';
 import { getDefaultConfigDir } from '../../core/config/loader.js';
 import { setLogLevel } from '../../core/logger.js';
 import { type StreamChunk, asAgentId, asThreadKey } from '../../core/types.js';
+import { getAgentKernelService } from '../../gateway/agent-kernel.js';
 import { isGatewayRunning, startGateway } from '../../gateway/lifecycle.js';
 import { streamChatFromGateway } from '../gateway-client.js';
 
@@ -133,6 +134,7 @@ export const chatCommand = defineCommand({
         process.exit(1);
       }
       runner.setThread(threadKey);
+      const agentKernel = await getAgentKernelService(instance.state);
 
       note(
         [
@@ -160,7 +162,11 @@ export const chatCommand = defineCommand({
           return;
         }
 
-        const gen = runner.turn(text);
+        const gen = agentKernel.streamTurn({
+          agentId,
+          userMessage: text,
+          threadKey,
+        });
         async function* streamChunks(): AsyncIterable<StreamChunk> {
           let next = await gen.next();
           while (!next.done) {

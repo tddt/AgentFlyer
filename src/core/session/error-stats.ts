@@ -1,4 +1,5 @@
 import type { SessionErrorCode, SessionMeta } from './meta.js';
+import { normalizeSessionErrorCode } from './recovery.js';
 
 export interface SessionErrorBreakdownEntry {
   code: SessionErrorCode;
@@ -44,8 +45,7 @@ function createWindowTrendMap(windowDays: number, now: number): Map<string, numb
 }
 
 function normalizeErrorCode(session: SessionMeta): SessionErrorCode | null {
-  if (session.status !== 'error') return null;
-  return session.errorCode ?? 'generic';
+  return normalizeSessionErrorCode(session) ?? null;
 }
 
 export function summarizeSessionErrors(

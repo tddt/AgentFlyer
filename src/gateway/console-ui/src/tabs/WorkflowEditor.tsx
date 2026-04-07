@@ -816,6 +816,31 @@ function StepRow({
             onChange={(e) => onChange({ ...step, maxRetries: Number(e.target.value) || undefined })}
           />
         </div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-slate-500">下一步</span>
+          <select
+            className={`${inputCls} text-xs max-w-[220px]`}
+            value={step.nextStepId ?? ''}
+            onChange={(e) =>
+              onChange({
+                ...step,
+                nextStepId: e.target.value || undefined,
+              })
+            }
+          >
+            <option value="">默认顺延</option>
+            <option value="$end">$end (结束流程)</option>
+            {allSteps
+              .filter((candidate) => candidate.id !== step.id)
+              .map((candidate) => (
+                <option key={candidate.id} value={candidate.id}>
+                  {candidate.label
+                    ? `${candidate.label}【${candidate.id}】`
+                    : `${STEP_TYPE_LABELS[candidate.type ?? 'agent']}【${candidate.id}】`}
+                </option>
+              ))}
+          </select>
+        </div>
       </div>
     </div>
   );

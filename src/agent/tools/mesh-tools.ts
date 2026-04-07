@@ -1,7 +1,9 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { ulid } from 'ulid';
 import type { AgentConfig } from '../../core/config/schema.js';
 import { createLogger } from '../../core/logger.js';
-import { parseSessionKey } from '../../core/types.js';
+import { executeAgentTurnViaKernel } from '../kernel-turn-executor.js';
 import type { AgentRunner } from '../runner.js';
 import type { RegisteredTool } from './registry.js';
 
@@ -11,6 +13,28 @@ const logger = createLogger('tools:mesh');
 // a remote agent turn. 5 min is generous for agentic tasks; callers may pass
 // timeout_s to mesh_send/mesh_spawn to override.
 const DEFAULT_TASK_TIMEOUT_MS = 5 * 60 * 1_000; // 5 minutes
+
+async function runMeshTurn(options: {
+  agentId: string;
+  runner: AgentRunner;
+  message: string;
+  threadKey: string;
+  dataDir: string;
+  timeoutMs: number;
+  label: string;
+}): Promise<string> {
+  const turnPromise = executeAgentTurnViaKernel({
+    runners: new Map([[options.agentId, options.runner]]),
+    dataDir: options.dataDir,
+    input: {
+      agentId: options.agentId,
+      userMessage: options.message,
+      threadKey: options.threadKey,
+    },
+  }).then((result) => result.text || '(no output)');
+
+  return await withTimeout(turnPromise, options.timeoutMs, options.label);
+}
 
 /**
  * Race `promise` against a deadline.  Rejects with a timeout error if
@@ -40,6 +64,10 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 // ── Async task store (in-process) ──────────────────────────────────────────
 
 interface TaskEntry {
+  taskId: string;
+  agentId: string;
+  message: string;
+  threadKey: string;
   status: 'pending' | 'running' | 'done' | 'error' | 'cancelled';
   result?: string;
   error?: string;
@@ -49,7 +77,80 @@ interface TaskEntry {
   timeoutMs: number;
 }
 
-const taskStore = new Map<string, TaskEntry>();
+class MeshTaskStore {
+  private readonly filePath: string;
+  private tasks = new Map<string, TaskEntry>();
+
+  constructor(dataDir: string) {
+    mkdirSync(dataDir, { recursive: true });
+    this.filePath = join(dataDir, 'mesh-tasks.json');
+    this.load();
+  }
+
+  private load(): void {
+    if (!existsSync(this.filePath)) return;
+    try {
+      const raw = readFileSync(this.filePath, 'utf-8');
+      const arr = JSON.parse(raw) as TaskEntry[];
+      for (const entry of arr) {
+        this.tasks.set(entry.taskId, entry);
+      }
+      logger.info('Loaded mesh tasks', { count: this.tasks.size });
+    } catch (err) {
+      logger.warn('Failed to load mesh-tasks.json, starting fresh', { error: String(err) });
+    }
+  }
+
+  private save(): void {
+    try {
+      writeFileSync(
+        this.filePath,
+        JSON.stringify(Array.from(this.tasks.values()), null, 2),
+        'utf-8',
+      );
+    } catch (err) {
+      logger.error('Failed to save mesh-tasks.json', { error: String(err) });
+    }
+  }
+
+  get(taskId: string): TaskEntry | undefined {
+    return this.tasks.get(taskId);
+  }
+
+  set(entry: TaskEntry): void {
+    this.tasks.set(entry.taskId, entry);
+    this.save();
+  }
+
+  update(taskId: string, patch: Partial<TaskEntry>): void {
+    const existing = this.tasks.get(taskId);
+    if (!existing) return;
+    Object.assign(existing, patch);
+    this.save();
+  }
+
+  all(): TaskEntry[] {
+    return Array.from(this.tasks.values());
+  }
+
+  normalizeInterrupted(now = Date.now()): void {
+    let mutated = false;
+    for (const entry of this.tasks.values()) {
+      if (entry.status === 'pending' || entry.status === 'running') {
+        entry.status = 'error';
+        entry.error = 'Task interrupted by gateway restart before completion.';
+        entry.doneAt = now;
+        mutated = true;
+      }
+    }
+    if (mutated) {
+      this.save();
+    }
+  }
+}
+
+const sharedTaskStores = new Map<string, MeshTaskStore>();
+const restoredTaskStores = new Set<string>();
 
 // ── Tool factory ────────────────────────────────────────────────────────────
 
@@ -60,8 +161,20 @@ const taskStore = new Map<string, TaskEntry>();
  */
 export function createMeshTools(
   runners: Map<string, AgentRunner>,
+  dataDir: string,
   agentConfigs: AgentConfig[] = [],
 ): RegisteredTool[] {
+  let store = sharedTaskStores.get(dataDir);
+  if (!store) {
+    store = new MeshTaskStore(dataDir);
+    sharedTaskStores.set(dataDir, store);
+  }
+  const taskStore = store;
+  if (!restoredTaskStores.has(dataDir)) {
+    restoredTaskStores.add(dataDir);
+    taskStore.normalizeInterrupted();
+  }
+
   // Build a quick lookup for names/roles
   const configMap = new Map(agentConfigs.map((c) => [c.id, c]));
 
@@ -156,35 +269,23 @@ export function createMeshTools(
 
       // Use an isolated thread so delegated tasks don't pollute the worker's main history.
       const taskThread = thread ?? `mesh-task-${ulid()}`;
-      const prevThread = runner.currentSessionKey;
-      runner.setThread(taskThread);
-
       logger.info('mesh_send: delegating task', { agent_id, taskThread, timeoutMs });
 
       try {
-        const turnPromise = (async () => {
-          let output = '';
-          const gen = runner.turn(message);
-          let next = await gen.next();
-          while (!next.done) {
-            const chunk = next.value;
-            if (chunk.type === 'text_delta') output += chunk.text;
-            next = await gen.next();
-          }
-          const result = next.value;
-          return result.text || output;
-        })();
-
-        const output = await withTimeout(turnPromise, timeoutMs, `mesh_send to ${agent_id}`);
+        const output = await runMeshTurn({
+          agentId: agent_id,
+          runner,
+          message,
+          threadKey: taskThread,
+          dataDir,
+          timeoutMs,
+          label: `mesh_send to ${agent_id}`,
+        });
         logger.info('mesh_send: task complete', { agent_id });
         return { isError: false, content: output || '(agent returned no output)' };
       } catch (err) {
         logger.error('mesh_send: task failed', { agent_id, error: String(err) });
         return { isError: true, content: `Agent '${agent_id}' error: ${String(err)}` };
-      } finally {
-        // Restore the worker's original thread context regardless of success/timeout/error.
-        const parsed = parseSessionKey(prevThread);
-        if (parsed) runner.setThread(parsed.threadKey);
       }
     },
   };
@@ -237,42 +338,44 @@ export function createMeshTools(
       const timeoutMs = typeof timeout_s === 'number' ? timeout_s * 1_000 : DEFAULT_TASK_TIMEOUT_MS;
       const taskId = ulid();
       const taskThread = `mesh-spawn-${taskId}`;
-      taskStore.set(taskId, { status: 'pending', startedAt: Date.now(), timeoutMs });
+      taskStore.set({
+        taskId,
+        agentId: agent_id,
+        message,
+        threadKey: taskThread,
+        status: 'pending',
+        startedAt: Date.now(),
+        timeoutMs,
+      });
 
       // Run asynchronously — do NOT await
       (async () => {
         const entry = taskStore.get(taskId);
         if (!entry) return;
-        entry.status = 'running';
-        const prevThread = runner.currentSessionKey;
-        runner.setThread(taskThread);
+        taskStore.update(taskId, { status: 'running' });
         try {
-          const turnPromise = (async () => {
-            let output = '';
-            const gen = runner.turn(message);
-            let next = await gen.next();
-            while (!next.done) {
-              const chunk = next.value;
-              if (chunk.type === 'text_delta') output += chunk.text;
-              next = await gen.next();
-            }
-            const result = next.value;
-            return result.text || output;
-          })();
-
-          const output = await withTimeout(turnPromise, timeoutMs, `mesh_spawn ${taskId}`);
-          entry.status = 'done';
-          entry.result = output || '(no output)';
-          entry.doneAt = Date.now();
+          const output = await runMeshTurn({
+            agentId: agent_id,
+            runner,
+            message,
+            threadKey: taskThread,
+            dataDir,
+            timeoutMs,
+            label: `mesh_spawn ${taskId}`,
+          });
+          taskStore.update(taskId, {
+            status: 'done',
+            result: output || '(no output)',
+            doneAt: Date.now(),
+          });
           logger.info('mesh_spawn: task done', { taskId, agent_id });
         } catch (err) {
-          entry.status = 'error';
-          entry.error = String(err);
-          entry.doneAt = Date.now();
+          taskStore.update(taskId, {
+            status: 'error',
+            error: String(err),
+            doneAt: Date.now(),
+          });
           logger.error('mesh_spawn: task error', { taskId, agent_id, error: String(err) });
-        } finally {
-          const parsed = parseSessionKey(prevThread);
-          if (parsed) runner.setThread(parsed.threadKey);
         }
       })().catch(() => undefined);
 
@@ -308,24 +411,31 @@ export function createMeshTools(
       if (entry.status === 'running') {
         const elapsed = Date.now() - entry.startedAt;
         if (elapsed > entry.timeoutMs) {
-          entry.status = 'error';
-          entry.error = `Task timed out after ${Math.round(elapsed / 1000)}s (limit: ${Math.round(entry.timeoutMs / 1000)}s). The agent may still be processing in the background.`;
-          entry.doneAt = Date.now();
+          taskStore.update(task_id, {
+            status: 'error',
+            error: `Task timed out after ${Math.round(elapsed / 1000)}s (limit: ${Math.round(entry.timeoutMs / 1000)}s). The agent may still be processing in the background.`,
+            doneAt: Date.now(),
+          });
           logger.warn('mesh_status: auto-expired stuck task', { task_id, elapsed });
         }
       }
 
-      const elapsed = Math.round(((entry.doneAt ?? Date.now()) - entry.startedAt) / 1000);
-      if (entry.status === 'done') {
-        return { isError: false, content: `Status: done (${elapsed}s)\n\n${entry.result}` };
+      const current = taskStore.get(task_id);
+      if (!current) {
+        return { isError: true, content: `Task '${task_id}' not found.` };
       }
-      if (entry.status === 'error') {
-        return { isError: true, content: `Status: error (${elapsed}s)\n${entry.error}` };
+
+      const elapsed = Math.round(((current.doneAt ?? Date.now()) - current.startedAt) / 1000);
+      if (current.status === 'done') {
+        return { isError: false, content: `Status: done (${elapsed}s)\n\n${current.result}` };
       }
-      if (entry.status === 'cancelled') {
+      if (current.status === 'error') {
+        return { isError: true, content: `Status: error (${elapsed}s)\n${current.error}` };
+      }
+      if (current.status === 'cancelled') {
         return { isError: false, content: `Status: cancelled (${elapsed}s elapsed)` };
       }
-      return { isError: false, content: `Status: ${entry.status} (${elapsed}s elapsed)` };
+      return { isError: false, content: `Status: ${current.status} (${elapsed}s elapsed)` };
     },
   };
 
@@ -397,32 +507,19 @@ export function createMeshTools(
         if (runner.isRunning) {
           return { agentId, ok: false, output: 'Agent busy — skipped' };
         }
-        const prevThread = runner.currentSessionKey;
-        runner.setThread(`${broadcastThread}-${agentId}`);
         try {
-          const turnPromise = (async () => {
-            let output = '';
-            const gen = runner.turn(message);
-            let next = await gen.next();
-            while (!next.done) {
-              const chunk = next.value;
-              if (chunk.type === 'text_delta') output += chunk.text;
-              next = await gen.next();
-            }
-            const result = next.value;
-            return result.text || output || '(no output)';
-          })();
-          const output = await withTimeout(
-            turnPromise,
-            DEFAULT_TASK_TIMEOUT_MS,
-            `mesh_broadcast to ${agentId}`,
-          );
+          const output = await runMeshTurn({
+            agentId,
+            runner,
+            message,
+            threadKey: `${broadcastThread}-${agentId}`,
+            dataDir,
+            timeoutMs: DEFAULT_TASK_TIMEOUT_MS,
+            label: `mesh_broadcast to ${agentId}`,
+          });
           return { agentId, ok: true, output };
         } catch (err) {
           return { agentId, ok: false, output: `Error: ${String(err)}` };
-        } finally {
-          const parsed = parseSessionKey(prevThread);
-          if (parsed) runner.setThread(parsed.threadKey);
         }
       });
 
@@ -518,26 +615,16 @@ export function createMeshTools(
             .filter(Boolean)
             .join('');
 
-          const prevThread = runner.currentSessionKey;
-          runner.setThread(`${discussThread}-${agentId}-r${round}`);
           try {
-            const turnPromise = (async () => {
-              let output = '';
-              const gen = runner.turn(prompt);
-              let next = await gen.next();
-              while (!next.done) {
-                const chunk = next.value;
-                if (chunk.type === 'text_delta') output += chunk.text;
-                next = await gen.next();
-              }
-              const result = next.value;
-              return result.text || output || '(no response)';
-            })();
-            const reply = await withTimeout(
-              turnPromise,
-              DEFAULT_TASK_TIMEOUT_MS,
-              `mesh_discuss turn for ${agentId}`,
-            );
+            const reply = await runMeshTurn({
+              agentId,
+              runner,
+              message: prompt,
+              threadKey: `${discussThread}-${agentId}-r${round}`,
+              dataDir,
+              timeoutMs: DEFAULT_TASK_TIMEOUT_MS,
+              label: `mesh_discuss turn for ${agentId}`,
+            });
             const cfg = configMap.get(agentId);
             const displayName = cfg?.name ?? agentId;
             const entry = `**${displayName}** (Round ${round + 1}):\n${reply}`;
@@ -547,9 +634,6 @@ export function createMeshTools(
             const errEntry = `**${agentId}**: Error — ${String(err)}`;
             transcript.push(errEntry);
             context = `${context}\n\n${errEntry}`;
-          } finally {
-            const parsed = parseSessionKey(prevThread);
-            if (parsed) runner.setThread(parsed.threadKey);
           }
         }
       }
@@ -600,8 +684,10 @@ export function createMeshTools(
       } else if (entry.status === 'done' || entry.status === 'error') {
         parts.push(`Task '${task_id}' already finished (status: ${entry.status}).`);
       } else {
-        entry.status = 'cancelled';
-        entry.doneAt = Date.now();
+        taskStore.update(task_id, {
+          status: 'cancelled',
+          doneAt: Date.now(),
+        });
         logger.info('mesh_cancel: task cancelled', { task_id });
         parts.push(`Task '${task_id}' cancelled.`);
       }
@@ -713,28 +799,19 @@ export function createMeshTools(
           };
         }
         const taskThread = `mesh-plan-${planId}-${agentId}-${ulid()}`;
-        const prevThread = runner.currentSessionKey;
-        runner.setThread(taskThread);
         try {
-          const turnPromise = (async () => {
-            let output = '';
-            const gen = runner.turn(instruction);
-            let next = await gen.next();
-            while (!next.done) {
-              const chunk = next.value;
-              if (chunk.type === 'text_delta') output += chunk.text;
-              next = await gen.next();
-            }
-            const result = next.value;
-            return result.text || output || '(no output)';
-          })();
-          const output = await withTimeout(turnPromise, timeoutMs, `mesh_plan task for ${agentId}`);
+          const output = await runMeshTurn({
+            agentId,
+            runner,
+            message: instruction,
+            threadKey: taskThread,
+            dataDir,
+            timeoutMs,
+            label: `mesh_plan task for ${agentId}`,
+          });
           return { agentId, instruction, ok: true, output };
         } catch (err) {
           return { agentId, instruction, ok: false, output: `Error: ${String(err)}` };
-        } finally {
-          const parsed = parseSessionKey(prevThread);
-          if (parsed) runner.setThread(parsed.threadKey);
         }
       }
 

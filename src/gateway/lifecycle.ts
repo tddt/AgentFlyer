@@ -53,6 +53,7 @@ import { filterSkillsForAgent } from '../skills/filter.js';
 import { buildSkillsDirectory } from '../skills/format.js';
 import { buildRegistry, scanSkillsDir } from '../skills/registry.js';
 import { createSkillTools } from '../skills/skill-tools.js';
+import { getAgentKernelService } from './agent-kernel.js';
 import { AgentQueueRegistry } from './agent-queue.js';
 import { generateToken } from './auth.js';
 import { captureChatTurnDeliverable } from './chat-deliverables.js';
@@ -340,7 +341,7 @@ function buildRunner(
   }
   // RATIONALE: Both runners and agentConfigs are passed by reference/value respectively.
   // The runners Map is fully populated before any tool is invoked at runtime.
-  tools.registerMany(createMeshTools(state.runners, state.config.agents));
+  tools.registerMany(createMeshTools(state.runners, state.dataDir, state.config.agents));
   // Scheduler tools share the same CronScheduler singleton across all agents.
   tools.registerMany(createSchedulerTools(state.runners, state.scheduler, state.dataDir));
   // Channel tools — let the agent send text/files to any registered channel.
@@ -689,6 +690,7 @@ export async function startGateway(
     const channelsCfg = config.channels;
     // Default agent: first configured agent, or 'main' as fallback
     const firstAgentId = asAgentId(config.agents[0]?.id ?? 'main');
+    const agentKernel = await getAgentKernelService(rpcContext);
 
     // ── Telegram ────────────────────────────────────────────────────────────
     const tgCfg = channelsCfg.telegram;
@@ -726,9 +728,13 @@ export async function startGateway(
             const typing = new TypingKeepAlive();
             typing.start(() => tg.sendTyping(msg.threadKey));
             try {
-              runner.setThread(msg.threadKey);
               const memoryText = await runner.searchMemory(msg.text);
-              const stream = runner.turn(msg.text, { memoryText: memoryText || undefined });
+              const stream = agentKernel.streamTurn({
+                agentId: msg.agentId,
+                userMessage: msg.text,
+                threadKey: msg.threadKey,
+                options: { memoryText: memoryText || undefined },
+              });
               await sendCapturedStream({
                 stream,
                 send: (captured) =>
@@ -792,9 +798,13 @@ export async function startGateway(
             const typing = new TypingKeepAlive();
             typing.start(() => dc.sendTyping(msg.threadKey));
             try {
-              runner.setThread(msg.threadKey);
               const memoryText = await runner.searchMemory(msg.text);
-              const stream = runner.turn(msg.text, { memoryText: memoryText || undefined });
+              const stream = agentKernel.streamTurn({
+                agentId: msg.agentId,
+                userMessage: msg.text,
+                threadKey: msg.threadKey,
+                options: { memoryText: memoryText || undefined },
+              });
               await sendCapturedStream({
                 stream,
                 send: (captured) =>
@@ -860,9 +870,13 @@ export async function startGateway(
           }
           await agentQueues.for(msg.agentId).enqueue(async () => {
             try {
-              runner.setThread(msg.threadKey);
               const memoryText = await runner.searchMemory(msg.text);
-              const stream = runner.turn(msg.text, { memoryText: memoryText || undefined });
+              const stream = agentKernel.streamTurn({
+                agentId: msg.agentId,
+                userMessage: msg.text,
+                threadKey: msg.threadKey,
+                options: { memoryText: memoryText || undefined },
+              });
               await sendCapturedStream({
                 stream,
                 send: (captured) =>
@@ -922,9 +936,13 @@ export async function startGateway(
           }
           await agentQueues.for(msg.agentId).enqueue(async () => {
             try {
-              runner.setThread(msg.threadKey);
               const memoryText = await runner.searchMemory(msg.text);
-              const stream = runner.turn(msg.text, { memoryText: memoryText || undefined });
+              const stream = agentKernel.streamTurn({
+                agentId: msg.agentId,
+                userMessage: msg.text,
+                threadKey: msg.threadKey,
+                options: { memoryText: memoryText || undefined },
+              });
               await sendCapturedStream({
                 stream,
                 send: (captured) =>
@@ -966,9 +984,13 @@ export async function startGateway(
       }
       await agentQueues.for(msg.agentId).enqueue(async () => {
         try {
-          runner.setThread(msg.threadKey);
           const memoryText = await runner.searchMemory(msg.text);
-          const stream = runner.turn(msg.text, { memoryText: memoryText || undefined });
+          const stream = agentKernel.streamTurn({
+            agentId: msg.agentId,
+            userMessage: msg.text,
+            threadKey: msg.threadKey,
+            options: { memoryText: memoryText || undefined },
+          });
           await sendCapturedStream({
             stream,
             send: (captured) =>

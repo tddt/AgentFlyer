@@ -3,7 +3,7 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { SessionKey } from '../types.js';
 
-export type SessionStatus = 'idle' | 'running' | 'compacting' | 'error';
+export type SessionStatus = 'idle' | 'running' | 'compacting' | 'suspended' | 'error';
 export type SessionErrorCode =
   | 'generic'
   | 'rate_limit'
@@ -12,6 +12,7 @@ export type SessionErrorCode =
   | 'compaction_failure'
   | 'transient_http'
   | 'billing'
+  | 'approval_required'
   | 'tool_loop'
   | 'tool_round_limit';
 

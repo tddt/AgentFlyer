@@ -1,16 +1,33 @@
 import type { SessionErrorCode } from '../../core/session/meta.js';
 
-export type AgentFailureCode = Exclude<SessionErrorCode, 'tool_loop' | 'tool_round_limit'>;
+export type AgentFailureCode = Exclude<
+  SessionErrorCode,
+  'approval_required' | 'tool_loop' | 'tool_round_limit'
+>;
 
 export interface AgentFailureClassification {
   code: AgentFailureCode;
   retryableBeforeOutput: boolean;
+  suspendableBeforeOutput: boolean;
   summary: string;
   rawMessage: string;
 }
 
-const RATE_LIMIT_PATTERNS = [/\b429\b/i, /rate\s*limit/i, /too many requests/i];
-const OVERLOADED_PATTERNS = [/overload(?:ed)?/i, /server busy/i, /service busy/i, /capacity/i];
+const RATE_LIMIT_PATTERNS = [
+  /\b429\b/i,
+  /rate\s*limit/i,
+  /too many requests/i,
+  /速率限制/i,
+  /限流/i,
+];
+const OVERLOADED_PATTERNS = [
+  /overload(?:ed)?/i,
+  /server busy/i,
+  /service busy/i,
+  /capacity/i,
+  /过载/i,
+  /服务繁忙/i,
+];
 const CONTEXT_OVERFLOW_PATTERNS = [
   /context length/i,
   /context window/i,
@@ -47,6 +64,10 @@ const BILLING_PATTERNS = [
   /credit/i,
   /balance/i,
   /quota exceeded/i,
+  /计费/i,
+  /配额/i,
+  /余额/i,
+  /额度/i,
 ];
 
 function matchesAny(message: string, patterns: RegExp[]): boolean {
@@ -60,6 +81,7 @@ export function classifyAgentFailure(rawMessage: string): AgentFailureClassifica
     return {
       code: 'billing',
       retryableBeforeOutput: false,
+      suspendableBeforeOutput: true,
       summary: '模型服务的计费或配额状态异常，请检查 API Key、余额或项目配额。',
       rawMessage,
     };
@@ -69,6 +91,7 @@ export function classifyAgentFailure(rawMessage: string): AgentFailureClassifica
     return {
       code: 'context_overflow',
       retryableBeforeOutput: false,
+      suspendableBeforeOutput: false,
       summary: '上下文超限，当前会话对这个模型过长。请缩短输入、清理历史，或切换到更大上下文模型。',
       rawMessage,
     };
@@ -78,6 +101,7 @@ export function classifyAgentFailure(rawMessage: string): AgentFailureClassifica
     return {
       code: 'compaction_failure',
       retryableBeforeOutput: false,
+      suspendableBeforeOutput: false,
       summary: '会话压缩失败，已无法继续安全压缩历史。请重试，或缩短上下文后再继续。',
       rawMessage,
     };
@@ -87,6 +111,7 @@ export function classifyAgentFailure(rawMessage: string): AgentFailureClassifica
     return {
       code: 'rate_limit',
       retryableBeforeOutput: true,
+      suspendableBeforeOutput: true,
       summary: 'API 速率限制已触发，请稍后再试。',
       rawMessage,
     };
@@ -96,6 +121,7 @@ export function classifyAgentFailure(rawMessage: string): AgentFailureClassifica
     return {
       code: 'overloaded',
       retryableBeforeOutput: true,
+      suspendableBeforeOutput: true,
       summary: 'AI 服务当前过载，请稍后再试。',
       rawMessage,
     };
@@ -105,6 +131,7 @@ export function classifyAgentFailure(rawMessage: string): AgentFailureClassifica
     return {
       code: 'transient_http',
       retryableBeforeOutput: true,
+      suspendableBeforeOutput: false,
       summary: 'AI 服务暂时不可用，请稍后再试。',
       rawMessage,
     };
@@ -113,6 +140,7 @@ export function classifyAgentFailure(rawMessage: string): AgentFailureClassifica
   return {
     code: 'generic',
     retryableBeforeOutput: false,
+    suspendableBeforeOutput: false,
     summary: message || '发生未知错误。',
     rawMessage,
   };

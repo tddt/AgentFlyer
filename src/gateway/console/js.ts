@@ -320,16 +320,16 @@ export function buildJs(token: string, port: number): string {
         const reader = res.body.getReader();
         const dec = new TextDecoder();
         let buf = '';
-        while(true){
+        const readNextChunk = async ()=>{
           const {done, value} = await reader.read();
-          if(done) break;
+          if(done) return;
           buf += dec.decode(value, {stream:true});
-          const lines = buf.split('\\n');
+          const lines = buf.split('\n');
           buf = lines.pop() ?? '';
           for(const line of lines){
             if(!line.startsWith('data: ')) continue;
             const raw = line.slice(6).trim();
-            if(raw==='[DONE]') break;
+            if(raw==='[DONE]') return;
             try{
               const chunk = JSON.parse(raw);
               if(chunk.type==='text'){
@@ -349,7 +349,9 @@ export function buildJs(token: string, port: number): string {
             } catch{ /* skip */ }
           }
           msgs.scrollTop = msgs.scrollHeight;
-        }
+          return await readNextChunk();
+        };
+        await readNextChunk();
         assistantEl.classList.remove('streaming-cursor');
         makeCopyBtn(assistantEl);
       } catch(e){

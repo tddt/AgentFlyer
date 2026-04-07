@@ -11,6 +11,11 @@ export interface ToolLoopDetectorOptions {
   blockThreshold?: number;
 }
 
+export interface SerializedToolLoopDetectorState {
+  lastEntry: ToolLoopEntry | null;
+  consecutiveRepeats: number;
+}
+
 interface ToolLoopEntry {
   signature: string;
   toolName: string;
@@ -60,6 +65,18 @@ export class ToolLoopDetector {
   constructor(opts: ToolLoopDetectorOptions = {}) {
     this.warningThreshold = opts.warningThreshold ?? DEFAULT_WARNING_THRESHOLD;
     this.blockThreshold = opts.blockThreshold ?? DEFAULT_BLOCK_THRESHOLD;
+  }
+
+  serializeState(): SerializedToolLoopDetectorState {
+    return {
+      lastEntry: this.lastEntry,
+      consecutiveRepeats: this.consecutiveRepeats,
+    };
+  }
+
+  restoreState(state: SerializedToolLoopDetectorState): void {
+    this.lastEntry = state.lastEntry;
+    this.consecutiveRepeats = state.consecutiveRepeats;
   }
 
   record(toolName: string, input: unknown, result: string, isError: boolean): ToolLoopSignal {
