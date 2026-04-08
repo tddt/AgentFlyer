@@ -413,22 +413,137 @@ function collectWorkflowEdges(workflow: WorkflowDef): Map<string, string[]> {
   return edges;
 }
 
-function findWorkflowCycle(workflow: WorkflowDef): string | null {
-  const entryStepId = workflow.entryStepId ?? workflow.steps[0]?.id;
-  if (!entryStepId) return null;
+export interface WorkflowGraphCycleDiagnostic {
+  kind: 'cycle';
+  entryStepId: string;
+  stepId: string;
+  path: string[];
+}
+
+export interface WorkflowGraphUnreachableDiagnostic {
+  kind: 'unreachable';
+  entryStepId: string;
+  stepIds: string[];
+}
+
+export interface WorkflowStepValidationDiagnostic {
+  kind: 'step-validation';
+  stepId: string;
+  message: string;
+}
+
+export interface WorkflowStepAdvisoryDiagnostic {
+  kind: 'step-advisory';
+  stepId: string;
+  message: string;
+}
+
+export interface WorkflowWorkflowValidationDiagnostic {
+  kind: 'workflow-validation';
+  message: string;
+}
+
+export interface WorkflowWorkflowAdvisoryDiagnostic {
+  kind: 'workflow-advisory';
+  message: string;
+}
+
+export type WorkflowGraphDiagnostic =
+  | WorkflowGraphCycleDiagnostic
+  | WorkflowGraphUnreachableDiagnostic;
+
+export type WorkflowValidationDiagnostic =
+  | WorkflowStepValidationDiagnostic
+  | WorkflowStepAdvisoryDiagnostic
+  | WorkflowWorkflowValidationDiagnostic
+  | WorkflowWorkflowAdvisoryDiagnostic;
+
+interface WorkflowValidationOptions {
+  agents?: Array<{
+    id: string;
+    tools?: {
+      sandboxProfile?: string;
+    };
+  }>;
+}
+
+function stepValidationDiagnostic(
+  stepId: string,
+  message: string,
+): WorkflowStepValidationDiagnostic {
+  return {
+    kind: 'step-validation',
+    stepId,
+    message,
+  };
+}
+
+function stepAdvisoryDiagnostic(stepId: string, message: string): WorkflowStepAdvisoryDiagnostic {
+  return {
+    kind: 'step-advisory',
+    stepId,
+    message,
+  };
+}
+
+function workflowValidationDiagnostic(message: string): WorkflowWorkflowValidationDiagnostic {
+  return {
+    kind: 'workflow-validation',
+    message,
+  };
+}
+
+function workflowAdvisoryDiagnostic(message: string): WorkflowWorkflowAdvisoryDiagnostic {
+  return {
+    kind: 'workflow-advisory',
+    message,
+  };
+}
+
+function recommendSandboxAgent(
+  agents: NonNullable<WorkflowValidationOptions['agents']>,
+): { id: string; sandboxProfile: string } | null {
+  const preferred =
+    agents.find((agent) => agent.tools?.sandboxProfile === 'readonly-output') ??
+    agents.find((agent) => !!agent.tools?.sandboxProfile);
+  if (!preferred?.tools?.sandboxProfile) {
+    return null;
+  }
+  return {
+    id: preferred.id,
+    sandboxProfile: preferred.tools.sandboxProfile,
+  };
+}
+
+function findWorkflowCycleDiagnostic(
+  workflow: WorkflowDef,
+  entryStepId: string,
+): WorkflowGraphCycleDiagnostic | null {
   const edges = collectWorkflowEdges(workflow);
   const visited = new Set<string>();
-  const visiting = new Set<string>();
+  const visitingIndex = new Map<string, number>();
+  const path: string[] = [];
 
-  const visit = (stepId: string): string | null => {
-    if (visiting.has(stepId)) return stepId;
-    if (visited.has(stepId)) return null;
-    visiting.add(stepId);
-    for (const target of edges.get(stepId) ?? []) {
-      const cycleAt = visit(target);
-      if (cycleAt) return cycleAt;
+  const visit = (stepId: string): WorkflowGraphCycleDiagnostic | null => {
+    const cycleStartIndex = visitingIndex.get(stepId);
+    if (cycleStartIndex !== undefined) {
+      const cyclePath = [...path.slice(cycleStartIndex), stepId];
+      return {
+        kind: 'cycle',
+        entryStepId,
+        stepId,
+        path: cyclePath,
+      };
     }
-    visiting.delete(stepId);
+    if (visited.has(stepId)) return null;
+    visitingIndex.set(stepId, path.length);
+    path.push(stepId);
+    for (const target of edges.get(stepId) ?? []) {
+      const diagnostic = visit(target);
+      if (diagnostic) return diagnostic;
+    }
+    path.pop();
+    visitingIndex.delete(stepId);
     visited.add(stepId);
     return null;
   };
@@ -456,39 +571,99 @@ function findUnreachableWorkflowStepIds(workflow: WorkflowDef): string[] {
   return workflow.steps.map((step) => step.id).filter((stepId) => !reachable.has(stepId));
 }
 
-export function validateWorkflowDef(workflow: WorkflowDef): string | null {
-  if (!workflow.id.trim()) return 'workflow id is required';
-  if (!workflow.name.trim()) return 'workflow name is required';
-  if (workflow.steps.length === 0) return 'workflow must contain at least one step';
+export function diagnoseWorkflowGraph(workflow: WorkflowDef): WorkflowGraphDiagnostic[] {
+  const entryStepId = workflow.entryStepId ?? workflow.steps[0]?.id;
+  if (!entryStepId) return [];
+
+  const diagnostics: WorkflowGraphDiagnostic[] = [];
+  const cycleDiagnostic = findWorkflowCycleDiagnostic(workflow, entryStepId);
+  if (cycleDiagnostic) {
+    diagnostics.push(cycleDiagnostic);
+  }
+
+  const unreachableStepIds = findUnreachableWorkflowStepIds(workflow);
+  if (unreachableStepIds.length > 0) {
+    diagnostics.push({
+      kind: 'unreachable',
+      entryStepId,
+      stepIds: unreachableStepIds,
+    });
+  }
+
+  return diagnostics;
+}
+
+export function diagnoseWorkflowValidation(
+  workflow: WorkflowDef,
+  options: WorkflowValidationOptions = {},
+): WorkflowValidationDiagnostic[] {
+  const diagnostics: WorkflowValidationDiagnostic[] = [];
+
+  if (!workflow.id.trim()) {
+    diagnostics.push(workflowValidationDiagnostic('workflow id is required'));
+  }
+  if (!workflow.name.trim()) {
+    diagnostics.push(workflowValidationDiagnostic('workflow name is required'));
+  }
+  if (workflow.steps.length === 0) {
+    diagnostics.push(workflowValidationDiagnostic('workflow must contain at least one step'));
+  }
 
   const publicationChannelsError = validateWorkflowPublicationChannels(
     workflow.publicationChannels,
   );
-  if (publicationChannelsError) return publicationChannelsError;
+  if (publicationChannelsError) {
+    diagnostics.push(workflowValidationDiagnostic(publicationChannelsError));
+  }
 
   const publicationTargetsError = validateWorkflowPublicationTargets(workflow.publicationTargets);
-  if (publicationTargetsError) return publicationTargetsError;
+  if (publicationTargetsError) {
+    diagnostics.push(workflowValidationDiagnostic(publicationTargetsError));
+  }
 
   const seenStepIds = new Set<string>();
   for (const step of workflow.steps) {
-    if (!step.id.trim()) return 'workflow step id is required';
+    if (!step.id.trim()) {
+      diagnostics.push(workflowValidationDiagnostic('workflow step id is required'));
+      continue;
+    }
     if (seenStepIds.has(step.id)) {
-      return `workflow contains duplicate step id '${step.id}'`;
+      diagnostics.push(
+        workflowValidationDiagnostic(`workflow contains duplicate step id '${step.id}'`),
+      );
+      continue;
     }
     seenStepIds.add(step.id);
   }
 
   if (workflow.entryStepId && !seenStepIds.has(workflow.entryStepId)) {
-    return `workflow entryStepId targets unknown step '${workflow.entryStepId}'`;
+    diagnostics.push(
+      workflowValidationDiagnostic(
+        `workflow entryStepId targets unknown step '${workflow.entryStepId}'`,
+      ),
+    );
   }
 
   for (const step of workflow.steps) {
+    if (!step.id.trim()) {
+      continue;
+    }
     const type = step.type ?? 'agent';
+    if (type !== 'condition' && (step.branches?.length ?? 0) > 0) {
+      diagnostics.push(
+        stepValidationDiagnostic(
+          step.id,
+          `step '${step.id}' can only define branches when type is 'condition'`,
+        ),
+      );
+    }
     if (type === 'agent' && !step.agentId?.trim()) {
-      return `agent step '${step.id}' requires agentId`;
+      diagnostics.push(
+        stepValidationDiagnostic(step.id, `agent step '${step.id}' requires agentId`),
+      );
     }
     if (type === 'http' && !step.url?.trim()) {
-      return `http step '${step.id}' requires url`;
+      diagnostics.push(stepValidationDiagnostic(step.id, `http step '${step.id}' requires url`));
     }
 
     const nextTargetError = validateWorkflowTarget(
@@ -497,7 +672,9 @@ export function validateWorkflowDef(workflow: WorkflowDef): string | null {
       step.nextStepId,
       'nextStepId',
     );
-    if (nextTargetError) return nextTargetError;
+    if (nextTargetError) {
+      diagnostics.push(stepValidationDiagnostic(step.id, nextTargetError));
+    }
 
     if (type === 'transform') {
       const transformExpression = step.transformCode ?? step.messageTemplate;
@@ -506,19 +683,30 @@ export function validateWorkflowDef(workflow: WorkflowDef): string | null {
         ['vars', 'globals', 'input', 'prev_output'],
         `transformCode for step '${step.id}'`,
       );
-      if (transformError) return transformError;
+      if (transformError) {
+        diagnostics.push(stepValidationDiagnostic(step.id, transformError));
+      }
     }
 
     const seenOutputNames = new Set<string>();
     for (const output of step.outputs ?? []) {
       const outputVarError = validateWorkflowOutputVar(step.id, output);
-      if (outputVarError) return outputVarError;
+      if (outputVarError) {
+        diagnostics.push(stepValidationDiagnostic(step.id, outputVarError));
+      }
 
       const outputName = output.name.trim();
-      if (seenOutputNames.has(outputName)) {
-        return `step '${step.id}' contains duplicate output variable '${outputName}'`;
+      if (outputName) {
+        if (seenOutputNames.has(outputName)) {
+          diagnostics.push(
+            stepValidationDiagnostic(
+              step.id,
+              `step '${step.id}' contains duplicate output variable '${outputName}'`,
+            ),
+          );
+        }
+        seenOutputNames.add(outputName);
       }
-      seenOutputNames.add(outputName);
 
       if (output.transform !== undefined) {
         const outputTransformError = validateWorkflowExpression(
@@ -526,17 +714,25 @@ export function validateWorkflowDef(workflow: WorkflowDef): string | null {
           ['output', 'vars', 'globals'],
           `output transform '${output.name}' for step '${step.id}'`,
         );
-        if (outputTransformError) return outputTransformError;
+        if (outputTransformError) {
+          diagnostics.push(stepValidationDiagnostic(step.id, outputTransformError));
+        }
       }
     }
 
+    let branchIndex = 0;
+    let matchedTerminalBranch = false;
     for (const branch of step.branches ?? []) {
+      branchIndex += 1;
+
       const branchExpressionError = validateWorkflowExpression(
         branch.expression,
         ['output', 'vars', 'globals'],
         `branch expression for step '${step.id}'`,
       );
-      if (branchExpressionError) return branchExpressionError;
+      if (branchExpressionError) {
+        diagnostics.push(stepValidationDiagnostic(step.id, branchExpressionError));
+      }
 
       const branchTargetError = validateWorkflowTarget(
         seenStepIds,
@@ -544,19 +740,27 @@ export function validateWorkflowDef(workflow: WorkflowDef): string | null {
         branch.goto,
         'branch goto',
       );
-      if (branchTargetError) return branchTargetError;
-    }
-
-    let branchIndex = 0;
-    let matchedTerminalBranch = false;
-    for (const branch of step.branches ?? []) {
-      branchIndex += 1;
-      if (matchedTerminalBranch) {
-        return `condition step '${step.id}' contains unreachable branch #${branchIndex} after an always-true branch`;
+      if (branchTargetError) {
+        diagnostics.push(stepValidationDiagnostic(step.id, branchTargetError));
       }
+
+      if (matchedTerminalBranch) {
+        diagnostics.push(
+          stepValidationDiagnostic(
+            step.id,
+            `condition step '${step.id}' contains unreachable branch #${branchIndex} after an always-true branch`,
+          ),
+        );
+      }
+
       const literalValue = normalizeWorkflowBooleanLiteral(branch.expression);
       if (literalValue === false) {
-        return `condition step '${step.id}' contains branch #${branchIndex} that can never match`;
+        diagnostics.push(
+          stepValidationDiagnostic(
+            step.id,
+            `condition step '${step.id}' contains branch #${branchIndex} that can never match`,
+          ),
+        );
       }
       if (literalValue === true) {
         matchedTerminalBranch = true;
@@ -564,14 +768,85 @@ export function validateWorkflowDef(workflow: WorkflowDef): string | null {
     }
   }
 
-  const cycleAt = findWorkflowCycle(workflow);
-  if (cycleAt) {
-    return `workflow graph contains a cycle at step '${cycleAt}'`;
+  const configuredAgents = options.agents ?? [];
+  const sandboxAgentById = new Map(configuredAgents.map((agent) => [agent.id, agent]));
+  const recommendedSandboxAgent = recommendSandboxAgent(configuredAgents);
+
+  for (const step of workflow.steps) {
+    if ((step.type ?? 'agent') !== 'agent') {
+      continue;
+    }
+    const agentId = step.agentId?.trim();
+    if (!agentId) {
+      continue;
+    }
+    const agentConfig = sandboxAgentById.get(agentId);
+    if (!agentConfig) {
+      diagnostics.push(
+        stepAdvisoryDiagnostic(
+          step.id,
+          `agent step '${step.id}' targets '${agentId}', but that agent is not present in current config diagnostics context`,
+        ),
+      );
+      continue;
+    }
+    if (agentConfig.tools?.sandboxProfile) {
+      continue;
+    }
+    if (recommendedSandboxAgent) {
+      diagnostics.push(
+        stepAdvisoryDiagnostic(
+          step.id,
+          `agent step '${step.id}' targets '${agentId}' without sandboxProfile. Consider using '${recommendedSandboxAgent.id}' (sandbox:${recommendedSandboxAgent.sandboxProfile}) for readonly execution.`,
+        ),
+      );
+      continue;
+    }
+    diagnostics.push(
+      stepAdvisoryDiagnostic(
+        step.id,
+        `agent step '${step.id}' targets '${agentId}' without sandboxProfile. Consider binding a sandbox profile such as readonly-output before using this workflow for scheduled or autonomous execution.`,
+      ),
+    );
   }
 
-  const unreachableStepIds = findUnreachableWorkflowStepIds(workflow);
-  if (unreachableStepIds.length > 0) {
-    return `workflow graph contains unreachable steps: ${unreachableStepIds.join(', ')}`;
+  if (
+    recommendedSandboxAgent &&
+    workflow.steps.some((step) => (step.type ?? 'agent') === 'agent') &&
+    !workflow.steps.some((step) => {
+      const agentId = step.agentId?.trim();
+      return agentId && sandboxAgentById.get(agentId)?.tools?.sandboxProfile;
+    })
+  ) {
+    diagnostics.push(
+      workflowAdvisoryDiagnostic(
+        `workflow does not currently target any sandbox-bound agent. Prefer '${recommendedSandboxAgent.id}' (sandbox:${recommendedSandboxAgent.sandboxProfile}) for readonly execution paths.`,
+      ),
+    );
+  }
+
+  return diagnostics;
+}
+
+function formatWorkflowGraphDiagnostic(diagnostic: WorkflowGraphDiagnostic): string {
+  if (diagnostic.kind === 'cycle') {
+    return `workflow graph contains a cycle at step '${diagnostic.stepId}'`;
+  }
+  return `workflow graph contains unreachable steps: ${diagnostic.stepIds.join(', ')}`;
+}
+
+export function validateWorkflowDef(workflow: WorkflowDef): string | null {
+  const validationDiagnostic = diagnoseWorkflowValidation(workflow).find(
+    (diagnostic) =>
+      diagnostic.kind === 'step-validation' || diagnostic.kind === 'workflow-validation',
+  );
+  if (validationDiagnostic) {
+    return validationDiagnostic.message;
+  }
+
+  const graphDiagnostic = diagnoseWorkflowGraph(workflow)[0];
+  if (graphDiagnostic) {
+    return formatWorkflowGraphDiagnostic(graphDiagnostic);
   }
 
   return null;
@@ -646,6 +921,7 @@ export async function runWorkflowForScheduler(
 
 export type WorkflowRpcMethod =
   | 'workflow.list'
+  | 'workflow.diagnose'
   | 'workflow.save'
   | 'workflow.delete'
   | 'workflow.run'
@@ -677,6 +953,30 @@ export async function dispatchWorkflowRpc(
     case 'workflow.list': {
       const workflows = await readWorkflowsFile(ctx.dataDir);
       return ok(id, { workflows });
+    }
+
+    case 'workflow.diagnose': {
+      const workflow = params as WorkflowDef | null;
+      if (!workflow) {
+        return err(id, -32602, 'workflow payload is required');
+      }
+      const validationDiagnostics = diagnoseWorkflowValidation(workflow, {
+        agents: ctx.getConfig().agents ?? [],
+      });
+      const graphDiagnostics = diagnoseWorkflowGraph(workflow);
+      const blockingValidation = validationDiagnostics.find(
+        (diagnostic) =>
+          diagnostic.kind === 'step-validation' || diagnostic.kind === 'workflow-validation',
+      );
+      const validationError =
+        blockingValidation?.message ??
+        (graphDiagnostics[0] ? formatWorkflowGraphDiagnostic(graphDiagnostics[0]) : null);
+      return ok(id, {
+        valid: validationError === null,
+        validationError,
+        validationDiagnostics,
+        graphDiagnostics,
+      });
     }
 
     case 'workflow.save': {

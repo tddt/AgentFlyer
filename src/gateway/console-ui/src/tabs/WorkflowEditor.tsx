@@ -2,17 +2,27 @@
  * WorkflowEditor — form for creating and editing workflow definitions.
  * Supports agent / transform / condition / http step types.
  */
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button } from '../components/Button.js';
+import { rpc } from '../hooks/useRpc.js';
 import type {
+  AgentInfo,
   ChannelInfo,
   ConditionBranch,
   PublicationTargetConfig,
   StepOutputVar,
   StepType,
   WorkflowDef,
+  WorkflowDiagnoseResult,
+  WorkflowGraphDiagnostic,
+  WorkflowValidationDiagnostic,
   WorkflowStep,
 } from '../types.js';
+
+function formatAgentOptionLabel(agent: AgentInfo): string {
+  const baseLabel = agent.name ?? agent.agentId;
+  return agent.sandboxProfile ? `${baseLabel} [sandbox:${agent.sandboxProfile}]` : baseLabel;
+}
 
 // ── WorkflowGuide ─────────────────────────────────────────────────────────────
 
@@ -407,8 +417,107 @@ const STEP_TYPE_COLORS: Record<StepType, string> = {
   http: 'bg-emerald-600/20 ring-emerald-500/40 text-emerald-300',
 };
 
+function normalizeStepForType(step: WorkflowStep, nextType: StepType): WorkflowStep {
+  if (nextType === 'condition') {
+    return { ...step, type: nextType };
+  }
+  const { branches, ...rest } = step;
+  return { ...rest, type: nextType };
+}
+
 const inputCls =
   'rounded-lg bg-slate-900/70 ring-1 ring-slate-700 px-2 py-1.5 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-indigo-500';
+
+function describeGraphDiagnostic(diagnostic: WorkflowGraphDiagnostic): string {
+  if (diagnostic.kind === 'cycle') {
+    return `检测到循环路径：${diagnostic.path.join(' → ')}`;
+  }
+  return `存在不可达步骤：${diagnostic.stepIds.join(', ')}`;
+}
+
+function getDiagnosticStepIds(
+  diagnostic: WorkflowGraphDiagnostic | WorkflowValidationDiagnostic,
+): string[] {
+  if (diagnostic.kind === 'cycle') {
+    return Array.from(new Set(diagnostic.path));
+  }
+  if (diagnostic.kind === 'unreachable') {
+    return diagnostic.stepIds;
+  }
+  if (diagnostic.kind === 'step-validation' || diagnostic.kind === 'step-advisory') {
+    return [diagnostic.stepId];
+  }
+  return [];
+}
+
+function collectStepIssueMap(
+  diagnosis: WorkflowDiagnoseResult | null,
+): Record<string, string[]> {
+  if (!diagnosis) return {};
+  const issueMap: Record<string, string[]> = {};
+  const addIssue = (stepId: string, message: string) => {
+    if (!issueMap[stepId]) {
+      issueMap[stepId] = [];
+    }
+    if (!issueMap[stepId]?.includes(message)) {
+      issueMap[stepId]?.push(message);
+    }
+  };
+
+  for (const diagnostic of diagnosis.validationDiagnostics) {
+    if (diagnostic.kind === 'step-validation' || diagnostic.kind === 'step-advisory') {
+      addIssue(diagnostic.stepId, diagnostic.message);
+    }
+  }
+
+  for (const diagnostic of diagnosis.graphDiagnostics) {
+    const summary = describeGraphDiagnostic(diagnostic);
+    for (const stepId of getDiagnosticStepIds(diagnostic)) {
+      addIssue(stepId, summary);
+    }
+  }
+
+  return issueMap;
+}
+
+function collectWorkflowIssueMessages(diagnosis: WorkflowDiagnoseResult | null): string[] {
+  if (!diagnosis) return [];
+  return diagnosis.validationDiagnostics
+    .filter(
+      (
+        diagnostic,
+      ): diagnostic is Extract<
+        WorkflowValidationDiagnostic,
+        { kind: 'workflow-validation' | 'workflow-advisory' }
+      > => diagnostic.kind === 'workflow-validation' || diagnostic.kind === 'workflow-advisory',
+    )
+    .map((diagnostic) => diagnostic.message);
+}
+
+function getFirstIssueStepId(diagnosis: WorkflowDiagnoseResult | null): string | null {
+  if (!diagnosis) return null;
+  for (const diagnostic of diagnosis.validationDiagnostics) {
+    if (diagnostic.kind === 'step-validation' || diagnostic.kind === 'step-advisory') {
+      return diagnostic.stepId;
+    }
+  }
+  for (const diagnostic of diagnosis.graphDiagnostics) {
+    const stepId = getDiagnosticStepIds(diagnostic)[0];
+    if (stepId) {
+      return stepId;
+    }
+  }
+  return null;
+}
+
+function scrollToWorkflowStep(stepId: string): void {
+  window.requestAnimationFrame(() => {
+    document.getElementById(`workflow-step-${stepId}`)?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'center',
+    });
+  });
+}
 
 // ── ConditionBranchList ───────────────────────────────────────────────────────
 
@@ -572,25 +681,40 @@ function StepRow({
   total,
   agents,
   allSteps,
+  issues,
+  selected,
   onChange,
   onMoveUp,
   onMoveDown,
   onRemove,
+  onSelect,
 }: {
   step: WorkflowStep;
   index: number;
   total: number;
-  agents: { agentId: string; name?: string }[];
+  agents: AgentInfo[];
   allSteps: WorkflowStep[];
+  issues: string[];
+  selected: boolean;
   onChange: (s: WorkflowStep) => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
   onRemove: () => void;
+  onSelect: () => void;
 }) {
   const type: StepType = step.type ?? 'agent';
 
   return (
-    <div className="rounded-xl bg-slate-800/70 ring-1 ring-slate-700/60 p-4 flex flex-col gap-3">
+    <div
+      id={`workflow-step-${step.id}`}
+      className={`rounded-xl p-4 flex flex-col gap-3 ring-1 transition-colors ${
+        selected
+          ? 'bg-indigo-500/10 ring-indigo-500/50'
+          : issues.length > 0
+            ? 'bg-red-500/5 ring-red-500/30'
+            : 'bg-slate-800/70 ring-slate-700/60'
+      }`}
+    >
       {/* Header row */}
       <div className="flex items-center gap-2">
         <span className="w-6 h-6 rounded-full bg-indigo-600/30 ring-1 ring-indigo-500/40 text-indigo-300 text-xs flex items-center justify-center font-mono shrink-0">
@@ -601,7 +725,7 @@ function StepRow({
         <select
           className={`rounded-lg ring-1 px-2 py-1.5 text-xs font-medium focus:outline-none ${STEP_TYPE_COLORS[type]}`}
           value={type}
-          onChange={(e) => onChange({ ...step, type: e.target.value as StepType })}
+          onChange={(e) => onChange(normalizeStepForType(step, e.target.value as StepType))}
         >
           {(Object.keys(STEP_TYPE_LABELS) as StepType[]).map((t) => (
             <option key={t} value={t}>
@@ -617,6 +741,29 @@ function StepRow({
           value={step.label ?? ''}
           onChange={(e) => onChange({ ...step, label: e.target.value || undefined })}
         />
+
+        {issues.length > 0 && (
+          <button
+            type="button"
+            onClick={onSelect}
+            className="rounded-lg bg-red-500/10 ring-1 ring-red-500/30 px-2 py-1 text-[11px] text-red-300 hover:bg-red-500/15"
+            title={issues.join('\n')}
+          >
+            {issues.length} 个问题
+          </button>
+        )}
+
+        <button
+          type="button"
+          onClick={onSelect}
+          className={`rounded-lg px-2 py-1 text-[11px] ring-1 ${
+            selected
+              ? 'bg-indigo-500/20 ring-indigo-500/40 text-indigo-200'
+              : 'bg-slate-900/50 ring-slate-700/60 text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          {selected ? '已定位' : '定位'}
+        </button>
 
         {/* Move + remove */}
         <div className="flex gap-1 shrink-0">
@@ -653,7 +800,7 @@ function StepRow({
           <option value="">— 选择 Agent —</option>
           {agents.map((a) => (
             <option key={a.agentId} value={a.agentId}>
-              {a.name ?? a.agentId}
+              {formatAgentOptionLabel(a)}
             </option>
           ))}
         </select>
@@ -842,6 +989,16 @@ function StepRow({
           </select>
         </div>
       </div>
+
+      {issues.length > 0 && (
+        <div className="rounded-lg bg-slate-950/50 ring-1 ring-red-500/20 px-3 py-2 flex flex-col gap-1">
+          {issues.map((issue) => (
+            <div key={issue} className="text-xs text-red-200">
+              {issue}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -856,7 +1013,7 @@ export function WorkflowEditor({
   onCancel,
 }: {
   workflow: WorkflowDef | null;
-  agents: { agentId: string; name?: string }[];
+  agents: AgentInfo[];
   channels: ChannelInfo[];
   onSave: (w: WorkflowDef) => void;
   onCancel: () => void;
@@ -880,10 +1037,87 @@ export function WorkflowEditor({
   const [newGlobalVal, setNewGlobalVal] = useState('');
   const [nameError, setNameError] = useState(false);
   const [inputRequired, setInputRequired] = useState(workflow?.inputRequired !== false);
+  const [draftId] = useState(() => workflow?.id ?? newStepId());
+  const [draftCreatedAt] = useState(() => workflow?.createdAt ?? Date.now());
   const [publicationTargets, setPublicationTargets] = useState<PublicationTargetConfig[]>(
     workflow?.publicationTargets ?? [],
   );
   const [showHelp, setShowHelp] = useState(false);
+  const [diagnosis, setDiagnosis] = useState<WorkflowDiagnoseResult | null>(null);
+  const [diagnosisLoading, setDiagnosisLoading] = useState(false);
+  const [diagnosisError, setDiagnosisError] = useState<string | null>(null);
+  const [selectedStepId, setSelectedStepId] = useState<string | null>(workflow?.steps[0]?.id ?? null);
+
+  const stepIssueMap = useMemo(() => collectStepIssueMap(diagnosis), [diagnosis]);
+  const workflowIssueMessages = useMemo(() => collectWorkflowIssueMessages(diagnosis), [diagnosis]);
+  const issueStepCount = Object.keys(stepIssueMap).length;
+
+  const buildDraftWorkflow = (): WorkflowDef => ({
+    id: draftId,
+    name: name.trim(),
+    description: description.trim() || undefined,
+    steps,
+    publicationTargets: publicationTargets.length > 0 ? publicationTargets : undefined,
+    variables: Object.keys(variables).length > 0 ? variables : undefined,
+    inputRequired: inputRequired ? undefined : false,
+    createdAt: draftCreatedAt,
+    updatedAt: Date.now(),
+  });
+
+  useEffect(() => {
+    if (!workflow && !name.trim()) {
+      setDiagnosis(null);
+      setDiagnosisError(null);
+      setDiagnosisLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => {
+      setDiagnosisLoading(true);
+      setDiagnosisError(null);
+      void rpc<WorkflowDiagnoseResult>('workflow.diagnose', buildDraftWorkflow(), controller.signal)
+        .then((result) => setDiagnosis(result))
+        .catch((error: unknown) => {
+          if (controller.signal.aborted) return;
+          setDiagnosis(null);
+          setDiagnosisError(error instanceof Error ? error.message : String(error));
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) {
+            setDiagnosisLoading(false);
+          }
+        });
+    }, 250);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
+  }, [
+    description,
+    draftCreatedAt,
+    draftId,
+    inputRequired,
+    name,
+    publicationTargets,
+    steps,
+    variables,
+    workflow,
+  ]);
+
+  useEffect(() => {
+    const stepIds = new Set(steps.map((step) => step.id));
+    if (selectedStepId && stepIds.has(selectedStepId)) {
+      return;
+    }
+    setSelectedStepId(getFirstIssueStepId(diagnosis) ?? steps[0]?.id ?? null);
+  }, [diagnosis, selectedStepId, steps]);
+
+  const focusStep = (stepId: string) => {
+    setSelectedStepId(stepId);
+    scrollToWorkflowStep(stepId);
+  };
 
   const updateStep = (i: number, s: WorkflowStep) =>
     setSteps((p) => p.map((x, j) => (j === i ? s : x)));
@@ -901,16 +1135,20 @@ export function WorkflowEditor({
     });
   const removeStep = (i: number) => setSteps((p) => p.filter((_, j) => j !== i));
   const addStep = (type: StepType = 'agent') =>
-    setSteps((p) => [
-      ...p,
-      {
-        id: newStepId(),
-        type,
-        agentId: type === 'agent' ? '' : undefined,
-        messageTemplate: '{{prev_output}}',
-        condition: 'any',
-      },
-    ]);
+    setSteps((p) => {
+      const stepId = newStepId();
+      setSelectedStepId(stepId);
+      return [
+        ...p,
+        {
+          id: stepId,
+          type,
+          agentId: type === 'agent' ? '' : undefined,
+          messageTemplate: '{{prev_output}}',
+          condition: 'any',
+        },
+      ];
+    });
 
   const handleSave = () => {
     if (!name.trim()) {
@@ -918,18 +1156,7 @@ export function WorkflowEditor({
       return;
     }
     setNameError(false);
-    const now = Date.now();
-    onSave({
-      id: workflow?.id ?? newStepId(),
-      name: name.trim(),
-      description: description.trim() || undefined,
-      steps,
-      publicationTargets: publicationTargets.length > 0 ? publicationTargets : undefined,
-      variables: Object.keys(variables).length ? variables : undefined,
-      inputRequired: inputRequired ? undefined : false,
-      createdAt: workflow?.createdAt ?? now,
-      updatedAt: now,
-    });
+    onSave(buildDraftWorkflow());
   };
 
   return (
@@ -1164,21 +1391,46 @@ export function WorkflowEditor({
       </div>
 
       {/* Pipeline visualizer */}
-      <div className="flex items-center gap-2 overflow-x-auto pb-1">
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-xs text-slate-400">流程结构</span>
+          <span className="text-[11px] text-slate-500">
+            {issueStepCount > 0
+              ? `${issueStepCount} 个步骤存在诊断问题，可点击节点或下方面板快速定位`
+              : '当前未发现可定位的步骤级问题'}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 overflow-x-auto pb-1">
         {steps.map((s, i) => {
           const t: StepType = s.type ?? 'agent';
+          const stepIssues = stepIssueMap[s.id] ?? [];
+          const selected = selectedStepId === s.id;
           return (
             <div key={s.id} className="flex items-center gap-1.5 shrink-0">
-              <div
-                className={`rounded-lg px-3 py-1.5 text-xs font-medium ring-1 ${STEP_TYPE_COLORS[t]}`}
+              <button
+                type="button"
+                onClick={() => focusStep(s.id)}
+                className={`rounded-lg px-3 py-1.5 text-xs font-medium ring-1 transition-colors ${STEP_TYPE_COLORS[t]} ${
+                  selected
+                    ? 'ring-2 ring-offset-2 ring-offset-slate-950 ring-white/80'
+                    : stepIssues.length > 0
+                      ? 'shadow-[0_0_0_1px_rgba(239,68,68,0.45)]'
+                      : ''
+                }`}
               >
                 {s.label ?? s.id}
-              </div>
+                {stepIssues.length > 0 && (
+                  <span className="ml-2 rounded-full bg-red-500/20 px-1.5 py-0.5 text-[10px] text-red-100">
+                    {stepIssues.length}
+                  </span>
+                )}
+              </button>
               {i < steps.length - 1 && <span className="text-slate-600">→</span>}
             </div>
           );
         })}
         {steps.length === 0 && <span className="text-xs text-slate-600">暂无步骤</span>}
+        </div>
       </div>
 
       {/* Steps */}
@@ -1191,10 +1443,13 @@ export function WorkflowEditor({
             total={steps.length}
             agents={agents}
             allSteps={steps}
+            issues={stepIssueMap[s.id] ?? []}
+            selected={selectedStepId === s.id}
             onChange={(updated) => updateStep(i, updated)}
             onMoveUp={() => moveUp(i)}
             onMoveDown={() => moveDown(i)}
             onRemove={() => removeStep(i)}
+            onSelect={() => focusStep(s.id)}
           />
         ))}
 
@@ -1213,6 +1468,111 @@ export function WorkflowEditor({
           ))}
         </div>
       </div>
+
+      {(diagnosisLoading ||
+        diagnosisError ||
+        diagnosis?.validationError ||
+        diagnosis?.validationDiagnostics.length ||
+        diagnosis?.graphDiagnostics.length) && (
+        <div
+          className={`rounded-xl px-4 py-3 flex flex-col gap-2 ring-1 ${
+            diagnosisError || diagnosis?.validationError
+              ? 'bg-red-500/10 ring-red-500/30'
+              : 'bg-amber-500/10 ring-amber-500/30'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div
+                className={`text-sm font-medium ${
+                  diagnosisError || diagnosis?.validationError ? 'text-red-300' : 'text-amber-300'
+                }`}
+              >
+                工作流诊断
+              </div>
+              <div className="text-xs text-slate-500 mt-0.5">
+                保存路径不受影响，这里展示的是实时预诊断结果。
+              </div>
+            </div>
+            {diagnosisLoading && <span className="text-xs text-slate-400">诊断中…</span>}
+          </div>
+
+          {diagnosisError && <div className="text-xs text-red-400">{diagnosisError}</div>}
+          {!diagnosisError && diagnosis?.validationError && (
+            <div className="text-xs text-red-300">{diagnosis.validationError}</div>
+          )}
+          {!diagnosisError && workflowIssueMessages.length > 0 && (
+            <div className="flex flex-col gap-1">
+              {workflowIssueMessages.map((message) => (
+                <div
+                  key={message}
+                  className="text-xs text-amber-100 rounded-lg bg-slate-900/40 px-3 py-2"
+                >
+                  {message}
+                </div>
+              ))}
+            </div>
+          )}
+          {!diagnosisError &&
+            diagnosis &&
+            diagnosis.validationDiagnostics
+              .filter(
+                (diagnostic) =>
+                  diagnostic.kind === 'step-validation' || diagnostic.kind === 'step-advisory',
+              )
+              .map((diagnostic) => (
+                <button
+                  key={`${diagnostic.stepId}:${diagnostic.message}`}
+                  type="button"
+                  onClick={() => focusStep(diagnostic.stepId)}
+                  className={`text-left text-xs rounded-lg bg-slate-900/40 px-3 py-2 hover:bg-slate-900/70 ${
+                    diagnostic.kind === 'step-validation' ? 'text-red-100' : 'text-amber-100'
+                  }`}
+                >
+                  <span
+                    className={`font-medium mr-2 ${
+                      diagnostic.kind === 'step-validation' ? 'text-red-300' : 'text-amber-300'
+                    }`}
+                  >
+                    步骤 {diagnostic.stepId}
+                  </span>
+                  {diagnostic.message}
+                </button>
+              ))}
+          {!diagnosisError && diagnosis && diagnosis.graphDiagnostics.length > 0 && (
+            <div className="flex flex-col gap-1">
+              {diagnosis.graphDiagnostics.map((diagnostic, index) => (
+                <div
+                  key={`${diagnostic.kind}:${index}`}
+                  className="text-xs text-slate-300 rounded-lg bg-slate-900/40 px-3 py-2 flex flex-col gap-2"
+                >
+                  <div>{describeGraphDiagnostic(diagnostic)}</div>
+                  <div className="flex flex-wrap gap-2">
+                    {getDiagnosticStepIds(diagnostic).map((stepId) => (
+                      <button
+                        key={`${diagnostic.kind}:${index}:${stepId}`}
+                        type="button"
+                        onClick={() => focusStep(stepId)}
+                        className="rounded-lg bg-slate-800/90 px-2 py-1 text-[11px] text-slate-200 ring-1 ring-slate-700/60 hover:ring-indigo-500/40"
+                      >
+                        {stepId}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {!diagnosisError &&
+            diagnosis &&
+            !diagnosis.validationError &&
+            diagnosis.validationDiagnostics.length === 0 &&
+            diagnosis.graphDiagnostics.length === 0 &&
+            !diagnosisLoading && (
+            <div className="text-xs text-emerald-400">当前工作流结构诊断正常。</div>
+          )}
+        </div>
+      )}
 
       <div className="flex justify-end">
         <Button size="sm" variant="primary" onClick={handleSave}>

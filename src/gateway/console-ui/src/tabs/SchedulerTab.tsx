@@ -95,6 +95,46 @@ function guessScheduleMode(task: TaskInfo): ScheduleMode {
   return task.cronExpr.startsWith('*/') ? 'interval' : 'cron';
 }
 
+function preferredExecutionAgentId(agents: AgentInfo[]): string {
+  return (
+    agents.find((agent) => agent.sandboxProfile === 'readonly-output')?.agentId ??
+    agents.find((agent) => !!agent.sandboxProfile)?.agentId ??
+    agents[0]?.agentId ??
+    ''
+  );
+}
+
+function formatAgentLabel(agent: AgentInfo): string {
+  const baseLabel = agent.name ?? agent.agentId;
+  return agent.sandboxProfile ? `${baseLabel} [sandbox:${agent.sandboxProfile}]` : baseLabel;
+}
+
+function describeAgentTarget(agentId: string | undefined, agents: AgentInfo[]): string {
+  if (!agentId) return '—';
+  const agent = agents.find((item) => item.agentId === agentId);
+  return agent ? formatAgentLabel(agent) : agentId;
+}
+
+function buildSchedulerAgentAdvisory(agentId: string | undefined, agents: AgentInfo[]): string | null {
+  if (!agentId) {
+    return null;
+  }
+
+  const targetAgent = agents.find((agent) => agent.agentId === agentId);
+  if (!targetAgent || targetAgent.sandboxProfile) {
+    return null;
+  }
+
+  const recommended =
+    agents.find((agent) => agent.sandboxProfile === 'readonly-output') ??
+    agents.find((agent) => !!agent.sandboxProfile);
+  if (recommended && recommended.agentId !== targetAgent.agentId) {
+    return `当前定时任务目标未绑定 sandboxProfile，建议切换到 ${formatAgentLabel(recommended)}。`;
+  }
+
+  return '当前定时任务目标未绑定 sandboxProfile，建议在无人值守执行前绑定 readonly-output 或其他受限 profile。';
+}
+
 function FormModal({
   title,
   description,
@@ -337,7 +377,7 @@ export function SchedulerTab() {
   const agents: AgentInfo[] = Array.isArray(agentResult?.agents) ? agentResult.agents : [];
   const workflows: WorkflowDef[] = workflowResult?.workflows ?? [];
   const channels: ChannelInfo[] = channelResult?.channels ?? [];
-  const defaultAgentId = agents[0]?.agentId ?? '';
+  const defaultAgentId = preferredExecutionAgentId(agents);
   const defaultOutputChannel =
     configResult?.channels?.defaults?.schedulerOutput ??
     configResult?.channels?.defaults?.output ??
@@ -351,6 +391,12 @@ export function SchedulerTab() {
       ),
     [tasks],
   );
+  const taskModalAgentAdvisory = useMemo(() => {
+    if (!taskModal || taskModal.form.targetType !== 'agent') {
+      return null;
+    }
+    return buildSchedulerAgentAdvisory(taskModal.form.agentId, agents);
+  }, [agents, taskModal]);
 
   const openHistory = async (task: TaskInfo) => {
     setHistoryModal({ task, records: [], loading: true });
@@ -592,7 +638,7 @@ export function SchedulerTab() {
                   <div className="flex-1 min-w-0">
                     <span className="text-sm font-medium text-slate-200">{rt.taskName}</span>
                     <span className="ml-2 text-xs text-slate-500">
-                      {rt.workflowId ? `⚡ ${rt.workflowId}` : (rt.agentId ?? '')}
+                      {rt.workflowId ? `⚡ ${rt.workflowId}` : describeAgentTarget(rt.agentId, agents)}
                     </span>
                   </div>
                   <span className="text-xs text-emerald-400 font-mono shrink-0">
@@ -659,7 +705,14 @@ export function SchedulerTab() {
                         {workflows.find((w) => w.id === task.workflowId)?.name ?? task.workflowId}
                       </span>
                     ) : (
-                      (task.agentId ?? '—')
+                      <div className="flex flex-col gap-1">
+                        <span>{describeAgentTarget(task.agentId, agents)}</span>
+                        {task.advisory?.kind === 'sandbox-advisory' && (
+                          <span className="text-[11px] text-amber-300 leading-relaxed">
+                            {task.advisory.message}
+                          </span>
+                        )}
+                      </div>
                     )}
                   </td>
                   <td className="px-4 py-3">
@@ -789,22 +842,29 @@ export function SchedulerTab() {
 
           {taskModal.form.targetType === 'agent' && (
             <Field label="Agent">
-              <select
-                value={taskModal.form.agentId}
-                onChange={(e) =>
-                  setTaskModal({
-                    ...taskModal,
-                    form: { ...taskModal.form, agentId: e.target.value },
-                  })
-                }
-                className="bg-slate-800 border border-slate-600 text-slate-200 text-xs rounded-lg px-2.5 py-2"
-              >
-                {agents.map((a) => (
-                  <option key={a.agentId} value={a.agentId}>
-                    {a.name ?? a.agentId}
-                  </option>
-                ))}
-              </select>
+              <div className="flex flex-col gap-2">
+                <select
+                  value={taskModal.form.agentId}
+                  onChange={(e) =>
+                    setTaskModal({
+                      ...taskModal,
+                      form: { ...taskModal.form, agentId: e.target.value },
+                    })
+                  }
+                  className="bg-slate-800 border border-slate-600 text-slate-200 text-xs rounded-lg px-2.5 py-2"
+                >
+                  {agents.map((a) => (
+                    <option key={a.agentId} value={a.agentId}>
+                      {formatAgentLabel(a)}
+                    </option>
+                  ))}
+                </select>
+                {taskModalAgentAdvisory && (
+                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200 leading-relaxed">
+                    {taskModalAgentAdvisory}
+                  </div>
+                )}
+              </div>
             </Field>
           )}
 
@@ -928,7 +988,7 @@ export function SchedulerTab() {
               <option value="">(none)</option>
               {agents.map((a) => (
                 <option key={a.agentId} value={a.agentId}>
-                  {a.name ?? a.agentId}
+                  {formatAgentLabel(a)}
                 </option>
               ))}
             </select>

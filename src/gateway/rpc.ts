@@ -6,7 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { Cron } from 'croner';
 import { ulid } from 'ulid';
 import type { AgentRunner } from '../agent/runner.js';
-import type { ScheduledTaskMeta } from '../agent/tools/builtin/scheduler-tools.js';
+import {
+  type ScheduledTaskRecord,
+  stripTaskExecutionSummary,
+} from '../agent/tools/builtin/scheduler-task-meta.js';
 import type { Channel } from '../channels/types.js';
 import type { Config } from '../core/config/schema.js';
 import { createLogger } from '../core/logger.js';
@@ -23,6 +26,11 @@ import { searchMemory } from '../memory/search.js';
 import type { MemoryStore } from '../memory/store.js';
 import type { MeshRegistry } from '../mesh/registry.js';
 import type { CronScheduler } from '../scheduler/cron.js';
+import {
+  appendScheduledTaskHistoryRecord,
+  buildScheduledTaskExecutionSummaryById,
+  readScheduledTaskHistory,
+} from '../scheduler/task-history.js';
 import { scanSkillsDir } from '../skills/registry.js';
 import { getAgentKernelService } from './agent-kernel.js';
 import type { ContentStore } from './content-store.js';
@@ -166,7 +174,7 @@ function buildAvailableChannelTargets(
 
 function buildSchedulerPublicationTargets(
   ctx: RpcContext,
-  task: ScheduledTaskMeta,
+  task: ScheduledTaskRecord,
   fileArtifacts: import('./deliverables.js').ArtifactRef[],
 ): DeliverablePublicationTarget[] {
   const planned: DeliverablePublicationTarget[] = [];
@@ -391,18 +399,70 @@ function intervalToCron(minutes: number): string {
   return `0 */${hours} * * *`;
 }
 
-async function readTasksFile(dataDir: string): Promise<ScheduledTaskMeta[]> {
+interface SchedulerTargetAdvisory {
+  kind: 'sandbox-advisory';
+  message: string;
+  recommendedAgentId?: string;
+  recommendedSandboxProfile?: string;
+}
+
+function recommendSandboxSchedulerAgent(
+  agents: Array<{ id: string; tools?: { sandboxProfile?: string } }>,
+): { id: string; sandboxProfile: string } | null {
+  const preferred =
+    agents.find((agent) => agent.tools?.sandboxProfile === 'readonly-output') ??
+    agents.find((agent) => !!agent.tools?.sandboxProfile);
+  if (!preferred?.tools?.sandboxProfile) {
+    return null;
+  }
+  return {
+    id: preferred.id,
+    sandboxProfile: preferred.tools.sandboxProfile,
+  };
+}
+
+function buildSchedulerTargetAdvisory(
+  task: Pick<ScheduledTaskRecord, 'agentId' | 'workflowId'>,
+  agents: Array<{ id: string; tools?: { sandboxProfile?: string } }>,
+): SchedulerTargetAdvisory | undefined {
+  if (task.workflowId || !task.agentId) {
+    return undefined;
+  }
+
+  const targetAgent = agents.find((agent) => agent.id === task.agentId);
+  if (!targetAgent || targetAgent.tools?.sandboxProfile) {
+    return undefined;
+  }
+
+  const recommended = recommendSandboxSchedulerAgent(agents);
+  if (recommended && recommended.id !== targetAgent.id) {
+    return {
+      kind: 'sandbox-advisory',
+      message: `scheduled task targets '${targetAgent.id}' without sandboxProfile. Prefer '${recommended.id}' (sandbox:${recommended.sandboxProfile}) for unattended execution.`,
+      recommendedAgentId: recommended.id,
+      recommendedSandboxProfile: recommended.sandboxProfile,
+    };
+  }
+
+  return {
+    kind: 'sandbox-advisory',
+    message:
+      'scheduled task targets an agent without sandboxProfile. Consider binding readonly-output or another sandbox profile before unattended execution.',
+  };
+}
+
+async function readTasksFile(dataDir: string): Promise<ScheduledTaskRecord[]> {
   const tasksFile = join(dataDir, 'scheduled-tasks.json');
   if (!existsSync(tasksFile)) return [];
   try {
     const raw = await readFile(tasksFile, 'utf-8');
-    return JSON.parse(raw) as ScheduledTaskMeta[];
+    return JSON.parse(raw) as ScheduledTaskRecord[];
   } catch {
     return [];
   }
 }
 
-async function writeTasksFile(dataDir: string, tasks: ScheduledTaskMeta[]): Promise<void> {
+async function writeTasksFile(dataDir: string, tasks: ScheduledTaskRecord[]): Promise<void> {
   const tasksFile = join(dataDir, 'scheduled-tasks.json');
   await writeFile(
     tasksFile,
@@ -411,14 +471,9 @@ async function writeTasksFile(dataDir: string, tasks: ScheduledTaskMeta[]): Prom
   );
 }
 
-function stripTaskExecutionSummary(task: ScheduledTaskMeta): ScheduledTaskMeta {
-  const { lastRunAt, lastResult, latestDeliverableId, ...rest } = task;
-  return rest;
-}
-
 async function runAgentTask(
   ctx: RpcContext,
-  task: ScheduledTaskMeta,
+  task: ScheduledTaskRecord,
   thread: string,
 ): Promise<string> {
   const agentId = task.agentId;
@@ -432,75 +487,9 @@ async function runAgentTask(
   return result.text || '(no output)';
 }
 
-interface TaskRunRecord {
-  taskId: string;
-  taskName: string;
-  runKey: string;
-  startedAt: number;
-  finishedAt: number;
-  ok: boolean;
-  result: string;
-  agentId?: string;
-  workflowId?: string;
-  workflowRunId?: string;
-  deliverableId?: string;
-}
-
-type TaskExecutionSummary = Pick<
-  ScheduledTaskMeta,
-  'lastRunAt' | 'lastResult' | 'latestDeliverableId'
->;
-
-const HISTORY_MAX_PER_TASK = 50;
-
-async function readHistoryFile(dataDir: string): Promise<TaskRunRecord[]> {
-  const file = join(dataDir, 'task-run-history.json');
-  if (!existsSync(file)) return [];
-  try {
-    return JSON.parse(await readFile(file, 'utf-8')) as TaskRunRecord[];
-  } catch {
-    return [];
-  }
-}
-
-async function appendHistoryRecord(dataDir: string, record: TaskRunRecord): Promise<void> {
-  let history = await readHistoryFile(dataDir);
-  history.unshift(record);
-  // Keep at most HISTORY_MAX_PER_TASK records per task; cap total at 1000
-  const countByTask = new Map<string, number>();
-  history = history.filter((r) => {
-    const n = (countByTask.get(r.taskId) ?? 0) + 1;
-    countByTask.set(r.taskId, n);
-    return n <= HISTORY_MAX_PER_TASK;
-  });
-  if (history.length > 1000) history = history.slice(0, 1000);
-  await writeFile(
-    join(dataDir, 'task-run-history.json'),
-    JSON.stringify(history, null, 2),
-    'utf-8',
-  );
-}
-
-function buildTaskExecutionSummaryById(
-  history: TaskRunRecord[],
-): Map<string, TaskExecutionSummary> {
-  const summaryByTaskId = new Map<string, TaskExecutionSummary>();
-  for (const record of history) {
-    if (summaryByTaskId.has(record.taskId)) {
-      continue;
-    }
-    summaryByTaskId.set(record.taskId, {
-      lastRunAt: record.finishedAt,
-      lastResult: record.result.slice(0, 500),
-      latestDeliverableId: record.deliverableId,
-    });
-  }
-  return summaryByTaskId;
-}
-
 async function createSchedulerDeliverableRecord(
   ctx: RpcContext,
-  task: ScheduledTaskMeta,
+  task: ScheduledTaskRecord,
   startedAt: number,
   finishedAt: number,
   ok: boolean,
@@ -605,7 +594,7 @@ function scheduleRuntimeTask(ctx: RpcContext, taskId: string): void {
           });
           return null;
         });
-        await appendHistoryRecord(ctx.dataDir, {
+        await appendScheduledTaskHistoryRecord(ctx.dataDir, {
           taskId: current.id,
           taskName: current.name,
           runKey: makeSchedulerRunKey(current.id, startedAt),
@@ -641,9 +630,6 @@ function scheduleRuntimeTask(ctx: RpcContext, taskId: string): void {
             ? {
                 ...t,
                 runCount: t.runCount + 1,
-                lastRunAt: finishedAt,
-                lastResult: result.slice(0, 500),
-                latestDeliverableId: deliverable?.id,
               }
             : t,
         );
@@ -769,6 +755,7 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
                 agentId,
                 name: cfg?.name ?? agentId,
                 mentionAliases: cfg?.mentionAliases ?? [],
+                sandboxProfile: cfg?.tools?.sandboxProfile,
                 model:
                   cfg?.model ?? (ctx.getConfig().defaults as Record<string, unknown>)?.model ?? '',
                 role: (cfg as unknown as Record<string, unknown>)?.role ?? 'worker',
@@ -1013,11 +1000,15 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
 
       case 'scheduler.list': {
         const tasks = await readTasksFile(ctx.dataDir);
-        const summaryByTaskId = buildTaskExecutionSummaryById(await readHistoryFile(ctx.dataDir));
+        const summaryByTaskId = buildScheduledTaskExecutionSummaryById(
+          await readScheduledTaskHistory(ctx.dataDir),
+        );
+        const configuredAgents = ctx.getConfig().agents ?? [];
         const enriched = tasks.map((t) => ({
           ...stripTaskExecutionSummary(t),
           ...summaryByTaskId.get(t.id),
           nextRunAt: ctx.scheduler.get(t.id)?.nextRunAt,
+          advisory: buildSchedulerTargetAdvisory(t, configuredAgents),
         }));
         return { id, result: { tasks: enriched } };
       }
@@ -1073,7 +1064,7 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
           return buildErrorResponse(id, -32602, String(err));
         }
 
-        const task: ScheduledTaskMeta = {
+        const task: ScheduledTaskRecord = {
           id: ulid(),
           name: p.name,
           agentId: p.agentId,
@@ -1098,7 +1089,15 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         await writeTasksFile(ctx.dataDir, tasks);
         if (task.enabled !== false) scheduleRuntimeTask(ctx, task.id);
 
-        return { id, result: { task } };
+        return {
+          id,
+          result: {
+            task: {
+              ...task,
+              advisory: buildSchedulerTargetAdvisory(task, ctx.getConfig().agents ?? []),
+            },
+          },
+        };
       }
 
       case 'scheduler.update': {
@@ -1157,7 +1156,7 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
           }
         }
 
-        const updated: ScheduledTaskMeta = {
+        const updated: ScheduledTaskRecord = {
           ...current,
           name: p.name ?? current.name,
           agentId: nextAgentId,
@@ -1176,7 +1175,15 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         ctx.scheduler.cancel(updated.id);
         if (updated.enabled !== false) scheduleRuntimeTask(ctx, updated.id);
 
-        return { id, result: { task: updated } };
+        return {
+          id,
+          result: {
+            task: {
+              ...updated,
+              advisory: buildSchedulerTargetAdvisory(updated, ctx.getConfig().agents ?? []),
+            },
+          },
+        };
       }
 
       case 'scheduler.preview': {
@@ -1266,7 +1273,7 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
           });
           return null;
         });
-        await appendHistoryRecord(ctx.dataDir, {
+        await appendScheduledTaskHistoryRecord(ctx.dataDir, {
           taskId: current.id,
           taskName: current.name,
           runKey: makeSchedulerRunKey(current.id, startedAt),
@@ -1300,9 +1307,6 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
             ? {
                 ...t,
                 runCount: t.runCount + 1,
-                lastRunAt: finishedAt,
-                lastResult: result.slice(0, 500),
-                latestDeliverableId: deliverable?.id,
               }
             : t,
         );
@@ -1337,7 +1341,7 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
 
       case 'scheduler.history': {
         const { taskId: histTaskId } = (params ?? {}) as { taskId?: string };
-        const allHistory = await readHistoryFile(ctx.dataDir);
+        const allHistory = await readScheduledTaskHistory(ctx.dataDir);
         const records = histTaskId ? allHistory.filter((r) => r.taskId === histTaskId) : allHistory;
         return { id, result: { records: records.slice(0, 100) } };
       }

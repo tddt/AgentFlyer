@@ -116,6 +116,8 @@ const ToolsConfigSchema = z.object({
   approval: z.array(z.string()).default(['bash']),
   /** Safety cap for the number of tool-invoking rounds in a single turn. */
   maxRounds: z.number().int().positive().default(60),
+  /** Optional sandbox profile override for execution tools such as bash. */
+  sandboxProfile: z.string().optional(),
 });
 
 // ─── Agent ───────────────────────────────────────────────────────────────────
@@ -236,6 +238,54 @@ const MemoryConfigSchema = z.object({
   embed: EmbedConfigSchema.default({}),
   decay: MemoryDecaySchema.default({}),
   maxEntries: z.number().int().positive().default(10000),
+});
+
+// ─── Sandbox ─────────────────────────────────────────────────────────────────
+
+const SandboxNetworkSchema = z.enum(['none', 'egress-allowlist', 'full']);
+
+const SandboxProfileSchema = z.object({
+  network: SandboxNetworkSchema.default('none'),
+  cpu: z.number().positive().default(1),
+  memoryMb: z.number().int().positive().default(512),
+  timeoutMs: z.number().int().positive().default(30_000),
+  writableMounts: z.array(z.string()).default(['workspace:/workspace']),
+  readOnlyMounts: z.array(z.string()).default([]),
+});
+
+export const DEFAULT_SANDBOX_PROFILES: Record<string, z.infer<typeof SandboxProfileSchema>> = {
+  restricted: {
+    network: 'none',
+    cpu: 1,
+    memoryMb: 512,
+    timeoutMs: 30_000,
+    writableMounts: ['workspace:/workspace'],
+    readOnlyMounts: ['skills:/skills'],
+  },
+  'readonly-output': {
+    network: 'none',
+    cpu: 1,
+    memoryMb: 512,
+    timeoutMs: 30_000,
+    writableMounts: ['output:/workspace/output'],
+    readOnlyMounts: ['workspace:/workspace', 'skills:/skills'],
+  },
+  integration: {
+    network: 'full',
+    cpu: 2,
+    memoryMb: 1024,
+    timeoutMs: 120_000,
+    writableMounts: ['workspace:/workspace'],
+    readOnlyMounts: ['skills:/skills'],
+  },
+};
+
+const SandboxConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  provider: z.enum(['docker']).default('docker'),
+  image: z.string().default('node:22-bookworm-slim'),
+  defaultProfile: z.string().default('restricted'),
+  profiles: z.record(z.string(), SandboxProfileSchema).default(DEFAULT_SANDBOX_PROFILES),
 });
 
 // ─── Federation ───────────────────────────────────────────────────────────────
@@ -460,6 +510,7 @@ export const ConfigSchema = z.object({
   ]),
   skills: SkillsConfigSchema.default({}),
   memory: MemoryConfigSchema.default({}),
+  sandbox: SandboxConfigSchema.default({}),
   search: SearchConfigSchema.default({}),
   federation: FederationConfigSchema.default({}),
   channels: ChannelsConfigSchema.default({}),
@@ -481,6 +532,8 @@ export type ContextConfig = z.infer<typeof ContextConfigSchema>;
 export type ToolsConfig = z.infer<typeof ToolsConfigSchema>;
 export type FederationConfig = z.infer<typeof FederationConfigSchema>;
 export type MemoryConfig = z.infer<typeof MemoryConfigSchema>;
+export type SandboxProfileConfig = z.infer<typeof SandboxProfileSchema>;
+export type SandboxConfig = z.infer<typeof SandboxConfigSchema>;
 export type ChannelsConfig = z.infer<typeof ChannelsConfigSchema>;
 export type RoutingConfig = z.infer<typeof RoutingConfigSchema>;
 export type LogConfig = z.infer<typeof LogConfigSchema>;

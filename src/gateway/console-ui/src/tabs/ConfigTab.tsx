@@ -375,6 +375,23 @@ interface FederationConfig {
   };
 }
 
+interface SandboxProfileSummary {
+  network: 'none' | 'bridge' | 'full';
+  cpu: number;
+  memoryMb: number;
+  timeoutMs: number;
+  writableMounts: string[];
+  readOnlyMounts: string[];
+}
+
+interface SandboxConfig {
+  enabled: boolean;
+  provider: 'host' | 'docker';
+  image?: string;
+  defaultProfile?: string;
+  profiles?: Record<string, SandboxProfileSummary>;
+}
+
 interface AgentConfig {
   id: string;
   name?: string;
@@ -390,7 +407,13 @@ interface AgentConfig {
     triggers: string[];
   };
   owners: string[];
-  tools: { allow?: string[]; deny: string[]; approval: string[]; maxRounds: number };
+  tools: {
+    allow?: string[];
+    deny: string[];
+    approval: string[];
+    maxRounds: number;
+    sandboxProfile?: string;
+  };
   persona: { language: string; outputDir: string };
   soulFile?: string;
   agentsFile?: string;
@@ -451,6 +474,7 @@ interface ConfigShape {
   skills: SkillsConfig;
   search: SearchConfig;
   memory: MemoryConfig;
+  sandbox?: SandboxConfig;
   federation: FederationConfig;
   channels: ChannelsConfig;
   log: LogConfig;
@@ -532,13 +556,25 @@ function defaultAgent(index: number): AgentConfig {
       triggers: [],
     },
     owners: [],
-    tools: { allow: [], deny: [], approval: ['bash'], maxRounds: 60 },
+    tools: { allow: [], deny: [], approval: ['bash'], maxRounds: 60, sandboxProfile: '' },
     persona: { language: 'zh-CN', outputDir: 'output' },
   };
 }
 
 function defaultPeer(index: number): FederationPeer {
   return { nodeId: `peer-${index + 1}`, host: '127.0.0.1', port: 19789, publicKeyHex: '' };
+}
+
+function normalizeAgentDraft(agent: AgentConfig): AgentConfig {
+  const sandboxProfile = agent.tools.sandboxProfile?.trim();
+
+  return {
+    ...agent,
+    tools: {
+      ...agent.tools,
+      sandboxProfile: sandboxProfile ? sandboxProfile : undefined,
+    },
+  };
 }
 
 function ensureConfigShape(raw: unknown): ConfigShape {
@@ -1049,6 +1085,8 @@ interface PanelProps {
   onChange: (next: ConfigShape) => void;
   modelKeys: string[];
   availableSkills: SkillInfo[];
+  sandboxProfileOptions: string[];
+  defaultSandboxProfile?: string;
   groupModal: GroupModalState | null;
   setGroupModal: (m: GroupModalState | null) => void;
   modelInGroupModal: ModelInGroupModalState | null;
@@ -1652,11 +1690,20 @@ function AgentsPanel({
   onChange,
   modelKeys,
   availableSkills,
+  sandboxProfileOptions,
+  defaultSandboxProfile,
   agentModal,
   setAgentModal,
 }: Pick<
   PanelProps,
-  'cfg' | 'onChange' | 'modelKeys' | 'availableSkills' | 'agentModal' | 'setAgentModal'
+  | 'cfg'
+  | 'onChange'
+  | 'modelKeys'
+  | 'availableSkills'
+  | 'sandboxProfileOptions'
+  | 'defaultSandboxProfile'
+  | 'agentModal'
+  | 'setAgentModal'
 >) {
   return (
     <PanelSection
@@ -1686,6 +1733,7 @@ function AgentsPanel({
               <div className="text-xs text-slate-500 mt-0.5">
                 model={agent.model || '(default)'} · role={agent.mesh.role} · accepts:{' '}
                 <ListSummary values={agent.mesh.accepts} />
+                {agent.tools.sandboxProfile ? ` · sandbox=${agent.tools.sandboxProfile}` : ''}
               </div>
               {(agent.soulFile || agent.agentsFile) && (
                 <div className="text-xs text-slate-500 mt-0.5">
@@ -1714,7 +1762,11 @@ function AgentsPanel({
                     draft: {
                       ...agent,
                       mesh: { ...agent.mesh },
-                      tools: { ...agent.tools, maxRounds: agent.tools.maxRounds ?? 60 },
+                      tools: {
+                        ...agent.tools,
+                        maxRounds: agent.tools.maxRounds ?? 60,
+                        sandboxProfile: agent.tools.sandboxProfile ?? '',
+                      },
                       persona: { ...agent.persona },
                     },
                   })
@@ -2384,6 +2436,11 @@ export function ConfigTab() {
       Object.keys(grp.models ?? {}).map((m) => `${g}/${m}`),
     );
   }, [cfg]);
+  const sandboxProfileOptions = useMemo(() => {
+    if (!cfg?.sandbox?.profiles) return [];
+    return Object.keys(cfg.sandbox.profiles).sort((left, right) => left.localeCompare(right));
+  }, [cfg]);
+  const defaultSandboxProfile = cfg?.sandbox?.defaultProfile;
 
   function handleCfgChange(next: ConfigShape) {
     setCfg(next);
@@ -2443,6 +2500,8 @@ export function ConfigTab() {
     onChange: handleCfgChange,
     modelKeys,
     availableSkills,
+    sandboxProfileOptions,
+    defaultSandboxProfile,
     groupModal,
     setGroupModal,
     modelInGroupModal,
@@ -2705,8 +2764,9 @@ export function ConfigTab() {
           onClose={() => setAgentModal(null)}
           onSubmit={() => {
             const list = [...cfg.agents];
-            if (agentModal.mode === 'add') list.push(agentModal.draft);
-            else if (agentModal.index !== undefined) list[agentModal.index] = agentModal.draft;
+            const normalizedDraft = normalizeAgentDraft(agentModal.draft);
+            if (agentModal.mode === 'add') list.push(normalizedDraft);
+            else if (agentModal.index !== undefined) list[agentModal.index] = normalizedDraft;
             handleCfgChange({ ...cfg, agents: list });
             setAgentModal(null);
           }}
@@ -2875,6 +2935,38 @@ export function ConfigTab() {
               })
             }
           />
+          <FieldRow>
+            <FieldLabel
+              label="Sandbox profile"
+              help={`Optional sandbox profile override for execution tools. Leave blank to use sandbox.defaultProfile${defaultSandboxProfile ? ` (${defaultSandboxProfile})` : ''}.`}
+            />
+            <select
+              value={agentModal.draft.tools.sandboxProfile ?? ''}
+              onChange={(e) => {
+                const sandboxProfile = e.target.value;
+                setAgentModal({
+                  ...agentModal,
+                  draft: {
+                    ...agentModal.draft,
+                    tools: {
+                      ...agentModal.draft.tools,
+                      sandboxProfile,
+                    },
+                  },
+                });
+              }}
+              className={selectCls}
+            >
+              <option value="">
+                Use sandbox.defaultProfile{defaultSandboxProfile ? ` (${defaultSandboxProfile})` : ''}
+              </option>
+              {sandboxProfileOptions.map((profileName) => (
+                <option key={profileName} value={profileName}>
+                  {profileName}
+                </option>
+              ))}
+            </select>
+          </FieldRow>
           <TagInputRow
             label="Triggers"
             help="Keywords that activate this agent. Press Enter or comma to add each trigger."

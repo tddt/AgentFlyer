@@ -48,6 +48,7 @@ import { asAgentId, asThreadKey } from '../core/types.js';
 import { FederationNode } from '../federation/node.js';
 import { MemoryOrganizer } from '../memory/organizer.js';
 import { MemoryStore } from '../memory/store.js';
+import { createSandboxRuntime } from '../sandbox/runtime.js';
 import { CronScheduler } from '../scheduler/cron.js';
 import { filterSkillsForAgent } from '../skills/filter.js';
 import { buildSkillsDirectory } from '../skills/format.js';
@@ -321,6 +322,7 @@ function buildRunner(
 
   // Tool registry
   const tools = new ToolRegistry();
+  const sandboxRuntime = createSandboxRuntime({ dataDir, config: config.sandbox });
   // Pass skill dirs so the agent can read files inside skill directories
   const skillAllowedDirs = agentSkillRegistry
     ? agentSkillRegistry.list().map((s) => dirname(s.filePath))
@@ -328,9 +330,12 @@ function buildRunner(
   tools.registerMany(createFsTools(workspaceDir, skillAllowedDirs));
   tools.register(
     createBashTool({
+      dataDir,
+      runtime: sandboxRuntime,
       cwd: workspaceDir,
       workspaceDir,
       outputDir: agentCfg.persona?.outputDir ?? 'output',
+      sandboxProfile: agentCfg.tools.sandboxProfile,
       mirrorDirs: skillAllowedDirs,
     }),
   );

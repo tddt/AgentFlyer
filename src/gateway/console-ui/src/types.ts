@@ -11,6 +11,7 @@ export interface AgentInfo {
   agentId: string;
   name?: string;
   mentionAliases?: string[];
+  sandboxProfile?: string;
 }
 
 export interface AgentConfig {
@@ -58,6 +59,13 @@ export interface PublicationTargetConfig {
   agentId?: string;
 }
 
+export interface SchedulerTargetAdvisory {
+  kind: 'sandbox-advisory';
+  message: string;
+  recommendedAgentId?: string;
+  recommendedSandboxProfile?: string;
+}
+
 export interface TaskInfo {
   id: string;
   name: string;
@@ -78,6 +86,7 @@ export interface TaskInfo {
   nextRunAt?: number;
   lastResult?: string;
   latestDeliverableId?: string;
+  advisory?: SchedulerTargetAdvisory;
 }
 
 export interface SchedulerListResult {
@@ -345,6 +354,58 @@ export interface WorkflowDef {
   inputRequired?: boolean;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface WorkflowGraphCycleDiagnostic {
+  kind: 'cycle';
+  entryStepId: string;
+  stepId: string;
+  path: string[];
+}
+
+export interface WorkflowGraphUnreachableDiagnostic {
+  kind: 'unreachable';
+  entryStepId: string;
+  stepIds: string[];
+}
+
+export interface WorkflowStepValidationDiagnostic {
+  kind: 'step-validation';
+  stepId: string;
+  message: string;
+}
+
+export interface WorkflowStepAdvisoryDiagnostic {
+  kind: 'step-advisory';
+  stepId: string;
+  message: string;
+}
+
+export interface WorkflowWorkflowValidationDiagnostic {
+  kind: 'workflow-validation';
+  message: string;
+}
+
+export interface WorkflowWorkflowAdvisoryDiagnostic {
+  kind: 'workflow-advisory';
+  message: string;
+}
+
+export type WorkflowGraphDiagnostic =
+  | WorkflowGraphCycleDiagnostic
+  | WorkflowGraphUnreachableDiagnostic;
+
+export type WorkflowValidationDiagnostic =
+  | WorkflowStepValidationDiagnostic
+  | WorkflowStepAdvisoryDiagnostic
+  | WorkflowWorkflowValidationDiagnostic
+  | WorkflowWorkflowAdvisoryDiagnostic;
+
+export interface WorkflowDiagnoseResult {
+  valid: boolean;
+  validationError: string | null;
+  validationDiagnostics: WorkflowValidationDiagnostic[];
+  graphDiagnostics: WorkflowGraphDiagnostic[];
 }
 
 export interface WorkflowStepResult {

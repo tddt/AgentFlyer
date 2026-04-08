@@ -3,9 +3,19 @@ import { join } from 'node:path';
 import { ulid } from 'ulid';
 import { createLogger } from '../../../core/logger.js';
 import type { CronScheduler } from '../../../scheduler/cron.js';
+import {
+  appendScheduledTaskHistoryRecord,
+  buildScheduledTaskExecutionSummaryById,
+  readScheduledTaskHistory,
+} from '../../../scheduler/task-history.js';
 import { executeAgentTurnViaKernel } from '../../kernel-turn-executor.js';
 import type { AgentRunner } from '../../runner.js';
 import type { RegisteredTool } from '../registry.js';
+import {
+  type ScheduledTaskRecord,
+  type ScheduledTaskView,
+  stripTaskExecutionSummary,
+} from './scheduler-task-meta.js';
 
 const logger = createLogger('tools:scheduler');
 
@@ -42,34 +52,9 @@ async function runTurn(
 
 // ── task metadata store (persistent JSON) ─────────────────────────────────
 
-export interface ScheduledTaskMeta {
-  id: string;
-  name: string;
-  /** agentId is required for agent-targeted tasks; omit when workflowId is set. */
-  agentId?: string;
-  /** When set, the task triggers this workflow instead of an agent. */
-  workflowId?: string;
-  message: string;
-  cronExpr: string;
-  reportTo?: string;
-  outputChannel?: 'logs' | 'cli' | 'web';
-  publicationTargets?: Array<{
-    channelId: string;
-    threadKey: string;
-    agentId?: string;
-  }>;
-  publicationChannels?: string[];
-  enabled?: boolean;
-  createdAt: number;
-  runCount: number;
-  lastRunAt?: number;
-  lastResult?: string;
-  latestDeliverableId?: string;
-}
-
 class TaskStore {
   private readonly filePath: string;
-  private tasks = new Map<string, ScheduledTaskMeta>();
+  private tasks = new Map<string, ScheduledTaskRecord>();
 
   constructor(dataDir: string) {
     mkdirSync(dataDir, { recursive: true });
@@ -81,8 +66,22 @@ class TaskStore {
     if (!existsSync(this.filePath)) return;
     try {
       const raw = readFileSync(this.filePath, 'utf-8');
-      const arr = JSON.parse(raw) as ScheduledTaskMeta[];
-      for (const t of arr) this.tasks.set(t.id, t);
+      const arr = JSON.parse(raw) as ScheduledTaskView[];
+      let strippedLegacySummary = false;
+      for (const task of arr) {
+        if (
+          task.lastRunAt !== undefined ||
+          task.lastResult !== undefined ||
+          task.latestDeliverableId !== undefined
+        ) {
+          strippedLegacySummary = true;
+        }
+        const normalized = stripTaskExecutionSummary(task);
+        this.tasks.set(normalized.id, normalized);
+      }
+      if (strippedLegacySummary) {
+        this.save();
+      }
       logger.info('Loaded scheduled tasks', { count: this.tasks.size });
     } catch (err) {
       logger.warn('Failed to load scheduled-tasks.json, starting fresh', { error: String(err) });
@@ -93,7 +92,7 @@ class TaskStore {
     try {
       writeFileSync(
         this.filePath,
-        JSON.stringify(Array.from(this.tasks.values()), null, 2),
+        JSON.stringify(Array.from(this.tasks.values()).map(stripTaskExecutionSummary), null, 2),
         'utf-8',
       );
     } catch (err) {
@@ -104,22 +103,22 @@ class TaskStore {
   has(id: string): boolean {
     return this.tasks.has(id);
   }
-  get(id: string): ScheduledTaskMeta | undefined {
+  get(id: string): ScheduledTaskRecord | undefined {
     return this.tasks.get(id);
   }
-  all(): ScheduledTaskMeta[] {
+  all(): ScheduledTaskRecord[] {
     return Array.from(this.tasks.values());
   }
   size(): number {
     return this.tasks.size;
   }
 
-  set(meta: ScheduledTaskMeta): void {
+  set(meta: ScheduledTaskRecord): void {
     this.tasks.set(meta.id, meta);
     this.save();
   }
 
-  update(id: string, patch: Partial<ScheduledTaskMeta>): void {
+  update(id: string, patch: Partial<ScheduledTaskRecord>): void {
     const existing = this.tasks.get(id);
     if (!existing) return;
     Object.assign(existing, patch);
@@ -158,7 +157,7 @@ export function createSchedulerTools(
   const taskStore = store;
 
   /** Wire up the cron handler for a given task spec (used for new + restored tasks). */
-  function scheduleTaskHandler(meta: ScheduledTaskMeta): void {
+  function scheduleTaskHandler(meta: ScheduledTaskRecord): void {
     scheduler.schedule({
       id: meta.id,
       expression: meta.cronExpr,
@@ -190,21 +189,44 @@ export function createSchedulerTools(
           agentId: current.agentId,
         });
         const thread = `sched-${meta.id}-run-${current.runCount + 1}`;
+        const startedAt = Date.now();
         let result: string;
+        let runOk = false;
         try {
           result = await runTurn(current.agentId, workerRunner, current.message, thread, dataDir);
-          taskStore.update(meta.id, {
-            runCount: current.runCount + 1,
-            lastRunAt: Date.now(),
-            lastResult: result.slice(0, 500),
-          });
-          logger.info('Scheduled task complete', { taskId: meta.id, name: current.name });
+          runOk = !result.startsWith('Error:');
         } catch (err) {
           result = `Error: ${String(err)}`;
+          runOk = false;
+        }
+
+        const finishedAt = Date.now();
+        taskStore.update(meta.id, {
+          runCount: current.runCount + 1,
+        });
+        await appendScheduledTaskHistoryRecord(dataDir, {
+          taskId: current.id,
+          taskName: current.name,
+          runKey: thread,
+          startedAt,
+          finishedAt,
+          ok: runOk,
+          result: result.slice(0, 2000),
+          agentId: current.agentId,
+        }).catch((err) =>
+          logger.warn('Failed to write task run history', {
+            taskId: current.id,
+            error: String(err),
+          }),
+        );
+
+        if (runOk) {
+          logger.info('Scheduled task complete', { taskId: meta.id, name: current.name });
+        } else {
           logger.error('Scheduled task failed', {
             taskId: meta.id,
             name: current.name,
-            error: String(err),
+            error: result,
           });
         }
 
@@ -327,7 +349,7 @@ export function createSchedulerTools(
       }
 
       const taskId = ulid();
-      const meta: ScheduledTaskMeta = {
+      const meta: ScheduledTaskRecord = {
         id: taskId,
         name,
         agentId: agent_id,
@@ -372,8 +394,14 @@ export function createSchedulerTools(
       if (taskStore.size() === 0) {
         return { isError: false, content: 'No scheduled tasks.' };
       }
+      const summaryByTaskId = buildScheduledTaskExecutionSummaryById(
+        await readScheduledTaskHistory(dataDir),
+      );
       const lines = taskStore.all().map((m) => {
-        const lastRun = m.lastRunAt ? new Date(m.lastRunAt).toLocaleString() : 'never';
+        const summary = summaryByTaskId.get(m.id);
+        const lastRunAt = summary?.lastRunAt;
+        const lastResult = summary?.lastResult;
+        const lastRun = lastRunAt ? new Date(lastRunAt).toLocaleString() : 'never';
         const cronJob = scheduler.get(m.id);
         const nextRun = cronJob?.nextRunAt ? new Date(cronJob.nextRunAt).toLocaleString() : 'n/a';
         return [
@@ -381,7 +409,7 @@ export function createSchedulerTools(
           `  agent: ${m.agentId} | cron: ${m.cronExpr} | runs: ${m.runCount}`,
           `  last: ${lastRun} | next: ${nextRun}`,
           m.reportTo ? `  reports to: ${m.reportTo}` : '',
-          m.lastResult ? `  last result preview: ${m.lastResult.slice(0, 80)}…` : '',
+          lastResult ? `  last result preview: ${lastResult.slice(0, 80)}…` : '',
         ]
           .filter(Boolean)
           .join('\n');

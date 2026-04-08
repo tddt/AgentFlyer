@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ulid } from 'ulid';
-import type { ScheduledTaskMeta } from '../agent/tools/builtin/scheduler-tools.js';
+import type { ScheduledTaskRecord } from '../agent/tools/builtin/scheduler-task-meta.js';
 import type { ContentItem } from './content-store.js';
 import type { WorkflowDef, WorkflowRunRecord } from './workflow-backend.js';
 
@@ -360,7 +360,7 @@ export function buildWorkflowDeliverable(
 }
 
 export interface SchedulerDeliverableOptions {
-  task: ScheduledTaskMeta;
+  task: ScheduledTaskRecord;
   startedAt: number;
   finishedAt: number;
   ok: boolean;

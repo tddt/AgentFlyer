@@ -7,6 +7,9 @@ import { DeliverableStore } from './deliverables.js';
 import type { RpcContext } from './rpc.js';
 import {
   type WorkflowDef,
+  type WorkflowRunRecord,
+  diagnoseWorkflowGraph,
+  diagnoseWorkflowValidation,
   dispatchWorkflowRpc,
   runWorkflowForScheduler,
   validateWorkflowDef,
@@ -217,6 +220,17 @@ function createRpcContext(dataDir: string, runner: AgentRunner = createRunner())
   };
 }
 
+function createRpcContextWithConfig(
+  dataDir: string,
+  config: { agents?: Array<{ id: string; tools?: { sandboxProfile?: string } }> },
+  runner: AgentRunner = createRunner(),
+): RpcContext {
+  return {
+    ...createRpcContext(dataDir, runner),
+    getConfig: () => config as never,
+  };
+}
+
 async function writeWorkflows(dataDir: string, workflows: WorkflowDef[]): Promise<void> {
   await mkdir(dataDir, { recursive: true });
   await writeFile(join(dataDir, 'workflows.json'), JSON.stringify(workflows, null, 2), 'utf-8');
@@ -374,6 +388,268 @@ describe('workflow-backend kernel integration', () => {
     );
   });
 
+  it('produces structured graph diagnostics for cycles', () => {
+    const workflow = createWorkflow({
+      id: 'wf-cycle-diag',
+      steps: [
+        {
+          id: 'first',
+          type: 'transform',
+          messageTemplate: '',
+          transformCode: '`first`',
+          condition: 'on_success',
+          nextStepId: 'second',
+        },
+        {
+          id: 'second',
+          type: 'transform',
+          messageTemplate: '',
+          transformCode: '`second`',
+          condition: 'on_success',
+          nextStepId: 'first',
+        },
+      ],
+    });
+
+    expect(diagnoseWorkflowGraph(workflow)).toEqual([
+      {
+        kind: 'cycle',
+        entryStepId: 'first',
+        stepId: 'first',
+        path: ['first', 'second', 'first'],
+      },
+    ]);
+  });
+
+  it('returns validation and graph diagnostics through workflow.diagnose', async () => {
+    const dataDir = join(process.cwd(), `.tmp-workflow-backend-test-diagnose-${ulid()}`);
+    const ctx = createRpcContext(dataDir);
+    const workflow = createWorkflow({
+      id: 'wf-diagnose',
+      steps: [
+        {
+          id: 'first',
+          type: 'transform',
+          messageTemplate: '',
+          transformCode: '`first`',
+          condition: 'on_success',
+          nextStepId: 'second',
+        },
+        {
+          id: 'second',
+          type: 'transform',
+          messageTemplate: '',
+          transformCode: '`second`',
+          condition: 'on_success',
+          nextStepId: 'first',
+        },
+      ],
+    });
+
+    const response = await dispatchWorkflowRpc('workflow.diagnose', 11.5, workflow, ctx);
+
+    expect(response.result).toEqual({
+      valid: false,
+      validationError: "workflow graph contains a cycle at step 'first'",
+      validationDiagnostics: [],
+      graphDiagnostics: [
+        {
+          kind: 'cycle',
+          entryStepId: 'first',
+          stepId: 'first',
+          path: ['first', 'second', 'first'],
+        },
+      ],
+    });
+  });
+
+  it('produces structured step validation diagnostics', () => {
+    const workflow = createWorkflow({
+      id: 'wf-step-validation-diag',
+      steps: [
+        {
+          id: 'first',
+          type: 'transform',
+          messageTemplate: '',
+          transformCode: '`hello`',
+          condition: 'on_success',
+          branches: [{ expression: 'true', goto: '$end' }],
+        },
+        {
+          id: 'second',
+          type: 'agent',
+          messageTemplate: 'hello',
+          condition: 'on_success',
+        },
+      ],
+    });
+
+    expect(diagnoseWorkflowValidation(workflow)).toEqual([
+      {
+        kind: 'step-validation',
+        stepId: 'first',
+        message: "step 'first' can only define branches when type is 'condition'",
+      },
+      {
+        kind: 'step-validation',
+        stepId: 'second',
+        message: "agent step 'second' requires agentId",
+      },
+    ]);
+  });
+
+  it('returns structured validation diagnostics through workflow.diagnose', async () => {
+    const dataDir = join(process.cwd(), `.tmp-workflow-backend-test-diagnose-validation-${ulid()}`);
+    const ctx = createRpcContext(dataDir);
+    const workflow = createWorkflow({
+      id: 'wf-diagnose-validation',
+      steps: [
+        {
+          id: 'broken-agent',
+          type: 'agent',
+          messageTemplate: 'hello',
+          condition: 'on_success',
+        },
+      ],
+    });
+
+    const response = await dispatchWorkflowRpc('workflow.diagnose', 11.75, workflow, ctx);
+
+    expect(response.result).toEqual({
+      valid: false,
+      validationError: "agent step 'broken-agent' requires agentId",
+      validationDiagnostics: [
+        {
+          kind: 'step-validation',
+          stepId: 'broken-agent',
+          message: "agent step 'broken-agent' requires agentId",
+        },
+      ],
+      graphDiagnostics: [],
+    });
+  });
+
+  it('produces sandbox advisory diagnostics for unprofiled agent steps', () => {
+    const workflow = createWorkflow({
+      id: 'wf-sandbox-advisory',
+      steps: [
+        {
+          id: 'draft-step',
+          type: 'agent',
+          agentId: 'agent-main',
+          messageTemplate: 'draft an article',
+          condition: 'on_success',
+        },
+      ],
+    });
+
+    expect(
+      diagnoseWorkflowValidation(workflow, {
+        agents: [
+          { id: 'agent-main', tools: {} },
+          { id: 'agent-safe', tools: { sandboxProfile: 'readonly-output' } },
+        ],
+      }),
+    ).toEqual([
+      {
+        kind: 'step-advisory',
+        stepId: 'draft-step',
+        message:
+          "agent step 'draft-step' targets 'agent-main' without sandboxProfile. Consider using 'agent-safe' (sandbox:readonly-output) for readonly execution.",
+      },
+      {
+        kind: 'workflow-advisory',
+        message:
+          "workflow does not currently target any sandbox-bound agent. Prefer 'agent-safe' (sandbox:readonly-output) for readonly execution paths.",
+      },
+    ]);
+  });
+
+  it('returns sandbox advisories through workflow.diagnose without blocking validity', async () => {
+    const dataDir = join(process.cwd(), `.tmp-workflow-backend-test-diagnose-sandbox-${ulid()}`);
+    const ctx = createRpcContextWithConfig(dataDir, {
+      agents: [
+        { id: 'agent-main', tools: {} },
+        { id: 'agent-safe', tools: { sandboxProfile: 'readonly-output' } },
+      ],
+    });
+    const workflow = createWorkflow({
+      id: 'wf-diagnose-sandbox',
+      steps: [
+        {
+          id: 'draft-step',
+          type: 'agent',
+          agentId: 'agent-main',
+          messageTemplate: 'draft an article',
+          condition: 'on_success',
+        },
+      ],
+    });
+
+    const response = await dispatchWorkflowRpc('workflow.diagnose', 11.9, workflow, ctx);
+
+    expect(response.result).toEqual({
+      valid: true,
+      validationError: null,
+      validationDiagnostics: [
+        {
+          kind: 'step-advisory',
+          stepId: 'draft-step',
+          message:
+            "agent step 'draft-step' targets 'agent-main' without sandboxProfile. Consider using 'agent-safe' (sandbox:readonly-output) for readonly execution.",
+        },
+        {
+          kind: 'workflow-advisory',
+          message:
+            "workflow does not currently target any sandbox-bound agent. Prefer 'agent-safe' (sandbox:readonly-output) for readonly execution paths.",
+        },
+      ],
+      graphDiagnostics: [],
+    });
+  });
+
+  it('captures cycle path from the repeated node onward', () => {
+    const workflow = createWorkflow({
+      id: 'wf-cycle-path',
+      entryStepId: 'entry',
+      steps: [
+        {
+          id: 'entry',
+          type: 'transform',
+          messageTemplate: '',
+          transformCode: '`entry`',
+          condition: 'on_success',
+          nextStepId: 'first',
+        },
+        {
+          id: 'first',
+          type: 'transform',
+          messageTemplate: '',
+          transformCode: '`first`',
+          condition: 'on_success',
+          nextStepId: 'second',
+        },
+        {
+          id: 'second',
+          type: 'transform',
+          messageTemplate: '',
+          transformCode: '`second`',
+          condition: 'on_success',
+          nextStepId: 'first',
+        },
+      ],
+    });
+
+    expect(diagnoseWorkflowGraph(workflow)).toEqual([
+      {
+        kind: 'cycle',
+        entryStepId: 'entry',
+        stepId: 'first',
+        path: ['first', 'second', 'first'],
+      },
+    ]);
+  });
+
   it('rejects workflows that contain unreachable steps', async () => {
     const dataDir = join(process.cwd(), `.tmp-workflow-backend-test-unreachable-${ulid()}`);
     const ctx = createRpcContext(dataDir);
@@ -403,6 +679,37 @@ describe('workflow-backend kernel integration', () => {
     const response = await dispatchWorkflowRpc('workflow.save', 12, invalid, ctx);
 
     expect(response.error?.message).toBe('workflow graph contains unreachable steps: orphan');
+  });
+
+  it('produces structured graph diagnostics for unreachable steps', () => {
+    const workflow = createWorkflow({
+      id: 'wf-unreachable-diag',
+      steps: [
+        {
+          id: 'first',
+          type: 'transform',
+          messageTemplate: '',
+          transformCode: '`first`',
+          condition: 'on_success',
+          nextStepId: '$end',
+        },
+        {
+          id: 'orphan',
+          type: 'transform',
+          messageTemplate: '',
+          transformCode: '`orphan`',
+          condition: 'on_success',
+        },
+      ],
+    });
+
+    expect(diagnoseWorkflowGraph(workflow)).toEqual([
+      {
+        kind: 'unreachable',
+        entryStepId: 'first',
+        stepIds: ['orphan'],
+      },
+    ]);
   });
 
   it('rejects invalid branch expressions before saving', async () => {
@@ -518,6 +825,34 @@ describe('workflow-backend kernel integration', () => {
 
     expect(response.error?.message).toBe(
       "condition step 'branch' contains unreachable branch #2 after an always-true branch",
+    );
+  });
+
+  it('rejects branches on non-condition steps before saving', async () => {
+    const dataDir = join(process.cwd(), `.tmp-workflow-backend-test-branch-type-${ulid()}`);
+    const ctx = createRpcContext(dataDir);
+    const invalid = createWorkflow({
+      id: 'wf-branch-type',
+      steps: [
+        {
+          id: 'first',
+          type: 'transform',
+          messageTemplate: '',
+          transformCode: '`hello`',
+          condition: 'on_success',
+          branches: [{ expression: 'true', goto: '$end' }],
+        },
+      ],
+    });
+
+    expect(validateWorkflowDef(invalid)).toBe(
+      "step 'first' can only define branches when type is 'condition'",
+    );
+
+    const response = await dispatchWorkflowRpc('workflow.save', 16.5, invalid, ctx);
+
+    expect(response.error?.message).toBe(
+      "step 'first' can only define branches when type is 'condition'",
     );
   });
 
