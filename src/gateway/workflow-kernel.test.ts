@@ -129,9 +129,6 @@ describe('WorkflowKernelService archived completion', () => {
     const dataDir = await createTempDir();
     const workflow = createWorkflow();
     const callbacks = {
-      onRunUpdate() {
-        return undefined;
-      },
       async onRunComplete(_workflow: WorkflowDef, run: WorkflowRunRecord) {
         await persistRun(dataDir, run);
       },

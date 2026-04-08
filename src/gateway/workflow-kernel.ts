@@ -18,7 +18,6 @@ import {
 const logger = createLogger('gateway:workflow-kernel');
 
 export interface WorkflowKernelCallbacks {
-  onRunUpdate(run: WorkflowRunRecord): Promise<void> | void;
   onRunComplete(workflow: WorkflowDef, run: WorkflowRunRecord): Promise<void>;
   findArchivedRun?(runId: string): Promise<WorkflowRunRecord | null> | WorkflowRunRecord | null;
 }
@@ -48,6 +47,7 @@ export class WorkflowKernelService {
   private readonly runtime: WorkflowProcessRuntime;
   private readonly callbacks: WorkflowKernelCallbacks;
   private readonly cancelRequested = new Set<string>();
+  private readonly forcedRunStates = new Map<string, WorkflowRunRecord>();
   private readonly finalizing = new Set<string>();
   private readonly completionWaiters = new Map<string, Array<(run: WorkflowRunRecord) => void>>();
   private initPromise: Promise<void> | null = null;
@@ -119,24 +119,33 @@ export class WorkflowKernelService {
     if (!run) {
       throw new Error(`Failed to initialize workflow run: ${runId}`);
     }
-    await this.callbacks.onRunUpdate(run);
     this.schedulePump(0);
     return run;
   }
 
   getRun(runId: string): WorkflowRunRecord | null {
+    const forced = this.forcedRunStates.get(runId);
+    if (forced) {
+      return cloneRun(forced);
+    }
     const snapshot = this.kernel.getSnapshot(asProcessId(runId));
     return snapshot ? this.snapshotToRun(snapshot) : null;
   }
 
   listRuns(): WorkflowRunRecord[] {
-    return this.kernel
+    const liveRuns = this.kernel
       .listSnapshots()
       .filter((snapshot) => snapshot.processType === this.runtime.type)
       .flatMap((snapshot) => {
         const run = this.snapshotToRun(snapshot);
         return run ? [run] : [];
       });
+    const forcedRunIds = new Set(this.forcedRunStates.keys());
+    const mergedLiveRuns = liveRuns.filter((run) => !forcedRunIds.has(run.runId));
+    return [
+      ...Array.from(this.forcedRunStates.values()).map((run) => cloneRun(run)),
+      ...mergedLiveRuns,
+    ];
   }
 
   async cancelRun(runId: string): Promise<WorkflowRunRecord | null> {
@@ -154,7 +163,7 @@ export class WorkflowKernelService {
       finishedAt: Date.now(),
     };
     this.cancelRequested.add(runId);
-    await this.callbacks.onRunUpdate(cancelled);
+    this.forcedRunStates.set(runId, cloneRun(cancelled));
     this.schedulePump(0);
     return cancelled;
   }
@@ -243,11 +252,6 @@ export class WorkflowKernelService {
       }
       if (snapshot.status === 'done' || snapshot.status === 'error') {
         await this.finalizeSnapshot(snapshot);
-        continue;
-      }
-      const run = this.snapshotToRun(snapshot);
-      if (run) {
-        await this.callbacks.onRunUpdate(run);
       }
     }
   }
@@ -275,6 +279,7 @@ export class WorkflowKernelService {
       await this.callbacks.onRunComplete(state.workflow, run);
       await this.kernel.deleteProcess(snapshot.pid);
       this.cancelRequested.delete(runId);
+      this.forcedRunStates.delete(runId);
       this.resolveCompletion(run);
     } finally {
       this.finalizing.delete(runId);

@@ -113,9 +113,88 @@ function createRunner(): AgentRunner {
   } as unknown as AgentRunner;
 }
 
-function createRpcContext(dataDir: string): RpcContext {
+function createBlockingRunner(unblock: Promise<void>): AgentRunner {
+  let threadKey = 'default';
+  let released = false;
+  const waitForRelease = async (): Promise<void> => {
+    if (released) {
+      return;
+    }
+    await unblock;
+    released = true;
+  };
   return {
-    runners: new Map([['agent-main', createRunner()]]),
+    setThread(nextThreadKey: string) {
+      threadKey = nextThreadKey;
+      return undefined;
+    },
+    serializeState() {
+      return {
+        threadKey,
+        promptLayerHashes: [],
+        cachedSystemPrompt: null,
+        toolResultCache: [],
+      };
+    },
+    restoreState(state: { threadKey: string }) {
+      threadKey = state.threadKey;
+    },
+    get currentSessionKey() {
+      return `agent:agent-main:${threadKey}`;
+    },
+    async beginKernelTurn(runId: string, message: string) {
+      return {
+        runId,
+        userMessage: message,
+        options: undefined,
+        model: 'fake-model',
+        maxTokens: 256,
+        systemPrompt: '',
+        messages: [],
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalCacheReadTokens: 0,
+        totalText: '',
+        toolRounds: 0,
+        toolFailureMessages: [],
+        finalFailureMessage: null,
+        finalFailureCode: undefined,
+        recoverableStreamRetries: 0,
+        toolLoopDetector: { lastEntry: null, consecutiveRepeats: 0 },
+      };
+    },
+    async continueKernelTurn(state: {
+      runId: string;
+      userMessage: string;
+      totalInputTokens: number;
+      totalOutputTokens: number;
+    }) {
+      await waitForRelease();
+      const text = `reply:${state.userMessage}`;
+      return {
+        state: {
+          ...state,
+          totalText: text,
+        },
+        chunks: [
+          { type: 'text_delta', text },
+          { type: 'done', inputTokens: 1, outputTokens: 1, stopReason: 'end_turn' },
+        ],
+        done: true,
+        result: {
+          sessionKey: `agent:agent-main:${threadKey}`,
+          text,
+          inputTokens: 1,
+          outputTokens: 1,
+        },
+      };
+    },
+  } as unknown as AgentRunner;
+}
+
+function createRpcContext(dataDir: string, runner: AgentRunner = createRunner()): RpcContext {
+  return {
+    runners: new Map([['agent-main', runner]]),
     gatewayVersion: 'test',
     startedAt: 0,
     dataDir,
@@ -146,8 +225,9 @@ async function writeWorkflows(dataDir: string, workflows: WorkflowDef[]): Promis
 async function waitForWorkflowStatus(
   ctx: RpcContext,
   runId: string,
+  maxAttempts = 40,
 ): Promise<{ status: string; stepResults: Array<{ output?: string; error?: string }> }> {
-  for (let attempt = 0; attempt < 40; attempt++) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const response = await dispatchWorkflowRpc('workflow.runStatus', 2, { runId }, ctx);
     const run = response.result as {
       status: string;
@@ -198,6 +278,61 @@ describe('workflow-backend kernel integration', () => {
 
     expect(response.error?.message).toBe(
       "nextStepId for step 'first' targets unknown step 'missing-step'",
+    );
+  });
+
+  it('rejects invalid workflow publication targets before saving', async () => {
+    const dataDir = join(process.cwd(), `.tmp-workflow-backend-test-publication-target-${ulid()}`);
+    const ctx = createRpcContext(dataDir);
+
+    const blankThreadKey = createWorkflow({
+      id: 'wf-publication-target-blank-thread',
+      publicationTargets: [{ channelId: 'chat', threadKey: '   ' }],
+    });
+    expect(validateWorkflowDef(blankThreadKey)).toBe(
+      "workflow publication target 'chat' requires threadKey",
+    );
+
+    const duplicateTarget = createWorkflow({
+      id: 'wf-publication-target-duplicate',
+      publicationTargets: [
+        { channelId: 'chat', threadKey: 'ops' },
+        { channelId: 'chat', threadKey: 'ops', agentId: 'agent-main' },
+      ],
+    });
+    expect(validateWorkflowDef(duplicateTarget)).toBe(
+      "workflow publicationTargets contains duplicate target 'chat:ops'",
+    );
+
+    const response = await dispatchWorkflowRpc('workflow.save', 10.5, blankThreadKey, ctx);
+
+    expect(response.error?.message).toBe("workflow publication target 'chat' requires threadKey");
+  });
+
+  it('rejects invalid workflow publication channels before saving', async () => {
+    const dataDir = join(process.cwd(), `.tmp-workflow-backend-test-publication-channel-${ulid()}`);
+    const ctx = createRpcContext(dataDir);
+
+    const blankChannelId = createWorkflow({
+      id: 'wf-publication-channel-blank',
+      publicationChannels: ['chat', '   '],
+    });
+    expect(validateWorkflowDef(blankChannelId)).toBe(
+      'workflow publicationChannels contains blank channelId',
+    );
+
+    const duplicateChannelId = createWorkflow({
+      id: 'wf-publication-channel-duplicate',
+      publicationChannels: ['chat', 'chat'],
+    });
+    expect(validateWorkflowDef(duplicateChannelId)).toBe(
+      "workflow publicationChannels contains duplicate channelId 'chat'",
+    );
+
+    const response = await dispatchWorkflowRpc('workflow.save', 10.6, duplicateChannelId, ctx);
+
+    expect(response.error?.message).toBe(
+      "workflow publicationChannels contains duplicate channelId 'chat'",
     );
   });
 
@@ -329,6 +464,63 @@ describe('workflow-backend kernel integration', () => {
     );
   });
 
+  it('rejects condition branches that can never match', async () => {
+    const dataDir = join(process.cwd(), `.tmp-workflow-backend-test-branch-never-${ulid()}`);
+    const ctx = createRpcContext(dataDir);
+    const invalid = createWorkflow({
+      id: 'wf-branch-never',
+      steps: [
+        {
+          id: 'branch',
+          type: 'condition',
+          messageTemplate: '',
+          condition: 'on_success',
+          branches: [{ expression: 'false', goto: '$end' }],
+        },
+      ],
+    });
+
+    expect(validateWorkflowDef(invalid)).toBe(
+      "condition step 'branch' contains branch #1 that can never match",
+    );
+
+    const response = await dispatchWorkflowRpc('workflow.save', 15, invalid, ctx);
+
+    expect(response.error?.message).toBe(
+      "condition step 'branch' contains branch #1 that can never match",
+    );
+  });
+
+  it('rejects branches after an always-true condition branch', async () => {
+    const dataDir = join(process.cwd(), `.tmp-workflow-backend-test-branch-always-${ulid()}`);
+    const ctx = createRpcContext(dataDir);
+    const invalid = createWorkflow({
+      id: 'wf-branch-always',
+      steps: [
+        {
+          id: 'branch',
+          type: 'condition',
+          messageTemplate: '',
+          condition: 'on_success',
+          branches: [
+            { expression: 'true', goto: '$end' },
+            { expression: "output.includes('fallback')", goto: '$end' },
+          ],
+        },
+      ],
+    });
+
+    expect(validateWorkflowDef(invalid)).toBe(
+      "condition step 'branch' contains unreachable branch #2 after an always-true branch",
+    );
+
+    const response = await dispatchWorkflowRpc('workflow.save', 16, invalid, ctx);
+
+    expect(response.error?.message).toBe(
+      "condition step 'branch' contains unreachable branch #2 after an always-true branch",
+    );
+  });
+
   it('rejects invalid output variable regex before saving', async () => {
     const dataDir = join(process.cwd(), `.tmp-workflow-backend-test-output-regex-${ulid()}`);
     const ctx = createRpcContext(dataDir);
@@ -350,7 +542,7 @@ describe('workflow-backend kernel integration', () => {
       "output regex 'price' for step 'first' is invalid:",
     );
 
-    const response = await dispatchWorkflowRpc('workflow.save', 15, invalid, ctx);
+    const response = await dispatchWorkflowRpc('workflow.save', 17, invalid, ctx);
 
     expect(response.error?.message).toContain("output regex 'price' for step 'first' is invalid:");
   });
@@ -428,7 +620,7 @@ describe('workflow-backend kernel integration', () => {
       "output variable 'title' for step 'first' must use exactly one extractor",
     );
 
-    const response = await dispatchWorkflowRpc('workflow.save', 16, missingExtractor, ctx);
+    const response = await dispatchWorkflowRpc('workflow.save', 18, missingExtractor, ctx);
 
     expect(response.error?.message).toBe(
       "output variable 'title' for step 'first' requires one extractor",
@@ -453,11 +645,120 @@ describe('workflow-backend kernel integration', () => {
     expect(final.status).toBe('done');
     expect(final.stepResults[0]?.output).toBe('reply:hello world');
 
+    const runStatus = await dispatchWorkflowRpc('workflow.runStatus', 2, { runId }, ctx);
+    expect((runStatus.result as { status: string }).status).toBe('done');
+
     const history = await dispatchWorkflowRpc('workflow.history', 3, {}, ctx);
     const runs = (history.result as { runs: Array<{ runId: string }> }).runs;
     expect(runs.some((run) => run.runId === runId)).toBe(true);
 
     await waitForCheckpointCleanup(dataDir);
+  });
+
+  it('keeps cancelled status visible before workflow finalize completes', async () => {
+    const dataDir = join(process.cwd(), `.tmp-workflow-backend-test-cancel-visible-${ulid()}`);
+    const workflow = createWorkflow({ id: 'wf-cancel-visible' });
+    await writeWorkflows(dataDir, [workflow]);
+
+    let releaseRunner!: () => void;
+    const runnerRelease = new Promise<void>((resolve) => {
+      releaseRunner = resolve;
+    });
+    const ctx = createRpcContext(dataDir, createBlockingRunner(runnerRelease));
+
+    const response = await dispatchWorkflowRpc(
+      'workflow.run',
+      300,
+      { workflowId: workflow.id, input: 'cancel-me' },
+      ctx,
+    );
+    const runId = (response.result as { runId: string }).runId;
+
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const status = await dispatchWorkflowRpc('workflow.runStatus', 301 + attempt, { runId }, ctx);
+      if ((status.result as { status?: string } | null)?.status === 'running') {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    const cancelled = await dispatchWorkflowRpc('workflow.cancel', 350, { runId }, ctx);
+    expect((cancelled.result as { cancelled: boolean }).cancelled).toBe(true);
+
+    const immediateStatus = await dispatchWorkflowRpc('workflow.runStatus', 351, { runId }, ctx);
+    expect((immediateStatus.result as { status: string }).status).toBe('cancelled');
+
+    const immediateHistory = await dispatchWorkflowRpc('workflow.history', 352, {}, ctx);
+    const immediateHistoryRun = (
+      immediateHistory.result as { runs: WorkflowRunRecord[] }
+    ).runs.find((run) => run.runId === runId);
+    expect(immediateHistoryRun?.status).toBe('cancelled');
+
+    releaseRunner();
+    await waitForCheckpointCleanup(dataDir);
+
+    const finalStatus = await dispatchWorkflowRpc('workflow.runStatus', 353, { runId }, ctx);
+    expect((finalStatus.result as { status: string }).status).toBe('cancelled');
+  });
+
+  it('includes live running workflows in history without backend cache state', async () => {
+    const dataDir = join(process.cwd(), `.tmp-workflow-backend-test-live-history-${ulid()}`);
+    const workflow = createWorkflow({ id: 'wf-live-history' });
+    await writeWorkflows(dataDir, [workflow]);
+
+    let releaseRunner!: () => void;
+    const runnerRelease = new Promise<void>((resolve) => {
+      releaseRunner = resolve;
+    });
+    const ctx = createRpcContext(dataDir, createBlockingRunner(runnerRelease));
+
+    const response = await dispatchWorkflowRpc(
+      'workflow.run',
+      360,
+      { workflowId: workflow.id, input: 'show-live-history' },
+      ctx,
+    );
+    const runId = (response.result as { runId: string }).runId;
+
+    const historyWhileRunning = await dispatchWorkflowRpc('workflow.history', 361, {}, ctx);
+    const liveHistoryRun = (historyWhileRunning.result as { runs: WorkflowRunRecord[] }).runs.find(
+      (run) => run.runId === runId,
+    );
+    expect(liveHistoryRun?.status).toBe('running');
+
+    releaseRunner();
+    const final = await waitForWorkflowStatus(ctx, runId, 120);
+    expect(final.status).toBe('done');
+
+    const historyAfterDone = await dispatchWorkflowRpc('workflow.history', 362, {}, ctx);
+    const archivedHistoryRun = (historyAfterDone.result as { runs: WorkflowRunRecord[] }).runs.find(
+      (run) => run.runId === runId,
+    );
+    expect(archivedHistoryRun?.status).toBe('done');
+  });
+
+  it('does not retain completed workflow runs in backend-only live state', async () => {
+    const dataDir = join(process.cwd(), `.tmp-workflow-backend-test-no-live-cache-${ulid()}`);
+    const workflow = createWorkflow({ id: 'wf-no-live-cache' });
+    await writeWorkflows(dataDir, [workflow]);
+    const ctx = createRpcContext(dataDir);
+
+    for (let index = 0; index < 20; index += 1) {
+      const response = await dispatchWorkflowRpc(
+        'workflow.run',
+        200 + index,
+        { workflowId: workflow.id, input: `run-${index}` },
+        ctx,
+      );
+      const runId = (response.result as { runId: string }).runId;
+      const final = await waitForWorkflowStatus(ctx, runId, 120);
+      expect(final.status).toBe('done');
+    }
+
+    const history = await dispatchWorkflowRpc('workflow.history', 363, {}, ctx);
+    const runs = (history.result as { runs: WorkflowRunRecord[] }).runs;
+    expect(runs.length).toBeGreaterThan(0);
+    expect(runs.every((run) => run.status === 'done')).toBe(true);
   });
 
   it('runs scheduler workflow execution through the kernel service', async () => {

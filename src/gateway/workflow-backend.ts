@@ -3,7 +3,7 @@
  *
  * Workflows are persisted to `<dataDir>/workflows.json`.
  * Run records are persisted to `<dataDir>/workflow-runs.json` (last 100 runs).
- * In-progress runs are also tracked in `activeWorkflowRuns` for live polling.
+ * In-progress runs are read directly from workflow-kernel live snapshots.
  */
 
 import { existsSync } from 'node:fs';
@@ -140,9 +140,6 @@ export interface WorkflowRunRecord {
   latestDeliverableId?: string;
 }
 
-// ── In-memory active runs (cleared on gateway restart) ────────────────────────
-
-const activeWorkflowRuns = new Map<string, WorkflowRunRecord>();
 const workflowKernelServices = new WeakMap<RpcContext, Promise<WorkflowKernelService>>();
 
 // ── File helpers ─────────────────────────────────────────────────────────────
@@ -349,6 +346,55 @@ function validateWorkflowOutputVar(stepId: string, output: StepOutputVar): strin
   return null;
 }
 
+function normalizeWorkflowBooleanLiteral(expression: string): boolean | null {
+  const normalized = expression.trim();
+  if (normalized === 'true') return true;
+  if (normalized === 'false') return false;
+  return null;
+}
+
+function validateWorkflowPublicationChannels(channelIds: string[] | undefined): string | null {
+  if (!channelIds) return null;
+  const seenChannelIds = new Set<string>();
+  for (const rawChannelId of channelIds) {
+    const channelId = rawChannelId.trim();
+    if (!channelId) {
+      return 'workflow publicationChannels contains blank channelId';
+    }
+    if (seenChannelIds.has(channelId)) {
+      return `workflow publicationChannels contains duplicate channelId '${channelId}'`;
+    }
+    seenChannelIds.add(channelId);
+  }
+  return null;
+}
+
+function validateWorkflowPublicationTargets(
+  targets: WorkflowDef['publicationTargets'],
+): string | null {
+  if (!targets) return null;
+  const seenTargets = new Set<string>();
+  for (const target of targets) {
+    const channelId = target.channelId.trim();
+    const threadKey = target.threadKey.trim();
+    if (!channelId) {
+      return 'workflow publication target requires channelId';
+    }
+    if (!threadKey) {
+      return `workflow publication target '${channelId}' requires threadKey`;
+    }
+    if (target.agentId !== undefined && !target.agentId.trim()) {
+      return `workflow publication target '${channelId}:${threadKey}' has blank agentId`;
+    }
+    const dedupeKey = `${channelId}:${threadKey}`;
+    if (seenTargets.has(dedupeKey)) {
+      return `workflow publicationTargets contains duplicate target '${dedupeKey}'`;
+    }
+    seenTargets.add(dedupeKey);
+  }
+  return null;
+}
+
 function collectWorkflowEdges(workflow: WorkflowDef): Map<string, string[]> {
   const edges = new Map<string, string[]>();
   for (let index = 0; index < workflow.steps.length; index += 1) {
@@ -414,6 +460,14 @@ export function validateWorkflowDef(workflow: WorkflowDef): string | null {
   if (!workflow.id.trim()) return 'workflow id is required';
   if (!workflow.name.trim()) return 'workflow name is required';
   if (workflow.steps.length === 0) return 'workflow must contain at least one step';
+
+  const publicationChannelsError = validateWorkflowPublicationChannels(
+    workflow.publicationChannels,
+  );
+  if (publicationChannelsError) return publicationChannelsError;
+
+  const publicationTargetsError = validateWorkflowPublicationTargets(workflow.publicationTargets);
+  if (publicationTargetsError) return publicationTargetsError;
 
   const seenStepIds = new Set<string>();
   for (const step of workflow.steps) {
@@ -492,6 +546,22 @@ export function validateWorkflowDef(workflow: WorkflowDef): string | null {
       );
       if (branchTargetError) return branchTargetError;
     }
+
+    let branchIndex = 0;
+    let matchedTerminalBranch = false;
+    for (const branch of step.branches ?? []) {
+      branchIndex += 1;
+      if (matchedTerminalBranch) {
+        return `condition step '${step.id}' contains unreachable branch #${branchIndex} after an always-true branch`;
+      }
+      const literalValue = normalizeWorkflowBooleanLiteral(branch.expression);
+      if (literalValue === false) {
+        return `condition step '${step.id}' contains branch #${branchIndex} that can never match`;
+      }
+      if (literalValue === true) {
+        matchedTerminalBranch = true;
+      }
+    }
   }
 
   const cycleAt = findWorkflowCycle(workflow);
@@ -507,14 +577,6 @@ export function validateWorkflowDef(workflow: WorkflowDef): string | null {
   return null;
 }
 
-function rememberActiveWorkflowRun(run: WorkflowRunRecord): void {
-  const existing = activeWorkflowRuns.get(run.runId);
-  if (existing && existing.status !== 'running' && run.status === 'running') {
-    return;
-  }
-  activeWorkflowRuns.set(run.runId, cloneWorkflowRun(run));
-}
-
 async function getWorkflowKernelService(ctx: RpcContext): Promise<WorkflowKernelService> {
   const existing = workflowKernelServices.get(ctx);
   if (existing) {
@@ -525,13 +587,9 @@ async function getWorkflowKernelService(ctx: RpcContext): Promise<WorkflowKernel
       dataDir: ctx.dataDir,
       runners: ctx.runners,
       callbacks: {
-        onRunUpdate(run) {
-          rememberActiveWorkflowRun(run);
-        },
         async onRunComplete(workflow, run) {
           const finalRun = cloneWorkflowRun(run);
           await createWorkflowDeliverableRecord(ctx, workflow, finalRun);
-          rememberActiveWorkflowRun(finalRun);
           await persistRun(ctx.dataDir, finalRun);
           logger.info('Workflow completed', {
             runId: finalRun.runId,
@@ -670,15 +728,11 @@ export async function dispatchWorkflowRpc(
     case 'workflow.runStatus': {
       const { runId } = (params ?? {}) as { runId?: string };
       if (!runId) return err(id, -32602, 'runId is required');
-      const inMemory = activeWorkflowRuns.get(runId);
-      if (inMemory && inMemory.status !== 'running') return ok(id, inMemory);
       const service = await getWorkflowKernelService(ctx);
       const live = service.getRun(runId);
       if (live) {
-        rememberActiveWorkflowRun(live);
+        return ok(id, live);
       }
-      const current = activeWorkflowRuns.get(runId);
-      if (current) return ok(id, current);
       const history = await readWorkflowRunsFile(ctx.dataDir);
       const found = history.find((r) => r.runId === runId);
       return ok(id, found ?? null);
@@ -688,30 +742,23 @@ export async function dispatchWorkflowRpc(
       const { runId } = (params ?? {}) as { runId?: string };
       if (!runId) return err(id, -32602, 'runId is required');
       const service = await getWorkflowKernelService(ctx);
-      const run = activeWorkflowRuns.get(runId);
-      const liveRun = service.getRun(runId) ?? run;
+      const liveRun = service.getRun(runId);
       if (!liveRun) return err(id, 404, `Run not found: ${runId}`);
       if (liveRun.status !== 'running') {
         return ok(id, { cancelled: false, reason: `Run status is already '${liveRun.status}'` });
       }
-      const cancelled = await service.cancelRun(runId);
-      if (cancelled) {
-        rememberActiveWorkflowRun(cancelled);
-      }
+      await service.cancelRun(runId);
       return ok(id, { cancelled: true, runId });
     }
 
     case 'workflow.history': {
       const service = await getWorkflowKernelService(ctx);
-      for (const run of service.listRuns()) {
-        rememberActiveWorkflowRun(run);
-      }
+      const liveRuns = service.listRuns();
       const history = await readWorkflowRunsFile(ctx.dataDir);
-      // RATIONALE: Merge in-memory active runs so clients can detect currently-running
-      // workflows before they finish (persistence only happens on completion/cancel).
-      const activeRuns = Array.from(activeWorkflowRuns.values());
-      const activeIds = new Set(activeRuns.map((r) => r.runId));
-      const merged = [...activeRuns, ...history.filter((r) => !activeIds.has(r.runId))].slice(
+      // RATIONALE: Merge kernel-visible live runs so clients can observe current
+      // running/cancelled overlays before the final archived record is read back.
+      const liveRunIds = new Set(liveRuns.map((r) => r.runId));
+      const merged = [...liveRuns, ...history.filter((r) => !liveRunIds.has(r.runId))].slice(
         0,
         100,
       );

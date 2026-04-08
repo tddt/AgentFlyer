@@ -22,6 +22,23 @@ import { asProcessId } from '../core/types.js';
 const logger = createLogger('gateway:agent-kernel');
 const MAX_RUN_RECORDS = 200;
 
+function isArchivedRunRecord(record: AgentKernelRunRecord): boolean {
+  return (
+    record.processStatus === 'done' ||
+    record.processStatus === 'error' ||
+    record.phase === 'done' ||
+    record.phase === 'error'
+  );
+}
+
+function shouldCacheCompletionOutcome(record: AgentKernelRunRecord): boolean {
+  return (
+    isArchivedRunRecord(record) ||
+    record.processStatus === 'suspended' ||
+    record.phase === 'suspended'
+  );
+}
+
 class AgentKernelRunRecordStore {
   private readonly filePath: string;
 
@@ -95,19 +112,26 @@ export class AgentKernelService {
   private scheduledPumpAt: number | null = null;
   private disposed = false;
   private readonly subscribers = new Map<string, Set<(chunk: StreamChunk) => void>>();
-  private readonly completions = new Map<string, CompletionOutcome>();
   private readonly completionWaiters = new Map<
     string,
     Array<{ resolve: (result: TurnResult) => void; reject: (error: Error) => void }>
   >();
   private readonly finalizing = new Set<string>();
-  private readonly suspendedRuns = new Set<string>();
   private readonly runRecords = new Map<string, AgentKernelRunRecord>();
 
   constructor(options: AgentKernelServiceOptions) {
     this.runRecordStore = new AgentKernelRunRecordStore(options.dataDir);
-    for (const record of this.runRecordStore.load()) {
+    const loadedRecords = this.runRecordStore.load();
+    let prunedLegacyLiveRecord = false;
+    for (const record of loadedRecords) {
+      if (!isArchivedRunRecord(record)) {
+        prunedLegacyLiveRecord = true;
+        continue;
+      }
       this.rememberRunRecord(record, false);
+    }
+    if (prunedLegacyLiveRecord) {
+      this.runRecordStore.save(this.runRecords.values());
     }
     this.kernel = new AgentKernel({
       checkpointStore: new ScopedCheckpointStore(
@@ -182,7 +206,7 @@ export class AgentKernelService {
   getRun(runId: string): AgentKernelRunRecord | null {
     const snapshot = this.kernel.getSnapshot(asProcessId(runId));
     if (snapshot) {
-      return this.rememberRunRecord(this.snapshotToRunRecord(snapshot));
+      return this.snapshotToRunRecord(snapshot);
     }
     return this.runRecords.get(runId) ?? null;
   }
@@ -197,14 +221,13 @@ export class AgentKernelService {
     if (!snapshot) {
       return this.runRecords.get(runId) ?? null;
     }
-    const current = this.rememberRunRecord(this.snapshotToRunRecord(snapshot));
+    const current = this.snapshotToRunRecord(snapshot);
     if (snapshot.status !== 'suspended') {
       return current;
     }
-    this.completions.delete(runId);
-    this.suspendedRuns.delete(runId);
+    this.runRecords.delete(runId);
     const resumed = await this.kernel.resumeProcess(pid);
-    const record = this.rememberRunRecord(this.snapshotToRunRecord(resumed));
+    const record = this.snapshotToRunRecord(resumed);
     this.schedulePump(0);
     return record;
   }
@@ -368,26 +391,32 @@ export class AgentKernelService {
       .listSnapshots()
       .filter((snapshot) => snapshot.processType === this.runtime.type);
     for (const snapshot of snapshots) {
-      this.rememberRunRecord(this.snapshotToRunRecord(snapshot));
-      if (snapshot.status !== 'suspended') {
-        this.suspendedRuns.delete(String(snapshot.pid));
+      const runId = String(snapshot.pid);
+      const previousRecord = this.runRecords.get(runId) ?? null;
+      if (snapshot.status === 'suspended') {
+        this.rememberRunRecord(this.snapshotToRunRecord(snapshot), false);
+      } else {
+        this.runRecords.delete(runId);
       }
       if (snapshot.status === 'done' || snapshot.status === 'error') {
         await this.finalizeSnapshot(snapshot);
       } else if (snapshot.status === 'suspended') {
-        this.completeSuspendedSnapshot(snapshot);
+        this.completeSuspendedSnapshot(snapshot, previousRecord);
       }
     }
   }
 
   private completeSuspendedSnapshot(
     snapshot: ReturnType<AgentKernel['getSnapshot']> extends infer T ? Exclude<T, null> : never,
+    previousRecord: AgentKernelRunRecord | null,
   ): void {
     const runId = String(snapshot.pid);
-    if (this.suspendedRuns.has(runId)) {
+    if (
+      previousRecord?.processStatus === 'suspended' &&
+      previousRecord.updatedAt === snapshot.updatedAt
+    ) {
       return;
     }
-    this.suspendedRuns.add(runId);
     const state = this.snapshotToState(snapshot);
     this.publishChunk(runId, {
       type: 'error',
@@ -445,7 +474,6 @@ export class AgentKernelService {
   }
 
   private completeRun(runId: string, outcome: CompletionOutcome): void {
-    this.completions.set(runId, outcome);
     const waiters = this.completionWaiters.get(runId) ?? [];
     this.completionWaiters.delete(runId);
     for (const waiter of waiters) {
@@ -458,14 +486,6 @@ export class AgentKernelService {
   }
 
   private async waitForCompletion(runId: string): Promise<TurnResult> {
-    const outcome = this.completions.get(runId);
-    if (outcome) {
-      this.completions.delete(runId);
-      if (outcome.ok) {
-        return outcome.result;
-      }
-      throw new Error(outcome.message);
-    }
     const archivedOutcome = this.getArchivedCompletionOutcome(runId);
     if (archivedOutcome) {
       if (archivedOutcome.ok) {
@@ -476,14 +496,8 @@ export class AgentKernelService {
     return await new Promise<TurnResult>((resolve, reject) => {
       const waiters = this.completionWaiters.get(runId) ?? [];
       waiters.push({
-        resolve: (result) => {
-          this.completions.delete(runId);
-          resolve(result);
-        },
-        reject: (error) => {
-          this.completions.delete(runId);
-          reject(error);
-        },
+        resolve,
+        reject,
       });
       this.completionWaiters.set(runId, waiters);
     });
@@ -547,6 +561,10 @@ export class AgentKernelService {
   }
 
   private rememberRunRecord(record: AgentKernelRunRecord, persist = true): AgentKernelRunRecord {
+    if (!shouldCacheCompletionOutcome(record)) {
+      this.runRecords.delete(record.runId);
+      return record;
+    }
     this.runRecords.set(record.runId, record);
     while (this.runRecords.size > MAX_RUN_RECORDS) {
       const oldest = this.runRecords.keys().next().value;
@@ -555,7 +573,7 @@ export class AgentKernelService {
       }
       this.runRecords.delete(oldest);
     }
-    if (persist) {
+    if (persist && isArchivedRunRecord(record)) {
       this.runRecordStore.save(this.runRecords.values());
     }
     return record;

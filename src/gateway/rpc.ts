@@ -404,7 +404,16 @@ async function readTasksFile(dataDir: string): Promise<ScheduledTaskMeta[]> {
 
 async function writeTasksFile(dataDir: string, tasks: ScheduledTaskMeta[]): Promise<void> {
   const tasksFile = join(dataDir, 'scheduled-tasks.json');
-  await writeFile(tasksFile, JSON.stringify(tasks, null, 2), 'utf-8');
+  await writeFile(
+    tasksFile,
+    JSON.stringify(tasks.map(stripTaskExecutionSummary), null, 2),
+    'utf-8',
+  );
+}
+
+function stripTaskExecutionSummary(task: ScheduledTaskMeta): ScheduledTaskMeta {
+  const { lastRunAt, lastResult, latestDeliverableId, ...rest } = task;
+  return rest;
 }
 
 async function runAgentTask(
@@ -437,6 +446,11 @@ interface TaskRunRecord {
   deliverableId?: string;
 }
 
+type TaskExecutionSummary = Pick<
+  ScheduledTaskMeta,
+  'lastRunAt' | 'lastResult' | 'latestDeliverableId'
+>;
+
 const HISTORY_MAX_PER_TASK = 50;
 
 async function readHistoryFile(dataDir: string): Promise<TaskRunRecord[]> {
@@ -465,6 +479,23 @@ async function appendHistoryRecord(dataDir: string, record: TaskRunRecord): Prom
     JSON.stringify(history, null, 2),
     'utf-8',
   );
+}
+
+function buildTaskExecutionSummaryById(
+  history: TaskRunRecord[],
+): Map<string, TaskExecutionSummary> {
+  const summaryByTaskId = new Map<string, TaskExecutionSummary>();
+  for (const record of history) {
+    if (summaryByTaskId.has(record.taskId)) {
+      continue;
+    }
+    summaryByTaskId.set(record.taskId, {
+      lastRunAt: record.finishedAt,
+      lastResult: record.result.slice(0, 500),
+      latestDeliverableId: record.deliverableId,
+    });
+  }
+  return summaryByTaskId;
 }
 
 async function createSchedulerDeliverableRecord(
@@ -982,8 +1013,10 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
 
       case 'scheduler.list': {
         const tasks = await readTasksFile(ctx.dataDir);
+        const summaryByTaskId = buildTaskExecutionSummaryById(await readHistoryFile(ctx.dataDir));
         const enriched = tasks.map((t) => ({
-          ...t,
+          ...stripTaskExecutionSummary(t),
+          ...summaryByTaskId.get(t.id),
           nextRunAt: ctx.scheduler.get(t.id)?.nextRunAt,
         }));
         return { id, result: { tasks: enriched } };

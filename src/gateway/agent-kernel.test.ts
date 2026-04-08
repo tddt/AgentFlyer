@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -31,6 +31,20 @@ afterEach(async () => {
 function trackService(service: AgentKernelService): AgentKernelService {
   services.push(service);
   return service;
+}
+
+async function readPersistedRunRecords(
+  dataDir: string,
+): Promise<Array<{ runId: string; processStatus: string; phase: string }>> {
+  try {
+    return JSON.parse(await readFile(join(dataDir, 'agent-run-records.json'), 'utf-8')) as Array<{
+      runId: string;
+      processStatus: string;
+      phase: string;
+    }>;
+  } catch {
+    return [];
+  }
 }
 
 class FakeProvider implements LLMProvider {
@@ -573,6 +587,84 @@ describe('AgentKernelService', () => {
 
     const result = await (
       restartedService as unknown as { waitForCompletion(runId: string): Promise<{ text: string }> }
+    ).waitForCompletion(started.runId);
+
+    expect(result.text).toContain('kernel hello');
+  });
+
+  it('restores suspended runs from checkpoints without persisting live run records', async () => {
+    const dataDir = await createTempDir();
+    let blocked = true;
+    const provider = new FakeRecoverableBlockedLlmProvider(() => blocked);
+    const firstService = trackService(
+      new AgentKernelService({
+        dataDir,
+        runners: new Map([['agent-main', createRunner(dataDir, provider)]]),
+      }),
+    );
+
+    const started = await firstService.startTurn({
+      agentId: 'agent-main',
+      userMessage: 'persist only archived states',
+      threadKey: 'checkpoint-only-suspended-thread',
+    });
+
+    const suspended = await waitForRunPhase(firstService, started.runId, 'suspended');
+    expect(suspended.processStatus).toBe('suspended');
+
+    const persistedBeforeRestart = await readPersistedRunRecords(dataDir);
+    expect(persistedBeforeRestart.some((record) => record.runId === started.runId)).toBe(false);
+
+    const restartedService = trackService(
+      new AgentKernelService({
+        dataDir,
+        runners: new Map([['agent-main', createRunner(dataDir, provider)]]),
+      }),
+    );
+    await restartedService.initialize();
+
+    const restored = restartedService.getRun(started.runId);
+    expect(restored).toBeTruthy();
+    expect(['ready', 'suspended']).toContain(restored?.processStatus);
+
+    blocked = false;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const current = restartedService.getRun(started.runId);
+      if (!current || current.phase === 'done') {
+        break;
+      }
+      if (current.processStatus === 'suspended') {
+        await restartedService.resumeTurn(started.runId);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    const completed = await waitForArchivedRun(restartedService, started.runId);
+    expect(completed.result?.text).toContain('quota recovered');
+
+    const persistedAfterCompletion = await readPersistedRunRecords(dataDir);
+    expect(persistedAfterCompletion.some((record) => record.runId === started.runId)).toBe(true);
+  });
+
+  it('resolves completion after archive on the same service instance', async () => {
+    const dataDir = await createTempDir();
+    const service = trackService(
+      new AgentKernelService({
+        dataDir,
+        runners: new Map([['agent-main', createRunner(dataDir)]]),
+      }),
+    );
+
+    const started = await service.startTurn({
+      agentId: 'agent-main',
+      userMessage: 'await archived completion locally',
+      threadKey: 'archived-completion-same-service-thread',
+    });
+
+    await waitForArchivedRun(service, started.runId);
+
+    const result = await (
+      service as unknown as { waitForCompletion(runId: string): Promise<{ text: string }> }
     ).waitForCompletion(started.runId);
 
     expect(result.text).toContain('kernel hello');
