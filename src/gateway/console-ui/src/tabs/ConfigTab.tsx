@@ -1276,18 +1276,91 @@ function GroupedMcpChoiceRow({
   selected: string[];
   onChange: (values: string[]) => void;
 }) {
+  const [search, setSearch] = useState('');
   const selectedSet = new Set(selected);
+  const normalizedSearch = search.trim().toLowerCase();
+  const filteredGroups = groups
+    .map((group) => {
+      const groupLabel = group.serverId === 'ungrouped' ? 'Other MCP tools' : group.serverId;
+      const groupMatches = groupLabel.toLowerCase().includes(normalizedSearch);
+      const tools =
+        normalizedSearch.length === 0 || groupMatches
+          ? group.tools
+          : group.tools.filter((toolName) => {
+              const formattedName = formatGroupedMcpToolName(toolName, group.toolPrefix).toLowerCase();
+              return (
+                toolName.toLowerCase().includes(normalizedSearch) ||
+                formattedName.includes(normalizedSearch)
+              );
+            });
+
+      return {
+        ...group,
+        tools,
+      };
+    })
+    .filter((group) => group.tools.length > 0);
+  const visibleTools = uniqueSortedStrings(filteredGroups.flatMap((group) => group.tools));
+  const selectedVisibleCount = visibleTools.filter((toolName) => selectedSet.has(toolName)).length;
+
+  function updateBatchSelection(toolNames: string[], checked: boolean): void {
+    if (checked) {
+      onChange(uniqueSortedStrings([...selected, ...toolNames]));
+      return;
+    }
+
+    const toolSet = new Set(toolNames);
+    onChange(selected.filter((value) => !toolSet.has(value)));
+  }
 
   return (
     <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-4 items-start">
       <FieldLabel label={label} help={help} />
       <div className="flex flex-col gap-3">
-        {groups.map((group) => (
+        <div className="rounded-xl border border-slate-700/60 bg-slate-900/45 px-3 py-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              value={search}
+              placeholder="Search MCP tools or servers"
+              onChange={(event) => setSearch(event.target.value)}
+              className={`${inputCls} min-w-[220px] flex-1`}
+            />
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => updateBatchSelection(visibleTools, true)}
+              disabled={visibleTools.length === 0 || selectedVisibleCount === visibleTools.length}
+            >
+              Select Visible
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => updateBatchSelection(visibleTools, false)}
+              disabled={selectedVisibleCount === 0}
+            >
+              Clear Visible
+            </Button>
+          </div>
+          <div className="mt-2 text-[11px] text-slate-500">
+            visible tools {visibleTools.length} · selected {selectedVisibleCount}
+          </div>
+        </div>
+        {filteredGroups.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900/35 px-3 py-4 text-sm text-slate-500">
+            No MCP tools match the current search.
+          </div>
+        ) : (
+          filteredGroups.map((group) => {
+            const activeGroupToolCount = group.tools.filter((toolName) => selectedSet.has(toolName)).length;
+
+            return (
           <div
             key={group.serverId}
             className="rounded-xl border border-slate-700/60 bg-slate-900/45 px-3 py-3"
           >
-            <div className="mb-2 flex flex-wrap items-center gap-2">
+            <div className="mb-2 flex flex-wrap items-center gap-2 justify-between">
+              <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm font-medium text-slate-100">
                 {group.serverId === 'ungrouped' ? 'Other MCP tools' : group.serverId}
               </span>
@@ -1301,6 +1374,28 @@ function GroupedMcpChoiceRow({
                 {group.connected ? 'connected' : 'cached'}
               </span>
               <span className="text-[11px] text-slate-500">{group.tools.length} tools</span>
+              {activeGroupToolCount > 0 && (
+                <span className="text-[11px] text-slate-500">selected {activeGroupToolCount}</span>
+              )}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => updateBatchSelection(group.tools, true)}
+                  disabled={activeGroupToolCount === group.tools.length}
+                >
+                  Select Group
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => updateBatchSelection(group.tools, false)}
+                  disabled={activeGroupToolCount === 0}
+                >
+                  Clear Group
+                </Button>
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-2 xl:grid-cols-3">
               {group.tools.map((toolName) => {
@@ -1327,7 +1422,9 @@ function GroupedMcpChoiceRow({
               })}
             </div>
           </div>
-        ))}
+            );
+          })
+        )}
       </div>
     </div>
   );
@@ -2375,76 +2472,76 @@ function AgentsPanel({
           );
 
           return (
-          <ItemCard key={`${agent.id}-${idx}`}>
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-slate-200">
-                {agent.id}
-                {agent.name ? ` · ${agent.name}` : ''}
-              </div>
-              <div className="text-xs text-slate-500 mt-0.5">
-                model={agent.model || '(default)'} · role={agent.mesh.role} · accepts:{' '}
-                <ListSummary values={agent.mesh.accepts} />
-                {agent.tools.sandboxProfile ? ` · sandbox=${agent.tools.sandboxProfile}` : ''}
-                {availableAgentMcpTools.length > 0
-                  ? ` · mcp=${enabledAgentMcpTools.length}/${availableAgentMcpTools.length}`
-                  : ''}
-              </div>
-              {enabledAgentMcpTools.length > 0 && (
-                <div className="text-xs text-slate-500 mt-0.5 leading-relaxed">
-                  MCP: {enabledAgentMcpTools.slice(0, 3).join(', ')}
-                  {enabledAgentMcpTools.length > 3 ? ` +${enabledAgentMcpTools.length - 3}` : ''}
+            <ItemCard key={`${agent.id}-${idx}`}>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-slate-200">
+                  {agent.id}
+                  {agent.name ? ` · ${agent.name}` : ''}
                 </div>
-              )}
-              {(agent.soulFile || agent.agentsFile) && (
                 <div className="text-xs text-slate-500 mt-0.5">
-                  {agent.soulFile && (
-                    <span>
-                      soul: <span className="text-slate-400 font-mono">{agent.soulFile}</span>
-                    </span>
-                  )}
-                  {agent.soulFile && agent.agentsFile && <span className="mx-1">·</span>}
-                  {agent.agentsFile && (
-                    <span>
-                      agents: <span className="text-slate-400 font-mono">{agent.agentsFile}</span>
-                    </span>
-                  )}
+                  model={agent.model || '(default)'} · role={agent.mesh.role} · accepts:{' '}
+                  <ListSummary values={agent.mesh.accepts} />
+                  {agent.tools.sandboxProfile ? ` · sandbox=${agent.tools.sandboxProfile}` : ''}
+                  {availableAgentMcpTools.length > 0
+                    ? ` · mcp=${enabledAgentMcpTools.length}/${availableAgentMcpTools.length}`
+                    : ''}
                 </div>
-              )}
-            </div>
-            <div className="flex gap-2 shrink-0">
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() =>
-                  setAgentModal({
-                    mode: 'edit',
-                    index: idx,
-                    draft: {
-                      ...agent,
-                      mesh: { ...agent.mesh },
-                      tools: {
-                        ...agent.tools,
-                        allow: [...(agent.tools.allow ?? [])],
-                        deny: [...agent.tools.deny],
-                        approval: [...agent.tools.approval],
-                        maxRounds: agent.tools.maxRounds ?? 60,
-                        sandboxProfile: agent.tools.sandboxProfile ?? '',
+                {enabledAgentMcpTools.length > 0 && (
+                  <div className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+                    MCP: {enabledAgentMcpSummary}
+                  </div>
+                )}
+                {(agent.soulFile || agent.agentsFile) && (
+                  <div className="text-xs text-slate-500 mt-0.5">
+                    {agent.soulFile && (
+                      <span>
+                        soul: <span className="text-slate-400 font-mono">{agent.soulFile}</span>
+                      </span>
+                    )}
+                    {agent.soulFile && agent.agentsFile && <span className="mx-1">·</span>}
+                    {agent.agentsFile && (
+                      <span>
+                        agents: <span className="text-slate-400 font-mono">{agent.agentsFile}</span>
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div className="flex gap-2 shrink-0">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() =>
+                    setAgentModal({
+                      mode: 'edit',
+                      index: idx,
+                      draft: {
+                        ...agent,
+                        mesh: { ...agent.mesh },
+                        tools: {
+                          ...agent.tools,
+                          allow: [...(agent.tools.allow ?? [])],
+                          deny: [...agent.tools.deny],
+                          approval: [...agent.tools.approval],
+                          maxRounds: agent.tools.maxRounds ?? 60,
+                          sandboxProfile: agent.tools.sandboxProfile ?? '',
+                        },
+                        persona: { ...agent.persona },
                       },
-                      persona: { ...agent.persona },
-                    },
-                          MCP: {enabledAgentMcpSummary}
-              >
-                Edit
-              </Button>
-              <Button
-                size="sm"
-                variant="danger"
-                onClick={() => onChange({ ...cfg, agents: cfg.agents.filter((_, i) => i !== idx) })}
-              >
-                Remove
-              </Button>
-            </div>
-          </ItemCard>
+                    })
+                  }
+                >
+                  Edit
+                </Button>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  onClick={() => onChange({ ...cfg, agents: cfg.agents.filter((_, i) => i !== idx) })}
+                >
+                  Remove
+                </Button>
+              </div>
+            </ItemCard>
           );
         })}
       </div>
