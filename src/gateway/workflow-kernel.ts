@@ -31,6 +31,12 @@ export interface WorkflowKernelServiceOptions {
 function cloneStepResults(stepResults: WorkflowStepResult[]): WorkflowStepResult[] {
   return stepResults.map((step) => ({
     ...step,
+    superNodeTrace: step.superNodeTrace
+      ? {
+          ...step.superNodeTrace,
+          participantResults: step.superNodeTrace.participantResults.map((item) => ({ ...item })),
+        }
+      : undefined,
     varsSnapshot: step.varsSnapshot ? { ...step.varsSnapshot } : undefined,
   }));
 }

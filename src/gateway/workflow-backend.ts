@@ -150,6 +150,16 @@ export interface WorkflowStepResult {
   /** Streaming-in-progress or final output text. */
   output?: string;
   error?: string;
+  superNodeTrace?: {
+    type: 'multi_source' | 'debate' | 'decision' | 'risk_review' | 'adjudication';
+    coordinatorAgentId: string;
+    participantResults: Array<{
+      agentId: string;
+      prompt: string;
+      output?: string;
+      error?: string;
+    }>;
+  };
   /** Flat snapshot of ALL named variables accumulated up to this step: "stepId.varName" → value */
   varsSnapshot?: Record<string, string>;
 }
@@ -293,6 +303,12 @@ function cloneWorkflowRun(run: WorkflowRunRecord): WorkflowRunRecord {
     ...run,
     stepResults: run.stepResults.map((step) => ({
       ...step,
+      superNodeTrace: step.superNodeTrace
+        ? {
+            ...step.superNodeTrace,
+            participantResults: step.superNodeTrace.participantResults.map((item) => ({ ...item })),
+          }
+        : undefined,
       varsSnapshot: step.varsSnapshot ? { ...step.varsSnapshot } : undefined,
     })),
   };

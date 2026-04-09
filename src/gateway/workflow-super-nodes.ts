@@ -19,7 +19,8 @@ export interface WorkflowSuperNodeStepLike {
 export interface WorkflowSuperNodeParticipantResult {
   agentId: string;
   prompt: string;
-  output: string;
+  output?: string;
+  error?: string;
 }
 
 const DEFAULT_PROMPTS: Record<WorkflowSuperNodeType, string[]> = {
@@ -115,7 +116,7 @@ export function buildWorkflowSuperNodeCoordinatorPrompt(params: {
   const evidence = participantResults
     .map(
       (item, index) =>
-        `### 子结果 ${index + 1}\nagentId: ${item.agentId}\nrole: ${item.prompt}\n\n${item.output}`,
+        `### 子结果 ${index + 1}\nagentId: ${item.agentId}\nrole: ${item.prompt}\nstatus: ${item.error ? 'error' : 'ok'}\n\n${item.error ?? item.output ?? ''}`,
     )
     .join('\n\n');
   const domainRuleBlock = step.domainRules?.trim()

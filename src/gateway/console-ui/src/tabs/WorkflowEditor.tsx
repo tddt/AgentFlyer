@@ -536,6 +536,157 @@ function superStepParticipantHint(type: StepType): string {
   }
 }
 
+function superStepStructuredPresetLabel(type: StepType): string {
+  switch (type) {
+    case 'multi_source':
+      return '行业信息整合包';
+    case 'debate':
+      return '对抗辩论纪要';
+    case 'decision':
+      return '结构化决策方案';
+    case 'risk_review':
+      return '风险审核报告';
+    case 'adjudication':
+      return '最终执行方案';
+    default:
+      return '结构化输出';
+  }
+}
+
+function buildSuperStepStructuredPreset(type: StepType): {
+  outputFormat: 'json';
+  outputFormatMode: 'prepend';
+  outputFormatPrompt: string;
+  outputs: StepOutputVar[];
+} | null {
+  switch (type) {
+    case 'multi_source':
+      return {
+        outputFormat: 'json',
+        outputFormatMode: 'prepend',
+        outputFormatPrompt:
+          [
+            '请严格输出合法 JSON，不要输出 Markdown、解释文字或代码块。',
+            'JSON 结构固定为：',
+            '{',
+            '  "coreData": string[],',
+            '  "signals": string[],',
+            '  "anomalies": string[],',
+            '  "synthesis": string,',
+            '  "recommendedActions": string[]',
+            '}',
+          ].join('\n'),
+        outputs: [
+          { name: 'coreData', jsonPath: '$.coreData' },
+          { name: 'signals', jsonPath: '$.signals' },
+          { name: 'anomalies', jsonPath: '$.anomalies' },
+          { name: 'synthesis', jsonPath: '$.synthesis' },
+          { name: 'recommendedActions', jsonPath: '$.recommendedActions' },
+        ],
+      };
+    case 'debate':
+      return {
+        outputFormat: 'json',
+        outputFormatMode: 'prepend',
+        outputFormatPrompt:
+          [
+            '请严格输出合法 JSON，不要输出 Markdown、解释文字或代码块。',
+            'JSON 结构固定为：',
+            '{',
+            '  "coreClaims": string[],',
+            '  "disagreements": string[],',
+            '  "consensus": string[],',
+            '  "evidenceGaps": string[],',
+            '  "moderatorSummary": string',
+            '}',
+          ].join('\n'),
+        outputs: [
+          { name: 'coreClaims', jsonPath: '$.coreClaims' },
+          { name: 'disagreements', jsonPath: '$.disagreements' },
+          { name: 'consensus', jsonPath: '$.consensus' },
+          { name: 'evidenceGaps', jsonPath: '$.evidenceGaps' },
+          { name: 'moderatorSummary', jsonPath: '$.moderatorSummary' },
+        ],
+      };
+    case 'decision':
+      return {
+        outputFormat: 'json',
+        outputFormatMode: 'prepend',
+        outputFormatPrompt:
+          [
+            '请严格输出合法 JSON，不要输出 Markdown、解释文字或代码块。',
+            'JSON 结构固定为：',
+            '{',
+            '  "direction": string,',
+            '  "priority": string,',
+            '  "executionSteps": string[],',
+            '  "dependencies": string[],',
+            '  "confidence": string,',
+            '  "rationale": string',
+            '}',
+          ].join('\n'),
+        outputs: [
+          { name: 'direction', jsonPath: '$.direction' },
+          { name: 'priority', jsonPath: '$.priority' },
+          { name: 'executionSteps', jsonPath: '$.executionSteps' },
+          { name: 'dependencies', jsonPath: '$.dependencies' },
+          { name: 'confidence', jsonPath: '$.confidence' },
+          { name: 'rationale', jsonPath: '$.rationale' },
+        ],
+      };
+    case 'risk_review':
+      return {
+        outputFormat: 'json',
+        outputFormatMode: 'prepend',
+        outputFormatPrompt:
+          [
+            '请严格输出合法 JSON，不要输出 Markdown、解释文字或代码块。',
+            'JSON 结构固定为：',
+            '{',
+            '  "riskLevel": string,',
+            '  "majorRisks": string[],',
+            '  "mitigations": string[],',
+            '  "vetoItems": string[],',
+            '  "proceedRecommendation": string',
+            '}',
+          ].join('\n'),
+        outputs: [
+          { name: 'riskLevel', jsonPath: '$.riskLevel' },
+          { name: 'majorRisks', jsonPath: '$.majorRisks' },
+          { name: 'mitigations', jsonPath: '$.mitigations' },
+          { name: 'vetoItems', jsonPath: '$.vetoItems' },
+          { name: 'proceedRecommendation', jsonPath: '$.proceedRecommendation' },
+        ],
+      };
+    case 'adjudication':
+      return {
+        outputFormat: 'json',
+        outputFormatMode: 'prepend',
+        outputFormatPrompt:
+          [
+            '请严格输出合法 JSON，不要输出 Markdown、解释文字或代码块。',
+            'JSON 结构固定为：',
+            '{',
+            '  "verdict": string,',
+            '  "owner": string,',
+            '  "milestones": string[],',
+            '  "watchItems": string[],',
+            '  "decisionMemo": string',
+            '}',
+          ].join('\n'),
+        outputs: [
+          { name: 'verdict', jsonPath: '$.verdict' },
+          { name: 'owner', jsonPath: '$.owner' },
+          { name: 'milestones', jsonPath: '$.milestones' },
+          { name: 'watchItems', jsonPath: '$.watchItems' },
+          { name: 'decisionMemo', jsonPath: '$.decisionMemo' },
+        ],
+      };
+    default:
+      return null;
+  }
+}
+
 function normalizeStepForType(step: WorkflowStep, nextType: StepType): WorkflowStep {
   if (nextType === 'condition') {
     return { ...step, type: nextType };
@@ -1030,6 +1181,50 @@ function StepRow({
               onChange={(e) => onChange({ ...step, domainRules: e.target.value || undefined })}
             />
           </div>
+
+          {(() => {
+            const preset = buildSuperStepStructuredPreset(type);
+            if (!preset) {
+              return null;
+            }
+
+            return (
+              <div className="rounded-lg bg-indigo-950/30 ring-1 ring-indigo-800/35 px-3 py-3 flex flex-col gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-col gap-1">
+                    <span className="text-[11px] uppercase tracking-wider text-indigo-400 font-medium">
+                      Structured JSON Template
+                    </span>
+                    <span className="text-[11px] text-slate-400">
+                      一键套用 {superStepStructuredPresetLabel(type)} 的 JSON 输出约束，并生成可提取字段。
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="rounded-md bg-indigo-500/15 px-3 py-1.5 text-xs text-indigo-300 ring-1 ring-indigo-500/30 hover:bg-indigo-500/20"
+                    onClick={() =>
+                      onChange({
+                        ...step,
+                        outputFormat: preset.outputFormat,
+                        outputFormatMode: preset.outputFormatMode,
+                        outputFormatPrompt: preset.outputFormatPrompt,
+                        outputs: preset.outputs,
+                      })
+                    }
+                  >
+                    套用结构化模板
+                  </button>
+                </div>
+                <div className="text-[11px] text-slate-500">
+                  将自动设置为 JSON + 前置强约束，并写入命名输出变量，后续步骤可直接用
+                  {' '}
+                  vars.stepId.field
+                  {' '}
+                  引用。
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
 

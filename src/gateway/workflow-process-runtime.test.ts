@@ -276,12 +276,86 @@ describe('WorkflowProcessRuntime', () => {
 
     expect(result.signal).toBe('DONE');
     expect(result.state.run.stepResults[0]?.output).toBe('行业信息整合包：完成');
+    expect(result.state.run.stepResults[0]?.superNodeTrace).toEqual({
+      type: 'multi_source',
+      coordinatorAgentId: 'coordinator-agent',
+      participantResults: [
+        {
+          agentId: 'source-a',
+          prompt: '政策监管',
+          output: '子结果:source-a',
+        },
+        {
+          agentId: 'source-b',
+          prompt: '市场竞争',
+          output: '子结果:source-b',
+        },
+      ],
+    });
     expect(calls).toHaveLength(3);
     expect(calls[0]?.agentId).toBe('source-a');
     expect(calls[1]?.agentId).toBe('source-b');
     expect(calls[2]?.agentId).toBe('coordinator-agent');
     expect(calls[0]?.threadKey).toContain('participant-1');
     expect(calls[2]?.threadKey).toContain('coordinator');
+  });
+
+  it('preserves participant trace when a debate super node participant fails', async () => {
+    const workflow = createWorkflow({
+      steps: [
+        {
+          id: 'debate-step',
+          type: 'debate',
+          agentId: 'coordinator-agent',
+          participantAgentIds: ['pro-agent', 'con-agent'],
+          superNodePrompts: ['支持推进', '谨慎反对'],
+          messageTemplate: '是否推进海外扩张',
+          condition: 'on_success',
+        },
+      ],
+    });
+
+    const runtime = new WorkflowProcessRuntime({
+      async runAgentStep(request) {
+        if (request.agentId === 'con-agent') {
+          throw new Error('evidence missing');
+        }
+        if (request.agentId === 'coordinator-agent') {
+          return 'should not run';
+        }
+        return `子结果:${request.agentId}`;
+      },
+    });
+
+    const result = await runtime.step(
+      runtime.createInitialState({ runId: 'run-super-node-error', workflow, input: 'ignored' }),
+      {
+        pid: 'pid-super-node-error' as never,
+        now: 60,
+        runCount: 0,
+        retryCount: 0,
+        metadata: {},
+      },
+    );
+
+    expect(result.signal).toBe('ERROR');
+    expect(result.state.run.stepResults[0]?.error).toContain("participant 'con-agent' failed");
+    expect(result.state.run.stepResults[0]?.superNodeTrace).toEqual({
+      type: 'debate',
+      coordinatorAgentId: 'coordinator-agent',
+      participantResults: [
+        {
+          agentId: 'pro-agent',
+          prompt: '支持推进',
+          output: '子结果:pro-agent',
+        },
+        {
+          agentId: 'con-agent',
+          prompt: '谨慎反对',
+          error: 'evidence missing',
+        },
+      ],
+    });
   });
 
   it('restores legacy serialized state by resolving currentStepId from currentStepIndex', () => {

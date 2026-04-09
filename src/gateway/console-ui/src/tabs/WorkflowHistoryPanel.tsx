@@ -6,9 +6,11 @@ import { useState } from 'react';
 import { Badge } from '../components/Badge.js';
 import { Button } from '../components/Button.js';
 import { DeliverableModal } from '../components/DeliverableModal.js';
+import { MarkdownView } from '../components/MarkdownView.js';
 import { useLocale } from '../context/i18n.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
-import type { WorkflowDef, WorkflowRunRecord } from '../types.js';
+import type { WorkflowDef, WorkflowRunRecord, WorkflowStepResult } from '../types.js';
+import { parseWorkflowSuperNodeStructuredSummary } from '../workflow-super-node-summary.js';
 
 function diffSnapshot(
   current: Record<string, string> | undefined,
@@ -21,6 +23,107 @@ function diffSnapshot(
     if (!(k in prev) || prev[k] !== v) delta[k] = v;
   }
   return delta;
+}
+
+function renderSuperNodeTrace(
+  stepResult: WorkflowStepResult,
+  agentName: (agentId: string) => string,
+): JSX.Element | null {
+  const trace = stepResult.superNodeTrace;
+  if (!trace) {
+    return null;
+  }
+
+  return (
+    <div className="rounded-md bg-sky-950/35 ring-1 ring-sky-800/35 px-2.5 py-2 flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[10px] uppercase tracking-wider text-sky-400 font-medium">
+          Super Node Trace
+        </span>
+        <Badge variant="blue">{trace.type}</Badge>
+        <span className="text-[10px] text-slate-400">
+          coordinator: {agentName(trace.coordinatorAgentId)}
+        </span>
+      </div>
+      {trace.participantResults.map((item, index) => (
+        <div
+          key={`${item.agentId}-${index}`}
+          className="rounded-md bg-slate-950/35 ring-1 ring-slate-800/40 px-2.5 py-2 flex flex-col gap-1"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[11px] text-slate-300">{agentName(item.agentId)}</span>
+            <Badge variant={item.error ? 'red' : 'green'}>{item.error ? 'error' : 'ok'}</Badge>
+            <span className="text-[10px] text-slate-500">{item.prompt}</span>
+          </div>
+          <div className="text-xs text-slate-300 max-h-40 overflow-y-auto">
+            {item.error ? (
+              <p className="text-red-400 font-mono">{item.error}</p>
+            ) : (
+              <MarkdownView content={item.output ?? ''} />
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function renderSuperNodeStructuredSummary(
+  stepType: WorkflowDef['steps'][number]['type'],
+  stepResult: WorkflowStepResult,
+): JSX.Element | null {
+  const summary = parseWorkflowSuperNodeStructuredSummary(stepType, stepResult.output);
+  if (!summary) {
+    return null;
+  }
+
+  return (
+    <div className="rounded-md bg-indigo-950/30 ring-1 ring-indigo-800/35 px-2.5 py-2 flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[10px] uppercase tracking-wider text-indigo-400 font-medium">
+          Structured Summary
+        </span>
+        <span className="text-[11px] text-slate-200 font-medium">{summary.title}</span>
+      </div>
+
+      {summary.highlights.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {summary.highlights.map((item) => (
+            <div
+              key={item.label}
+              className="rounded-md bg-indigo-500/10 px-2 py-1 ring-1 ring-indigo-500/20 flex items-center gap-2"
+            >
+              <span className="text-[10px] uppercase tracking-wider text-indigo-300/80">
+                {item.label}
+              </span>
+              <span className="text-[11px] text-slate-100">{item.value}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {summary.texts.map((section) => (
+        <div key={section.label} className="flex flex-col gap-1">
+          <span className="text-[10px] uppercase tracking-wider text-slate-500">{section.label}</span>
+          <p className="text-xs text-slate-200 whitespace-pre-wrap">{section.value}</p>
+        </div>
+      ))}
+
+      {summary.lists.map((section) => (
+        <div key={section.label} className="flex flex-col gap-1">
+          <span className="text-[10px] uppercase tracking-wider text-slate-500">{section.label}</span>
+          <div className="flex flex-col gap-1">
+            {section.items.map((item, index) => (
+              <div key={`${section.label}-${index}`} className="flex items-start gap-2 text-xs text-slate-200">
+                <span className="text-indigo-300">•</span>
+                <span>{item}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export function WorkflowHistoryPanel({
@@ -146,6 +249,7 @@ export function WorkflowHistoryPanel({
                             {sr.error ? 'error' : 'ok'}
                           </Badge>
                         </div>
+                        {renderSuperNodeStructuredSummary(step?.type, sr)}
                         {(sr.output !== undefined || sr.error) && (
                           <p
                             className={`text-xs whitespace-pre-wrap line-clamp-4 ${
@@ -155,6 +259,7 @@ export function WorkflowHistoryPanel({
                             {sr.error ?? sr.output}
                           </p>
                         )}
+                        {renderSuperNodeTrace(sr, agentName)}
                         {Object.keys(newVars).length > 0 && (
                           <div className="rounded-md bg-emerald-950/40 ring-1 ring-emerald-800/40 px-2.5 py-2 flex flex-col gap-1">
                             <span className="text-[10px] text-emerald-500 font-medium uppercase tracking-wider mb-0.5">

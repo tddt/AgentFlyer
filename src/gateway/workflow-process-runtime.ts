@@ -75,8 +75,29 @@ function buildError(code: string, message: string, retryable: boolean): ProcessE
 function cloneStepResults(stepResults: WorkflowStepResult[]): WorkflowStepResult[] {
   return stepResults.map((step) => ({
     ...step,
+    superNodeTrace: step.superNodeTrace
+      ? {
+          ...step.superNodeTrace,
+          participantResults: step.superNodeTrace.participantResults.map((item) => ({ ...item })),
+        }
+      : undefined,
     varsSnapshot: step.varsSnapshot ? { ...step.varsSnapshot } : undefined,
   }));
+}
+
+interface WorkflowStepExecutionResult {
+  output: string;
+  superNodeTrace?: WorkflowStepResult['superNodeTrace'];
+}
+
+class WorkflowSuperNodeExecutionError extends Error {
+  readonly trace: WorkflowStepResult['superNodeTrace'];
+
+  constructor(message: string, trace: WorkflowStepResult['superNodeTrace']) {
+    super(message);
+    this.name = 'WorkflowSuperNodeExecutionError';
+    this.trace = trace;
+  }
 }
 
 function workflowThreadKey(runId: string, stepIndex: number, suffix?: string): string {
@@ -175,11 +196,13 @@ export class WorkflowProcessRuntime
         return this.handleConditionStep(state, context.now, stepResults, prevOutputs, stepVars);
       }
 
-      const output = await this.executeStep(type, step, message, state, currentStepIndex);
-      extractStepVars(output, step.id, step, stepVars, globals);
-      prevOutputs.push(output);
+      const execution = await this.executeStep(type, step, message, state, currentStepIndex);
+      extractStepVars(execution.output, step.id, step, stepVars, globals);
+      prevOutputs.push(execution.output);
 
-      stepResults.push(this.buildSuccessStepResult(step.id, output, stepVars));
+      stepResults.push(
+        this.buildSuccessStepResult(step.id, execution.output, stepVars, execution.superNodeTrace),
+      );
       const nextState = this.advanceState(
         state,
         {
@@ -197,6 +220,7 @@ export class WorkflowProcessRuntime
       };
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error);
+      const superNodeTrace = error instanceof WorkflowSuperNodeExecutionError ? error.trace : undefined;
       if (state.currentAttempt < maxRetries) {
         return {
           signal: 'RETRYABLE_ERROR',
@@ -209,7 +233,11 @@ export class WorkflowProcessRuntime
         };
       }
 
-      stepResults.push({ stepId: step.id, error: messageText });
+      stepResults.push({
+        stepId: step.id,
+        error: messageText,
+        ...(superNodeTrace ? { superNodeTrace } : {}),
+      });
       if (step.condition === 'on_success') {
         const finalError = buildError('WORKFLOW_STEP_FATAL_ERROR', messageText, false);
         return {
@@ -270,7 +298,7 @@ export class WorkflowProcessRuntime
     message: string,
     state: WorkflowProcessState,
     currentStepIndex: number,
-  ): Promise<string> {
+  ): Promise<WorkflowStepExecutionResult> {
     if (isWorkflowSuperNodeType(type)) {
       return await this.executeSuperNodeStep(type, step, message, state, currentStepIndex);
     }
@@ -284,14 +312,16 @@ export class WorkflowProcessRuntime
         if (!this.handlers.runAgentStep) {
           throw new Error('Workflow agent step handler is not configured');
         }
-        return (
-          await this.handlers.runAgentStep({
-            stepId: step.id,
-            agentId,
-            message: applyFormatInstruction(step, message),
-            threadKey: workflowThreadKey(state.run.runId, currentStepIndex),
-          })
-        ).trim();
+        return {
+          output: (
+            await this.handlers.runAgentStep({
+              stepId: step.id,
+              agentId,
+              message: applyFormatInstruction(step, message),
+              threadKey: workflowThreadKey(state.run.runId, currentStepIndex),
+            })
+          ).trim(),
+        };
       }
       case 'transform': {
         const globals = state.workflow.variables ?? {};
@@ -310,7 +340,7 @@ export class WorkflowProcessRuntime
           state.run.input,
           state.prevOutputs[state.prevOutputs.length - 1] ?? '',
         );
-        return String(result ?? '');
+        return { output: String(result ?? '') };
       }
       case 'http': {
         const globals = state.workflow.variables ?? {};
@@ -326,20 +356,22 @@ export class WorkflowProcessRuntime
           ? interpolate(step.bodyTemplate, state.run.input, state.prevOutputs, stepVars, globals)
           : undefined;
         if (this.handlers.runHttpStep) {
-          return await this.handlers.runHttpStep({
-            stepId: step.id,
-            url,
-            method: step.method ?? 'GET',
-            headers: step.headers,
-            body,
-          });
+          return {
+            output: await this.handlers.runHttpStep({
+              stepId: step.id,
+              url,
+              method: step.method ?? 'GET',
+              headers: step.headers,
+              body,
+            }),
+          };
         }
         const response = await fetch(url, {
           method: step.method ?? 'GET',
           headers: step.headers,
           body,
         });
-        return await response.text();
+        return { output: await response.text() };
       }
     }
   }
@@ -350,7 +382,7 @@ export class WorkflowProcessRuntime
     message: string,
     state: WorkflowProcessState,
     currentStepIndex: number,
-  ): Promise<string> {
+  ): Promise<WorkflowStepExecutionResult> {
     const coordinatorAgentId = step.agentId?.trim() ?? '';
     if (!coordinatorAgentId) {
       throw new Error(`Super node ${step.id} is missing coordinator agentId`);
@@ -371,27 +403,50 @@ export class WorkflowProcessRuntime
     const participantResults: WorkflowSuperNodeParticipantResult[] = await Promise.all(
       participantAgentIds.map(async (agentId, index) => {
         const rolePrompt = rolePrompts[index] ?? `补充视角 ${index + 1}`;
-        const output = await this.handlers.runAgentStep?.({
-          stepId: `${step.id}:participant:${index + 1}`,
-          agentId,
-          message: buildWorkflowSuperNodeParticipantPrompt({
-            type,
-            baseMessage: message,
-            rolePrompt,
-            index,
-            total: participantAgentIds.length,
-            domainRules: step.domainRules,
-          }),
-          threadKey: workflowThreadKey(state.run.runId, currentStepIndex, `participant-${index + 1}`),
-        });
+        try {
+          const output = await this.handlers.runAgentStep?.({
+            stepId: `${step.id}:participant:${index + 1}`,
+            agentId,
+            message: buildWorkflowSuperNodeParticipantPrompt({
+              type,
+              baseMessage: message,
+              rolePrompt,
+              index,
+              total: participantAgentIds.length,
+              domainRules: step.domainRules,
+            }),
+            threadKey: workflowThreadKey(state.run.runId, currentStepIndex, `participant-${index + 1}`),
+          });
 
-        return {
-          agentId,
-          prompt: rolePrompt,
-          output: (output ?? '').trim(),
-        };
+          return {
+            agentId,
+            prompt: rolePrompt,
+            output: (output ?? '').trim(),
+          };
+        } catch (error) {
+          return {
+            agentId,
+            prompt: rolePrompt,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+
       }),
     );
+
+    const trace: WorkflowStepResult['superNodeTrace'] = {
+      type,
+      coordinatorAgentId,
+      participantResults,
+    };
+
+    const failedParticipant = participantResults.find((item) => item.error?.trim());
+    if (failedParticipant) {
+      throw new WorkflowSuperNodeExecutionError(
+        `Super node '${step.id}' participant '${failedParticipant.agentId}' failed: ${failedParticipant.error}`,
+        trace,
+      );
+    }
 
     const coordinatorPrompt = buildWorkflowSuperNodeCoordinatorPrompt({
       step,
@@ -400,14 +455,24 @@ export class WorkflowProcessRuntime
       previousOutput: state.prevOutputs[state.prevOutputs.length - 1] ?? '',
     });
 
-    return (
-      await this.handlers.runAgentStep({
-        stepId: step.id,
-        agentId: coordinatorAgentId,
-        message: applyFormatInstruction(step, coordinatorPrompt),
-        threadKey: workflowThreadKey(state.run.runId, currentStepIndex, 'coordinator'),
-      })
-    ).trim();
+    try {
+      return {
+        output: (
+          await this.handlers.runAgentStep({
+            stepId: step.id,
+            agentId: coordinatorAgentId,
+            message: applyFormatInstruction(step, coordinatorPrompt),
+            threadKey: workflowThreadKey(state.run.runId, currentStepIndex, 'coordinator'),
+          })
+        ).trim(),
+        superNodeTrace: trace,
+      };
+    } catch (error) {
+      throw new WorkflowSuperNodeExecutionError(
+        error instanceof Error ? error.message : String(error),
+        trace,
+      );
+    }
   }
 
   private handleConditionStep(
@@ -489,11 +554,13 @@ export class WorkflowProcessRuntime
     stepId: string,
     output: string,
     stepVars: ReturnType<typeof deserializeStepVars>,
+    superNodeTrace?: WorkflowStepResult['superNodeTrace'],
   ): WorkflowStepResult {
     const varsSnapshot = snapshotVars(stepVars);
     return {
       stepId,
       output,
+      ...(superNodeTrace ? { superNodeTrace } : {}),
       ...(Object.keys(varsSnapshot).length > 0 ? { varsSnapshot } : {}),
     };
   }
