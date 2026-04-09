@@ -6,6 +6,15 @@ import type {
 } from '../core/kernel/types.js';
 import type { WorkflowDef, WorkflowRunRecord, WorkflowStepResult } from './workflow-backend.js';
 import {
+  buildWorkflowSuperNodeCoordinatorPrompt,
+  buildWorkflowSuperNodeParticipantPrompt,
+  isWorkflowSuperNodeType,
+  minimumWorkflowSuperNodeParticipants,
+  normalizeWorkflowSuperNodePrompts,
+  type WorkflowSuperNodeParticipantResult,
+  type WorkflowSuperNodeType,
+} from './workflow-super-nodes.js';
+import {
   applyFormatInstruction,
   buildWorkflowStepIndexMap,
   deserializeStepVars,
@@ -70,8 +79,10 @@ function cloneStepResults(stepResults: WorkflowStepResult[]): WorkflowStepResult
   }));
 }
 
-function workflowThreadKey(runId: string, stepIndex: number): string {
-  return `workflow:${runId}:step${stepIndex}`;
+function workflowThreadKey(runId: string, stepIndex: number, suffix?: string): string {
+  return suffix
+    ? `workflow:${runId}:step${stepIndex}:${suffix}`
+    : `workflow:${runId}:step${stepIndex}`;
 }
 
 export class WorkflowProcessRuntime
@@ -254,12 +265,16 @@ export class WorkflowProcessRuntime
   }
 
   private async executeStep(
-    type: 'agent' | 'transform' | 'http',
+    type: Exclude<NonNullable<WorkflowDef['steps'][number]['type']>, 'condition'>,
     step: WorkflowDef['steps'][number],
     message: string,
     state: WorkflowProcessState,
     currentStepIndex: number,
   ): Promise<string> {
+    if (isWorkflowSuperNodeType(type)) {
+      return await this.executeSuperNodeStep(type, step, message, state, currentStepIndex);
+    }
+
     switch (type) {
       case 'agent': {
         const agentId = step.agentId ?? '';
@@ -327,6 +342,72 @@ export class WorkflowProcessRuntime
         return await response.text();
       }
     }
+  }
+
+  private async executeSuperNodeStep(
+    type: WorkflowSuperNodeType,
+    step: WorkflowDef['steps'][number],
+    message: string,
+    state: WorkflowProcessState,
+    currentStepIndex: number,
+  ): Promise<string> {
+    const coordinatorAgentId = step.agentId?.trim() ?? '';
+    if (!coordinatorAgentId) {
+      throw new Error(`Super node ${step.id} is missing coordinator agentId`);
+    }
+    if (!this.handlers.runAgentStep) {
+      throw new Error(`Workflow super node step handler is not configured for '${type}'`);
+    }
+
+    const participantAgentIds = (step.participantAgentIds ?? []).map((agentId) => agentId.trim()).filter(Boolean);
+    const minimumParticipants = minimumWorkflowSuperNodeParticipants(type);
+    if (participantAgentIds.length < minimumParticipants) {
+      throw new Error(
+        `Super node '${step.id}' requires at least ${minimumParticipants} participant agents`,
+      );
+    }
+
+    const rolePrompts = normalizeWorkflowSuperNodePrompts(type, step.superNodePrompts);
+    const participantResults: WorkflowSuperNodeParticipantResult[] = await Promise.all(
+      participantAgentIds.map(async (agentId, index) => {
+        const rolePrompt = rolePrompts[index] ?? `补充视角 ${index + 1}`;
+        const output = await this.handlers.runAgentStep?.({
+          stepId: `${step.id}:participant:${index + 1}`,
+          agentId,
+          message: buildWorkflowSuperNodeParticipantPrompt({
+            type,
+            baseMessage: message,
+            rolePrompt,
+            index,
+            total: participantAgentIds.length,
+            domainRules: step.domainRules,
+          }),
+          threadKey: workflowThreadKey(state.run.runId, currentStepIndex, `participant-${index + 1}`),
+        });
+
+        return {
+          agentId,
+          prompt: rolePrompt,
+          output: (output ?? '').trim(),
+        };
+      }),
+    );
+
+    const coordinatorPrompt = buildWorkflowSuperNodeCoordinatorPrompt({
+      step,
+      participantResults,
+      baseMessage: message,
+      previousOutput: state.prevOutputs[state.prevOutputs.length - 1] ?? '',
+    });
+
+    return (
+      await this.handlers.runAgentStep({
+        stepId: step.id,
+        agentId: coordinatorAgentId,
+        message: applyFormatInstruction(step, coordinatorPrompt),
+        threadKey: workflowThreadKey(state.run.runId, currentStepIndex, 'coordinator'),
+      })
+    ).trim();
   }
 
   private handleConditionStep(

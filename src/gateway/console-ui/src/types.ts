@@ -277,7 +277,16 @@ export interface SessionMessagesResult {
 // ── Workflow types ────────────────────────────────────────────────────────────
 
 /** Supported node types in a workflow step. */
-export type StepType = 'agent' | 'transform' | 'condition' | 'http';
+export type StepType =
+  | 'agent'
+  | 'transform'
+  | 'condition'
+  | 'http'
+  | 'multi_source'
+  | 'debate'
+  | 'decision'
+  | 'risk_review'
+  | 'adjudication';
 
 /** A named variable extracted from a step's output. */
 export interface StepOutputVar {
@@ -304,6 +313,8 @@ export interface WorkflowStep {
   nextStepId?: string;
   /** Required for 'agent' steps. */
   agentId?: string;
+  /** Optional participant agents used by composite super nodes for parallel sub-analysis. */
+  participantAgentIds?: string[];
   label?: string;
   /**
    * Template / body string.
@@ -327,6 +338,11 @@ export interface WorkflowStep {
   // ── 'transform' step ─────────────────────────────────────────────────────
   /** JS expression body: receives (vars, globals, input, prev_output), must return string. */
   transformCode?: string;
+  // ── super node fields ─────────────────────────────────────────────────────
+  /** One prompt per participant perspective / stance / lens for composite super nodes. */
+  superNodePrompts?: string[];
+  /** Industry-specific rules or constraints shared across composite super nodes. */
+  domainRules?: string;
   // ── output format constraint (agent steps) ───────────────────────────────
   /** Preset format or 'custom' for a user-defined instruction appended to the message. */
   outputFormat?: 'text' | 'json' | 'markdown' | 'custom';

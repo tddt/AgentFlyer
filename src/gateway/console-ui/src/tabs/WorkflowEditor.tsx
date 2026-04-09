@@ -443,6 +443,11 @@ const STEP_TYPE_LABELS: Record<StepType, string> = {
   transform: '⚙️ Transform',
   condition: '🔀 Condition',
   http: '🌐 HTTP',
+  multi_source: '📡 多源采集',
+  debate: '⚔️ 对抗辩论',
+  decision: '🧭 决策生成',
+  risk_review: '🛡️ 风险审核',
+  adjudication: '🏛️ 裁定',
 };
 
 const STEP_TYPE_COLORS: Record<StepType, string> = {
@@ -450,7 +455,86 @@ const STEP_TYPE_COLORS: Record<StepType, string> = {
   transform: 'bg-amber-600/20 ring-amber-500/40 text-amber-300',
   condition: 'bg-purple-600/20 ring-purple-500/40 text-purple-300',
   http: 'bg-emerald-600/20 ring-emerald-500/40 text-emerald-300',
+  multi_source: 'bg-cyan-600/20 ring-cyan-500/40 text-cyan-300',
+  debate: 'bg-rose-600/20 ring-rose-500/40 text-rose-300',
+  decision: 'bg-sky-600/20 ring-sky-500/40 text-sky-300',
+  risk_review: 'bg-orange-600/20 ring-orange-500/40 text-orange-300',
+  adjudication: 'bg-fuchsia-600/20 ring-fuchsia-500/40 text-fuchsia-300',
 };
+
+function isSuperStepType(type: StepType): boolean {
+  return (
+    type === 'multi_source' ||
+    type === 'debate' ||
+    type === 'decision' ||
+    type === 'risk_review' ||
+    type === 'adjudication'
+  );
+}
+
+function parseMultilineItems(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function toMultilineItems(values: string[] | undefined): string {
+  return (values ?? []).join('\n');
+}
+
+function superStepMessageLabel(type: StepType): string {
+  switch (type) {
+    case 'multi_source':
+      return '采集任务说明';
+    case 'debate':
+      return '辩题 / 对抗议题';
+    case 'decision':
+      return '决策任务说明';
+    case 'risk_review':
+      return '待审方案 / 审核任务';
+    case 'adjudication':
+      return '待裁定事项';
+    case 'http':
+      return '请求体模板 (bodyTemplate)';
+    default:
+      return '消息模板';
+  }
+}
+
+function superStepPromptLabel(type: StepType): string {
+  switch (type) {
+    case 'multi_source':
+      return '采集维度（每行一个）';
+    case 'debate':
+      return '对立立场（每行一个）';
+    case 'decision':
+      return '补充视角（每行一个，可选）';
+    case 'risk_review':
+      return '审核视角（每行一个）';
+    case 'adjudication':
+      return '参考视角（每行一个，可选）';
+    default:
+      return '视角提示';
+  }
+}
+
+function superStepParticipantHint(type: StepType): string {
+  switch (type) {
+    case 'multi_source':
+      return '并行采集 agent，至少选择 1 个。';
+    case 'debate':
+      return '对立辩论 agent，至少选择 2 个。';
+    case 'decision':
+      return '可选的并行补充分析 agent。';
+    case 'risk_review':
+      return '并行风险审核 agent，至少选择 1 个。';
+    case 'adjudication':
+      return '可选的并行参考分析 agent。';
+    default:
+      return '';
+  }
+}
 
 function normalizeStepForType(step: WorkflowStep, nextType: StepType): WorkflowStep {
   if (nextType === 'condition') {
@@ -738,11 +822,12 @@ function StepRow({
   onSelect: () => void;
 }) {
   const type: StepType = step.type ?? 'agent';
+  const isSuperNode = isSuperStepType(type);
   const selectedAgent = step.agentId
     ? agents.find((agent) => agent.agentId === step.agentId)
     : undefined;
   const preferredAgent = getPreferredAgent(agents);
-  const workflowAgentHint = type === 'agent' ? getWorkflowAgentHint(step, agents) : null;
+  const workflowAgentHint = type === 'agent' || isSuperNode ? getWorkflowAgentHint(step, agents) : null;
 
   return (
     <div
@@ -831,8 +916,11 @@ function StepRow({
       </div>
 
       {/* Agent selector */}
-      {type === 'agent' && (
+      {(type === 'agent' || isSuperNode) && (
         <div className="flex flex-col gap-2">
+          <label className="text-[11px] text-slate-500">
+            {isSuperNode ? '协调 / 汇总代理' : '执行 Agent'}
+          </label>
           <select
             className={inputCls}
             value={step.agentId ?? ''}
@@ -870,12 +958,85 @@ function StepRow({
         </div>
       )}
 
+      {isSuperNode && (
+        <div className="flex flex-col gap-3 rounded-lg bg-slate-900/35 ring-1 ring-slate-700/40 p-3">
+          <div className="flex flex-col gap-1">
+            <label className="text-[11px] text-slate-500">参与 Agent</label>
+            <div className="text-[11px] text-slate-600">{superStepParticipantHint(type)}</div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {agents.length === 0 && (
+              <div className="text-xs text-slate-500">当前没有可选 Agent。</div>
+            )}
+            {agents.map((agent) => {
+              const checked = (step.participantAgentIds ?? []).includes(agent.agentId);
+              const disabled = agent.agentId === (step.agentId ?? '');
+
+              return (
+                <label
+                  key={agent.agentId}
+                  className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm ring-1 transition-colors ${
+                    disabled
+                      ? 'bg-slate-900/60 ring-slate-800/70 text-slate-600'
+                      : 'bg-slate-800/60 ring-slate-700/40 text-slate-300 hover:bg-slate-700/60'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={disabled}
+                    onChange={(event) => {
+                      const next = event.target.checked
+                        ? [...(step.participantAgentIds ?? []), agent.agentId]
+                        : (step.participantAgentIds ?? []).filter((value) => value !== agent.agentId);
+                      onChange({
+                        ...step,
+                        participantAgentIds: next.length > 0 ? Array.from(new Set(next)) : undefined,
+                      });
+                    }}
+                    className="accent-indigo-500"
+                  />
+                  <span>{formatAgentOptionLabel(agent)}</span>
+                  {disabled && <span className="text-[10px] text-slate-500">协调者</span>}
+                </label>
+              );
+            })}
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-[11px] text-slate-500">{superStepPromptLabel(type)}</label>
+            <textarea
+              rows={3}
+              className={`${inputCls} resize-none font-mono text-xs`}
+              placeholder="每行一个并行视角 / 立场 / 维度"
+              value={toMultilineItems(step.superNodePrompts)}
+              onChange={(e) => {
+                const nextPrompts = parseMultilineItems(e.target.value);
+                onChange({
+                  ...step,
+                  superNodePrompts: nextPrompts.length > 0 ? nextPrompts : undefined,
+                });
+              }}
+            />
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-[11px] text-slate-500">行业规则 / 约束</label>
+            <textarea
+              rows={3}
+              className={`${inputCls} resize-none font-mono text-xs`}
+              placeholder="例如：合规边界、行业黑名单、预算约束、审批要求"
+              value={step.domainRules ?? ''}
+              onChange={(e) => onChange({ ...step, domainRules: e.target.value || undefined })}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Message template (agent / http body) */}
       {type !== 'condition' && type !== 'transform' && (
         <div className="flex flex-col gap-1">
-          <label className="text-[11px] text-slate-500">
-            {type === 'http' ? '请求体模板 (bodyTemplate)' : '消息模板'}
-          </label>
+          <label className="text-[11px] text-slate-500">{superStepMessageLabel(type)}</label>
           <textarea
             rows={2}
             className={`${inputCls} resize-none font-mono text-xs`}
@@ -886,7 +1047,7 @@ function StepRow({
         </div>
       )}
       {/* Output format constraint — agent steps only */}
-      {type === 'agent' && (
+      {(type === 'agent' || isSuperNode) && (
         <div className="flex flex-col gap-1.5">
           <label className="text-[11px] text-slate-500">输出格式约束</label>
           <select
@@ -994,7 +1155,7 @@ function StepRow({
       )}
 
       {/* Named output variables */}
-      {(type === 'agent' || type === 'http') && (
+      {(type === 'agent' || type === 'http' || isSuperNode) && (
         <OutputVarList
           outputs={step.outputs ?? []}
           onChange={(o) => onChange({ ...step, outputs: o.length ? o : undefined })}
@@ -1207,7 +1368,7 @@ export function WorkflowEditor({
         {
           id: stepId,
           type,
-          agentId: type === 'agent' ? '' : undefined,
+          agentId: type === 'agent' || isSuperStepType(type) ? '' : undefined,
           messageTemplate: '{{prev_output}}',
           condition: 'any',
         },

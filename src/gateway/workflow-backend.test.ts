@@ -742,6 +742,39 @@ describe('workflow-backend kernel integration', () => {
     ]);
   });
 
+  it('validates debate super nodes require coordinator and at least two participant agents', () => {
+    const diagnostics = diagnoseWorkflowValidation(
+      createWorkflow({
+        id: 'wf-debate',
+        name: 'Debate Workflow',
+        steps: [
+          {
+            id: 'debate-step',
+            type: 'debate',
+            messageTemplate: '是否进入新市场',
+            condition: 'on_success',
+            participantAgentIds: ['agent-a'],
+          },
+        ],
+      }),
+    );
+
+    expect(diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'step-validation',
+          stepId: 'debate-step',
+          message: "debate step 'debate-step' requires agentId as coordinator",
+        }),
+        expect.objectContaining({
+          kind: 'step-validation',
+          stepId: 'debate-step',
+          message: "debate step 'debate-step' requires at least 2 participantAgentIds",
+        }),
+      ]),
+    );
+  });
+
   it('rejects workflows that contain unreachable steps', async () => {
     const dataDir = join(process.cwd(), `.tmp-workflow-backend-test-unreachable-${ulid()}`);
     const ctx = createRpcContext(dataDir);

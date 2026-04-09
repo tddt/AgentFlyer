@@ -16,6 +16,10 @@ import {
   readMcpServerHistory,
   summarizeMcpServerHistory,
 } from '../mcp/index.js';
+import {
+  isWorkflowSuperNodeType,
+  minimumWorkflowSuperNodeParticipants,
+} from './workflow-super-nodes.js';
 import { publishDeliverableTargets } from './deliverable-publication.js';
 import {
   type DeliverablePublicationTarget,
@@ -30,7 +34,16 @@ const logger = createLogger('gateway:workflow');
 // ── Domain types (shared with frontend via types.ts) ─────────────────────────
 
 /** Supported node types. */
-export type StepType = 'agent' | 'transform' | 'condition' | 'http';
+export type StepType =
+  | 'agent'
+  | 'transform'
+  | 'condition'
+  | 'http'
+  | 'multi_source'
+  | 'debate'
+  | 'decision'
+  | 'risk_review'
+  | 'adjudication';
 
 /**
  * A named variable extracted from a step's output.
@@ -65,6 +78,8 @@ export interface WorkflowStep {
   nextStepId?: string;
   /** Required for 'agent' steps. */
   agentId?: string;
+  /** Optional participant agents used by composite super nodes for parallel sub-analysis. */
+  participantAgentIds?: string[];
   label?: string;
   /**
    * Template / body string.
@@ -95,6 +110,11 @@ export interface WorkflowStep {
   // ── 'transform' step fields ─────────────────────────────────────────────
   /** JS expression body for transform steps. Replaces messageTemplate for 'transform' type. */
   transformCode?: string;
+  // ── super node fields ─────────────────────────────────────────────────────
+  /** One prompt per participant perspective / stance / lens for composite super nodes. */
+  superNodePrompts?: string[];
+  /** Industry-specific rules or constraints shared across composite super nodes. */
+  domainRules?: string;
   // ── output format constraint (agent steps) ───────────────────────────────
   /** Preset format or 'custom' for a user-defined instruction appended to the message. */
   outputFormat?: 'text' | 'json' | 'markdown' | 'custom';
@@ -689,13 +709,59 @@ export function diagnoseWorkflowValidation(
         ),
       );
     }
-    if (type === 'agent' && !step.agentId?.trim()) {
-      diagnostics.push(
-        stepValidationDiagnostic(step.id, `agent step '${step.id}' requires agentId`),
-      );
+    if (!step.agentId?.trim()) {
+      if (type === 'agent') {
+        diagnostics.push(
+          stepValidationDiagnostic(step.id, `agent step '${step.id}' requires agentId`),
+        );
+      } else if (isWorkflowSuperNodeType(type)) {
+        diagnostics.push(
+          stepValidationDiagnostic(
+            step.id,
+            `${type} step '${step.id}' requires agentId as coordinator`,
+          ),
+        );
+      }
     }
     if (type === 'http' && !step.url?.trim()) {
       diagnostics.push(stepValidationDiagnostic(step.id, `http step '${step.id}' requires url`));
+    }
+    if (isWorkflowSuperNodeType(type)) {
+      const participantAgentIds = (step.participantAgentIds ?? []).map((agentId) => agentId.trim());
+      if (participantAgentIds.some((agentId) => agentId.length === 0)) {
+        diagnostics.push(
+          stepValidationDiagnostic(
+            step.id,
+            `${type} step '${step.id}' contains blank participantAgentIds`,
+          ),
+        );
+      }
+      const normalizedParticipantAgentIds = participantAgentIds.filter(Boolean);
+      if (new Set(normalizedParticipantAgentIds).size !== normalizedParticipantAgentIds.length) {
+        diagnostics.push(
+          stepValidationDiagnostic(
+            step.id,
+            `${type} step '${step.id}' contains duplicate participantAgentIds`,
+          ),
+        );
+      }
+      const minimumParticipants = minimumWorkflowSuperNodeParticipants(type);
+      if (normalizedParticipantAgentIds.length < minimumParticipants) {
+        diagnostics.push(
+          stepValidationDiagnostic(
+            step.id,
+            `${type} step '${step.id}' requires at least ${minimumParticipants} participantAgentIds`,
+          ),
+        );
+      }
+      if ((step.superNodePrompts ?? []).some((prompt) => prompt.trim().length === 0)) {
+        diagnostics.push(
+          stepValidationDiagnostic(
+            step.id,
+            `${type} step '${step.id}' contains blank superNodePrompts entries`,
+          ),
+        );
+      }
     }
 
     const nextTargetError = validateWorkflowTarget(
@@ -805,7 +871,8 @@ export function diagnoseWorkflowValidation(
   const recommendedSandboxAgent = recommendSandboxAgent(configuredAgents);
 
   for (const step of workflow.steps) {
-    if ((step.type ?? 'agent') !== 'agent') {
+    const type = step.type ?? 'agent';
+    if (type !== 'agent' && !isWorkflowSuperNodeType(type)) {
       continue;
     }
     const agentId = step.agentId?.trim();
@@ -817,7 +884,7 @@ export function diagnoseWorkflowValidation(
       diagnostics.push(
         stepAdvisoryDiagnostic(
           step.id,
-          `agent step '${step.id}' targets '${agentId}', but that agent is not present in current config diagnostics context`,
+          `${type} step '${step.id}' targets '${agentId}', but that agent is not present in current config diagnostics context`,
         ),
       );
       continue;
@@ -829,7 +896,7 @@ export function diagnoseWorkflowValidation(
       diagnostics.push(
         stepAdvisoryDiagnostic(
           step.id,
-          `agent step '${step.id}' targets '${agentId}' without sandboxProfile. Consider using '${recommendedSandboxAgent.id}' (sandbox:${recommendedSandboxAgent.sandboxProfile}) for readonly execution.`,
+          `${type} step '${step.id}' targets '${agentId}' without sandboxProfile. Consider using '${recommendedSandboxAgent.id}' (sandbox:${recommendedSandboxAgent.sandboxProfile}) for readonly execution.`,
         ),
       );
       continue;
@@ -837,14 +904,17 @@ export function diagnoseWorkflowValidation(
     diagnostics.push(
       stepAdvisoryDiagnostic(
         step.id,
-        `agent step '${step.id}' targets '${agentId}' without sandboxProfile. Consider binding a sandbox profile such as readonly-output before using this workflow for scheduled or autonomous execution.`,
+        `${type} step '${step.id}' targets '${agentId}' without sandboxProfile. Consider binding a sandbox profile such as readonly-output before using this workflow for scheduled or autonomous execution.`,
       ),
     );
   }
 
   if (
     recommendedSandboxAgent &&
-    workflow.steps.some((step) => (step.type ?? 'agent') === 'agent') &&
+    workflow.steps.some((step) => {
+      const type = step.type ?? 'agent';
+      return type === 'agent' || isWorkflowSuperNodeType(type);
+    }) &&
     !workflow.steps.some((step) => {
       const agentId = step.agentId?.trim();
       return agentId && sandboxAgentById.get(agentId)?.tools?.sandboxProfile;

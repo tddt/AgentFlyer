@@ -233,6 +233,57 @@ describe('WorkflowProcessRuntime', () => {
     expect(second.state.run.stepResults[1]?.output).toBe('final');
   });
 
+  it('executes multi_source super nodes by fanning out participant agents before coordinator synthesis', async () => {
+    const calls: Array<{ agentId: string; stepId: string; message: string; threadKey: string }> = [];
+    const workflow = createWorkflow({
+      steps: [
+        {
+          id: 'collect',
+          type: 'multi_source',
+          agentId: 'coordinator-agent',
+          participantAgentIds: ['source-a', 'source-b'],
+          superNodePrompts: ['政策监管', '市场竞争'],
+          messageTemplate: '围绕机器人行业做全维度采集',
+          condition: 'on_success',
+        },
+      ],
+    });
+
+    const runtime = new WorkflowProcessRuntime({
+      async runAgentStep(request) {
+        calls.push(request);
+        if (request.agentId === 'coordinator-agent') {
+          expect(request.message).toContain('行业信息整合包');
+          expect(request.message).toContain('source-a');
+          expect(request.message).toContain('source-b');
+          return '行业信息整合包：完成';
+        }
+
+        return `子结果:${request.agentId}`;
+      },
+    });
+
+    const result = await runtime.step(
+      runtime.createInitialState({ runId: 'run-super-node', workflow, input: 'ignored' }),
+      {
+        pid: 'pid-super-node' as never,
+        now: 50,
+        runCount: 0,
+        retryCount: 0,
+        metadata: {},
+      },
+    );
+
+    expect(result.signal).toBe('DONE');
+    expect(result.state.run.stepResults[0]?.output).toBe('行业信息整合包：完成');
+    expect(calls).toHaveLength(3);
+    expect(calls[0]?.agentId).toBe('source-a');
+    expect(calls[1]?.agentId).toBe('source-b');
+    expect(calls[2]?.agentId).toBe('coordinator-agent');
+    expect(calls[0]?.threadKey).toContain('participant-1');
+    expect(calls[2]?.threadKey).toContain('coordinator');
+  });
+
   it('restores legacy serialized state by resolving currentStepId from currentStepIndex', () => {
     const workflow = createWorkflow({
       steps: [

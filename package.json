@@ -36,11 +36,7 @@
   "bin": {
     "agentflyer": "./dist/cli/main.js"
   },
-  "exports": {
-    "./core/config": "./dist/core/config/index.js",
-    "./core/kernel": "./dist/core/kernel/index.js",
-    "./core/session": "./dist/core/session/index.js",
-    "./agent": "./dist/agent/runner.js",
+  "exports": {                 
     "./agent/process-runtime": "./dist/agent/process-runtime.js",
     "./memory": "./dist/memory/index.js",
     "./skills": "./dist/skills/index.js",
