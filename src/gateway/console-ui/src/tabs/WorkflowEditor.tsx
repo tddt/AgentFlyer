@@ -2,8 +2,10 @@
  * WorkflowEditor — form for creating and editing workflow definitions.
  * Supports agent / transform / condition / http step types.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '../components/Button.js';
+import { useLocale } from '../context/i18n.js';
+import type { Locale } from '../context/i18n.js';
 import { rpc } from '../hooks/useRpc.js';
 import type {
   AgentInfo,
@@ -14,6 +16,8 @@ import type {
   StepType,
   WorkflowDef,
   WorkflowDiagnoseResult,
+  WorkflowDesignerLayout,
+  WorkflowDesignerPosition,
   WorkflowGraphDiagnostic,
   WorkflowValidationDiagnostic,
   WorkflowStep,
@@ -59,10 +63,622 @@ function getWorkflowAgentHint(step: WorkflowStep, agentList: AgentInfo[]): strin
   return '当前 agent 未绑定 sandboxProfile，建议在自动化执行前绑定 readonly-output 或其他受限 profile。';
 }
 
+function agentSearchText(agent: AgentInfo): string {
+  return [agent.agentId, agent.name ?? '', ...(agent.mentionAliases ?? [])].join(' ').toLowerCase();
+}
+
+function scoreAgentByKeywords(agent: AgentInfo, keywords: string[]): number {
+  const haystack = agentSearchText(agent);
+  return keywords.reduce((score, keyword) => (haystack.includes(keyword) ? score + 1 : score), 0);
+}
+
+function matchedAgentKeywords(agent: AgentInfo, keywords: string[]): string[] {
+  const haystack = agentSearchText(agent);
+  return Array.from(new Set(keywords.filter((keyword) => haystack.includes(keyword)))).slice(0, 3);
+}
+
+function typeKeywords(type: StepType, role: 'coordinator' | 'participant'): string[] {
+  switch (type) {
+    case 'multi_source':
+      return role === 'coordinator'
+        ? ['synth', 'coordinator', 'lead', 'manager', 'analyst', '汇总', '协调', '统筹']
+        : ['research', 'intel', 'market', 'user', 'competitor', 'collect', '采集', '研究', '情报', '市场', '竞品', '用户'];
+    case 'debate':
+      return role === 'coordinator'
+        ? ['moderator', 'judge', 'lead', 'review', '主持', '裁决', '协调']
+        : ['debate', 'critic', 'opponent', 'advocate', 'challenge', '辩论', '正方', '反方', '质询', '评审'];
+    case 'decision':
+      return role === 'coordinator'
+        ? ['decide', 'planner', 'strategy', 'lead', '决策', '策略', '规划', '负责人']
+        : ['analysis', 'business', 'growth', 'cost', 'product', '分析', '收益', '成本', '产品'];
+    case 'risk_review':
+      return role === 'coordinator'
+        ? ['audit', 'lead', 'review', 'risk', '审核', '风控', '负责人']
+        : ['risk', 'compliance', 'security', 'legal', 'audit', '风控', '合规', '法务', '审计', '安全'];
+    case 'adjudication':
+      return role === 'coordinator'
+        ? ['judge', 'owner', 'exec', 'lead', '裁定', '拍板', '负责人', '管理']
+        : ['owner', 'delivery', 'milestone', 'ops', '责任', '执行', '里程碑', '运营'];
+    default:
+      return role === 'coordinator'
+        ? ['lead', 'coordinator', 'manager', '协调', '统筹']
+        : ['analysis', 'research', 'review', '分析', '研究', '评审'];
+  }
+}
+
+type RankedAgentRecommendation = {
+  agent: AgentInfo;
+  score: number;
+  reasons: string[];
+};
+
+function buildAgentRecommendation(
+  agent: AgentInfo,
+  type: StepType,
+  role: 'coordinator' | 'participant',
+): RankedAgentRecommendation {
+  const reasons = matchedAgentKeywords(agent, typeKeywords(type, role));
+  const sandboxReason = agent.sandboxProfile ? [`sandbox:${agent.sandboxProfile}`] : [];
+  return {
+    agent,
+    score: scoreAgentByKeywords(agent, typeKeywords(type, role)),
+    reasons: [...reasons, ...sandboxReason].slice(0, 3),
+  };
+}
+
+function rankSuperStepAgents(
+  type: StepType,
+  agents: AgentInfo[],
+): { coordinator: RankedAgentRecommendation | null; participants: RankedAgentRecommendation[] } {
+  const preferred = getPreferredAgent(agents);
+  const coordinatorRanked = agents.map((agent) => buildAgentRecommendation(agent, type, 'coordinator')).sort((left, right) => {
+    if (left.score !== right.score) {
+      return right.score - left.score;
+    }
+    if (preferred && left.agent.agentId === preferred.agentId) return -1;
+    if (preferred && right.agent.agentId === preferred.agentId) return 1;
+    return formatAgentOptionLabel(left.agent).localeCompare(formatAgentOptionLabel(right.agent), 'zh-CN');
+  });
+
+  const coordinator = coordinatorRanked[0] ?? null;
+  const participantRanked = agents
+    .filter((agent) => agent.agentId !== coordinator?.agent.agentId)
+    .map((agent) => buildAgentRecommendation(agent, type, 'participant'))
+    .sort((left, right) => {
+      if (left.score !== right.score) {
+        return right.score - left.score;
+      }
+      if (preferred && left.agent.agentId === preferred.agentId) return 1;
+      if (preferred && right.agent.agentId === preferred.agentId) return -1;
+      return formatAgentOptionLabel(left.agent).localeCompare(formatAgentOptionLabel(right.agent), 'zh-CN');
+    });
+
+  const minimumParticipants =
+    type === 'debate' ? 2 : type === 'multi_source' || type === 'risk_review' ? 1 : 2;
+  const participants = participantRanked.slice(0, Math.min(Math.max(minimumParticipants, 1), participantRanked.length));
+
+  return { coordinator, participants };
+}
+
+type WorkflowStageMeta = {
+  id: string;
+  title: string;
+  accent: string;
+};
+
+type WorkflowStageSummary = {
+  stage: WorkflowStageMeta;
+  stepCount: number;
+  issueCount: number;
+  avgCompletion: number;
+  waitingCount: number;
+  firstStepId?: string;
+  actions: WorkflowStageAction[];
+};
+
+type WorkflowChecklistItem = {
+  id: string;
+  stepId?: string;
+  message: string;
+  tone: 'warn' | 'neutral';
+};
+
+type WorkflowStageAction = {
+  id: string;
+  stepId: string;
+  label: string;
+};
+
+type WorkflowEditorMode = 'form' | 'graph';
+
+type GraphConnectionState = {
+  sourceStepId: string;
+  mode: 'next' | 'branch';
+  branchIndex?: number;
+};
+
+type WorkflowGraphEdge = {
+  id: string;
+  fromStepId: string;
+  toStepId: string;
+  tone: 'default' | 'branch';
+  label?: string;
+};
+
+type DragState = {
+  stepIds: string[];
+  pointerId: number;
+  startX: number;
+  startY: number;
+  origins: Record<string, WorkflowDesignerPosition>;
+};
+
+type GraphMarqueeState = {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
+};
+
+type WorkflowGraphCanvasMetrics = {
+  width: number;
+  height: number;
+  contentWidth: number;
+  contentHeight: number;
+};
+
+const GRAPH_NODE_WIDTH = 208;
+const GRAPH_NODE_HEIGHT = 132;
+const GRAPH_STAGE_GAP_X = 300;
+const GRAPH_STAGE_GAP_Y = 184;
+const GRAPH_END_NODE_ID = '$end';
+const GRAPH_END_NODE_WIDTH = 144;
+const GRAPH_END_NODE_HEIGHT = 84;
+
+function buildDefaultWorkflowDesignerPositions(steps: WorkflowStep[]): Record<string, WorkflowDesignerPosition> {
+  const stageColumnOffsets = new Map<string, number>();
+  const positions: Record<string, WorkflowDesignerPosition> = {};
+  let fallbackColumn = 0;
+
+  for (const step of steps) {
+    const stage = getWorkflowStageMeta(step.type ?? 'agent');
+    if (!stageColumnOffsets.has(stage.id)) {
+      stageColumnOffsets.set(stage.id, fallbackColumn);
+      fallbackColumn += 1;
+    }
+    const column = stageColumnOffsets.get(stage.id) ?? 0;
+    const row = Object.values(positions).filter((position) => position.x === 72 + column * GRAPH_STAGE_GAP_X).length;
+    positions[step.id] = {
+      x: 72 + column * GRAPH_STAGE_GAP_X,
+      y: 72 + row * GRAPH_STAGE_GAP_Y,
+    };
+  }
+
+  return positions;
+}
+
+function normalizeWorkflowDesignerLayout(
+  steps: WorkflowStep[],
+  layout: WorkflowDesignerLayout | undefined,
+): WorkflowDesignerLayout {
+  const defaults = buildDefaultWorkflowDesignerPositions(steps);
+  const positions: Record<string, WorkflowDesignerPosition> = {};
+
+  for (const step of steps) {
+    positions[step.id] = layout?.positions?.[step.id] ?? defaults[step.id] ?? { x: 72, y: 72 };
+  }
+
+  return {
+    preferredMode: layout?.preferredMode,
+    positions,
+  };
+}
+
+function clampDesignerPosition(position: WorkflowDesignerPosition): WorkflowDesignerPosition {
+  return {
+    x: Math.max(24, position.x),
+    y: Math.max(24, position.y),
+  };
+}
+
+function summarizeBranchExpression(expression: string | undefined): string {
+  const normalized = (expression ?? '').trim().replace(/\s+/g, ' ');
+  if (!normalized) {
+    return '未命名分支';
+  }
+  return normalized.length > 18 ? `${normalized.slice(0, 18)}...` : normalized;
+}
+
+function buildWorkflowGraphEdges(steps: WorkflowStep[]): WorkflowGraphEdge[] {
+  const edges: WorkflowGraphEdge[] = [];
+
+  for (const [index, step] of steps.entries()) {
+    if (step.type === 'condition') {
+      for (const [branchIndex, branch] of (step.branches ?? []).entries()) {
+        if (!branch.goto) {
+          continue;
+        }
+        edges.push({
+          id: `${step.id}:branch:${branchIndex}:${branch.goto}`,
+          fromStepId: step.id,
+          toStepId: branch.goto === '$end' ? GRAPH_END_NODE_ID : branch.goto,
+          tone: 'branch',
+          label: summarizeBranchExpression(branch.expression),
+        });
+      }
+      continue;
+    }
+
+    const targetStepId = step.nextStepId === '$end' ? GRAPH_END_NODE_ID : step.nextStepId ?? steps[index + 1]?.id;
+    if (!targetStepId) {
+      continue;
+    }
+    edges.push({
+      id: `${step.id}:next:${targetStepId}`,
+      fromStepId: step.id,
+      toStepId: targetStepId,
+      tone: 'default',
+    });
+  }
+
+  return edges;
+}
+
+function buildWorkflowGraphEndPosition(
+  steps: WorkflowStep[],
+  positions: Record<string, WorkflowDesignerPosition>,
+): WorkflowDesignerPosition {
+  if (steps.length === 0) {
+    return { x: 420, y: 180 };
+  }
+
+  const coordinates = steps.map((step) => positions[step.id] ?? { x: 72, y: 72 });
+  const maxX = Math.max(...coordinates.map((position) => position.x));
+  const avgY = coordinates.reduce((sum, position) => sum + position.y, 0) / coordinates.length;
+  return {
+    x: maxX + GRAPH_STAGE_GAP_X,
+    y: Math.max(72, Math.round(avgY)),
+  };
+}
+
+function buildWorkflowGraphCanvasMetrics(
+  steps: WorkflowStep[],
+  positions: Record<string, WorkflowDesignerPosition>,
+  endPosition: WorkflowDesignerPosition,
+): WorkflowGraphCanvasMetrics {
+  const maxNodeX = Math.max(
+    ...steps.map((step) => (positions[step.id]?.x ?? 72) + GRAPH_NODE_WIDTH),
+    endPosition.x + GRAPH_END_NODE_WIDTH,
+    1200,
+  );
+  const maxNodeY = Math.max(
+    ...steps.map((step) => (positions[step.id]?.y ?? 72) + GRAPH_NODE_HEIGHT),
+    endPosition.y + GRAPH_END_NODE_HEIGHT,
+    720,
+  );
+
+  return {
+    width: maxNodeX + 180,
+    height: maxNodeY + 180,
+    contentWidth: maxNodeX,
+    contentHeight: maxNodeY,
+  };
+}
+
+function buildGraphSelectionBounds(selection: GraphMarqueeState): {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  right: number;
+  bottom: number;
+} {
+  const left = Math.min(selection.startX, selection.currentX);
+  const top = Math.min(selection.startY, selection.currentY);
+  const right = Math.max(selection.startX, selection.currentX);
+  const bottom = Math.max(selection.startY, selection.currentY);
+  return {
+    left,
+    top,
+    width: Math.max(0, right - left),
+    height: Math.max(0, bottom - top),
+    right,
+    bottom,
+  };
+}
+
+function intersectsGraphSelection(
+  position: WorkflowDesignerPosition,
+  selection: { left: number; top: number; right: number; bottom: number },
+): boolean {
+  const nodeRight = position.x + GRAPH_NODE_WIDTH;
+  const nodeBottom = position.y + GRAPH_NODE_HEIGHT;
+  return !(
+    nodeRight < selection.left ||
+    position.x > selection.right ||
+    nodeBottom < selection.top ||
+    position.y > selection.bottom
+  );
+}
+
+function describeGraphConnectionState(
+  state: GraphConnectionState | null,
+  steps: WorkflowStep[],
+  locale: Locale,
+): string | null {
+  if (!state) {
+    return null;
+  }
+  const step = steps.find((item) => item.id === state.sourceStepId);
+  const label = step?.label ?? state.sourceStepId;
+  if (state.mode === 'next') {
+    return locale === 'zh'
+      ? `${label} 的主链路连线已激活，点击目标节点即可更新下一步。`
+      : `Main path linking is active for ${label}. Click a target node to update the next step.`;
+  }
+  const branchNumber = typeof state.branchIndex === 'number' ? state.branchIndex + 1 : '';
+  return locale === 'zh'
+    ? `${label} 的分支 ${branchNumber} 连线已激活，点击目标节点即可绑定 goto。`
+    : `Branch ${branchNumber} linking is active for ${label}. Click a target node to bind its goto.`;
+}
+
+function getWorkflowStageMeta(type: StepType, locale: Locale = 'zh'): WorkflowStageMeta {
+  switch (type) {
+    case 'multi_source':
+      return { id: 'collect', title: locale === 'zh' ? '采集阶段' : 'Collection', accent: 'text-cyan-300 bg-cyan-500/10 ring-cyan-500/25' };
+    case 'debate':
+      return { id: 'debate', title: locale === 'zh' ? '辩论阶段' : 'Debate', accent: 'text-rose-300 bg-rose-500/10 ring-rose-500/25' };
+    case 'decision':
+      return { id: 'decide', title: locale === 'zh' ? '决策阶段' : 'Decision', accent: 'text-sky-300 bg-sky-500/10 ring-sky-500/25' };
+    case 'risk_review':
+      return { id: 'risk', title: locale === 'zh' ? '风控阶段' : 'Risk Review', accent: 'text-orange-300 bg-orange-500/10 ring-orange-500/25' };
+    case 'adjudication':
+      return { id: 'adjudicate', title: locale === 'zh' ? '裁定阶段' : 'Adjudication', accent: 'text-fuchsia-300 bg-fuchsia-500/10 ring-fuchsia-500/25' };
+    default:
+      return { id: 'general', title: locale === 'zh' ? '通用编排' : 'General', accent: 'text-slate-300 bg-slate-800/70 ring-slate-700/60' };
+  }
+}
+
+function collectWorkflowStages(steps: WorkflowStep[], locale: Locale = 'zh'): WorkflowStageMeta[] {
+  return steps.reduce<WorkflowStageMeta[]>((acc, step) => {
+    const stage = getWorkflowStageMeta(step.type ?? 'agent', locale);
+    if (acc[acc.length - 1]?.id !== stage.id) {
+      acc.push(stage);
+    }
+    return acc;
+  }, []);
+}
+
+function collectWorkflowStageSummaries(
+  steps: WorkflowStep[],
+  stepIssueMap: Record<string, string[]>,
+  locale: Locale = 'zh',
+): WorkflowStageSummary[] {
+  const grouped = new Map<
+    string,
+    { stage: WorkflowStageMeta; steps: WorkflowStep[]; issueCount: number; completionSum: number; waitingCount: number }
+  >();
+
+  for (const step of steps) {
+    const stage = getWorkflowStageMeta(step.type ?? 'agent', locale);
+    const issues = stepIssueMap[step.id] ?? [];
+    const completion = buildStepCompletionMetrics(step, issues);
+    const waitingCount = buildStepReadinessPills(step).filter((pill) => pill.tone === 'warn').length;
+    const current = grouped.get(stage.id);
+    if (current) {
+      current.steps.push(step);
+      current.issueCount += issues.length;
+      current.completionSum += completion.percent;
+      current.waitingCount += waitingCount;
+    } else {
+      grouped.set(stage.id, {
+        stage,
+        steps: [step],
+        issueCount: issues.length,
+        completionSum: completion.percent,
+        waitingCount,
+      });
+    }
+  }
+
+  return Array.from(grouped.values()).map((item) => {
+    const actions: WorkflowStageAction[] = [];
+
+    for (const step of item.steps) {
+      const type = step.type ?? 'agent';
+      if ((type === 'agent' || isSuperStepType(type)) && !step.agentId?.trim()) {
+        actions.push({
+          id: `coordinator-${step.id}`,
+          stepId: step.id,
+          label: locale === 'zh' ? '补协调者' : 'Set coordinator',
+        });
+      }
+
+      if (isSuperStepType(type)) {
+        const participantCount = step.participantAgentIds?.length ?? 0;
+        const minimumParticipants =
+          type === 'debate' ? 2 : type === 'multi_source' || type === 'risk_review' ? 1 : 0;
+        if (participantCount < minimumParticipants) {
+          actions.push({
+            id: `participants-${step.id}`,
+            stepId: step.id,
+            label: locale === 'zh' ? '补参与者' : 'Set participants',
+          });
+        }
+        if ((step.superNodePrompts?.length ?? 0) === 0) {
+          actions.push({
+            id: `prompts-${step.id}`,
+            stepId: step.id,
+            label: locale === 'zh' ? '补视角提示' : 'Add prompts',
+          });
+        }
+      }
+
+      if ((step.outputs?.length ?? 0) === 0 && (type === 'agent' || isSuperStepType(type) || type === 'http')) {
+        actions.push({
+          id: `outputs-${step.id}`,
+          stepId: step.id,
+          label: locale === 'zh' ? '补输出变量' : 'Add outputs',
+        });
+      }
+
+      if (actions.length >= 3) {
+        break;
+      }
+    }
+
+    return {
+      stage: item.stage,
+      stepCount: item.steps.length,
+      issueCount: item.issueCount,
+      avgCompletion: Math.round(item.completionSum / item.steps.length),
+      waitingCount: item.waitingCount,
+      firstStepId: item.steps[0]?.id,
+      actions,
+    };
+  });
+}
+
+function collectWorkflowChecklistItems(
+  workflowName: string,
+  steps: WorkflowStep[],
+  stepIssueMap: Record<string, string[]>,
+  publicationTargets: PublicationTargetConfig[],
+  locale: Locale = 'zh',
+): WorkflowChecklistItem[] {
+  const items: WorkflowChecklistItem[] = [];
+  if (!workflowName.trim()) {
+    items.push({
+      id: 'workflow-name',
+      message: locale === 'zh' ? '先给当前 workflow 起一个明确名称。' : 'Give this workflow a clear name first.',
+      tone: 'warn',
+    });
+  }
+  if (steps.length === 0) {
+    items.push({
+      id: 'workflow-empty',
+      message: locale === 'zh' ? '当前还没有步骤，先添加一个起始节点。' : 'There are no steps yet. Add a starting node first.',
+      tone: 'warn',
+    });
+    return items;
+  }
+
+  for (const step of steps) {
+    const type = step.type ?? 'agent';
+    const stepLabel = step.label ?? step.id;
+    const stepIssues = stepIssueMap[step.id] ?? [];
+    if (stepIssues.length > 0) {
+      items.push({
+        id: `issue-${step.id}`,
+        stepId: step.id,
+        message:
+          locale === 'zh'
+            ? `${stepLabel} 还有 ${stepIssues.length} 个诊断问题待处理。`
+            : `${stepLabel} still has ${stepIssues.length} diagnostic issues to resolve.`,
+        tone: 'warn',
+      });
+    }
+    if ((type === 'agent' || isSuperStepType(type)) && !step.agentId?.trim()) {
+      items.push({
+        id: `agent-${step.id}`,
+        stepId: step.id,
+        message:
+          locale === 'zh'
+            ? `${stepLabel} 还没有选择协调 / 执行 agent。`
+            : `${stepLabel} does not have a coordinator/execution agent yet.`,
+        tone: 'warn',
+      });
+    }
+    if (isSuperStepType(type)) {
+      const participantCount = step.participantAgentIds?.length ?? 0;
+      const minimumParticipants =
+        type === 'debate' ? 2 : type === 'multi_source' || type === 'risk_review' ? 1 : 0;
+      if (participantCount < minimumParticipants) {
+        items.push({
+          id: `participants-${step.id}`,
+          stepId: step.id,
+          message:
+            locale === 'zh'
+              ? `${stepLabel} 的参与 agent 数量不足，当前 ${participantCount}，至少需要 ${minimumParticipants}。`
+              : `${stepLabel} does not have enough participant agents. Current: ${participantCount}, required: ${minimumParticipants}.`,
+          tone: 'warn',
+        });
+      }
+      if ((step.superNodePrompts?.length ?? 0) === 0) {
+        items.push({
+          id: `prompts-${step.id}`,
+          stepId: step.id,
+          message:
+            locale === 'zh'
+              ? `${stepLabel} 还没有配置视角 / 立场提示。`
+              : `${stepLabel} does not have prompts/stances configured yet.`,
+          tone: 'warn',
+        });
+      }
+      if ((step.outputs?.length ?? 0) === 0) {
+        items.push({
+          id: `outputs-${step.id}`,
+          stepId: step.id,
+          message:
+            locale === 'zh'
+              ? `${stepLabel} 还没有命名输出变量，建议套用结构化模板。`
+              : `${stepLabel} does not have named output variables yet. Consider applying a structured preset.`,
+          tone: 'neutral',
+        });
+      }
+    }
+  }
+
+  if (publicationTargets.length === 0) {
+    items.push({
+      id: 'publication-targets',
+      message:
+        locale === 'zh'
+          ? '当前未配置交付物传播渠道，如需自动发送 deliverable 可补一个目标。'
+          : 'No deliverable publication target is configured. Add one if you want automatic delivery.',
+      tone: 'neutral',
+    });
+  }
+
+  return items.slice(0, 8);
+}
+
 // ── WorkflowGuide ─────────────────────────────────────────────────────────────
 
 function WorkflowGuide({ onClose }: { onClose: () => void }) {
+  const { locale } = useLocale();
   const [tab, setTab] = useState<'overview' | 'steps' | 'vars' | 'format'>('overview');
+  const guideText =
+    locale === 'zh'
+      ? {
+          title: '📖 工作流使用说明',
+          tabOverview: '概览',
+          tabSteps: '步骤类型',
+          tabVars: '变量系统',
+          tabFormat: '输出格式',
+          quickStart: '快速上手',
+          quickStartLine1: '进入工作流编辑器后，在页面中部、阶段摘要和待补清单下面，可以看到',
+          quickStartSwitch: '当前表单版 / 图形设计器',
+          quickStartLine2: '切换区。',
+          quickStartLine3: '如果想用画布版，直接点击',
+          quickStartGraph: '图形设计器',
+          quickStartLine4: '或下方的“进入画布设计器”入口即可。',
+        }
+      : {
+          title: '📖 Workflow Guide',
+          tabOverview: 'Overview',
+          tabSteps: 'Step Types',
+          tabVars: 'Variables',
+          tabFormat: 'Output',
+          quickStart: 'Quick Start',
+          quickStartLine1: 'In the workflow editor, look in the middle of the page under stage summaries and the checklist for the',
+          quickStartSwitch: 'Form / Graph Designer',
+          quickStartLine2: 'switch.',
+          quickStartLine3: 'To use the canvas view, click',
+          quickStartGraph: 'Graph Designer',
+          quickStartLine4: 'or use the “Open Canvas Designer” entry below.',
+        };
   const tabCls = (t: string) =>
     `px-3 py-1.5 text-xs rounded-lg transition-colors ${
       tab === t
@@ -79,7 +695,7 @@ function WorkflowGuide({ onClose }: { onClose: () => void }) {
     <div className="rounded-xl bg-slate-800/80 ring-1 ring-slate-700/60 flex flex-col overflow-hidden">
       {/* Guide header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700/50">
-        <span className="text-sm font-semibold text-slate-100">📖 工作流使用说明</span>
+        <span className="text-sm font-semibold text-slate-100">{guideText.title}</span>
         <button onClick={onClose} className="text-slate-500 hover:text-slate-300 text-sm">
           ✕
         </button>
@@ -88,16 +704,16 @@ function WorkflowGuide({ onClose }: { onClose: () => void }) {
       {/* Tab bar */}
       <div className="flex gap-1 px-4 pt-3">
         <button className={tabCls('overview')} onClick={() => setTab('overview')}>
-          概览
+          {guideText.tabOverview}
         </button>
         <button className={tabCls('steps')} onClick={() => setTab('steps')}>
-          步骤类型
+          {guideText.tabSteps}
         </button>
         <button className={tabCls('vars')} onClick={() => setTab('vars')}>
-          变量系统
+          {guideText.tabVars}
         </button>
         <button className={tabCls('format')} onClick={() => setTab('format')}>
-          输出格式
+          {guideText.tabFormat}
         </button>
       </div>
 
@@ -113,6 +729,22 @@ function WorkflowGuide({ onClose }: { onClose: () => void }) {
                 每个步骤的输出可以传递给下一步，支持条件跳转、数据转换和 HTTP
                 调用，构建复杂的自动化场景。
               </p>
+            </section>
+
+            <section className="flex flex-col gap-1.5">
+              <h3 className={h3}>{guideText.quickStart}</h3>
+              <div className="rounded-lg bg-cyan-500/10 ring-1 ring-cyan-500/20 p-3 flex flex-col gap-2">
+                <p className={p}>
+                  {guideText.quickStartLine1}
+                  <strong className="text-cyan-200">{guideText.quickStartSwitch}</strong>
+                  {guideText.quickStartLine2}
+                </p>
+                <p className={p}>
+                  {guideText.quickStartLine3}
+                  <strong className="text-cyan-200">{guideText.quickStartGraph}</strong>
+                  {guideText.quickStartLine4}
+                </p>
+              </div>
             </section>
 
             <section className="flex flex-col gap-1.5">
@@ -450,6 +1082,71 @@ const STEP_TYPE_LABELS: Record<StepType, string> = {
   adjudication: '🏛️ 裁定',
 };
 
+const STEP_TYPE_LABELS_EN: Record<StepType, string> = {
+  agent: '🤖 Agent',
+  transform: '⚙️ Transform',
+  condition: '🔀 Condition',
+  http: '🌐 HTTP',
+  multi_source: '📡 Multi-source',
+  debate: '⚔️ Debate',
+  decision: '🧭 Decision',
+  risk_review: '🛡️ Risk Review',
+  adjudication: '🏛️ Adjudication',
+};
+
+function getStepTypeLabel(type: StepType, locale: Locale): string {
+  return locale === 'zh' ? STEP_TYPE_LABELS[type] : STEP_TYPE_LABELS_EN[type];
+}
+
+const STEP_TYPE_HELP_EN: Record<
+  StepType,
+  {
+    summary: string;
+    tip: string;
+  }
+> = {
+  agent: {
+    summary: 'Best for single-step execution, content generation, tool calls, or the first hop after human input.',
+    tip: 'Pick an agent first, then decide whether you need JSON or Markdown constraints.',
+  },
+  transform: {
+    summary: 'Best for lightweight text cleanup, field composition, and format bridging without another model call.',
+    tip: 'Keep it focused on small expression transforms rather than complex business logic.',
+  },
+  condition: {
+    summary: 'Best for branching the workflow into different handling paths. The first matching rule wins.',
+    tip: 'Write the strictest condition first, then add the fallback branch.',
+  },
+  http: {
+    summary: 'Best for calling external APIs, webhooks, or internal services and passing the response downstream.',
+    tip: 'If you need field extraction, prefer JSON responses.',
+  },
+  multi_source: {
+    summary: 'Best for parallel collection across multiple dimensions, then merging through a coordinator into one structured result.',
+    tip: 'Configure at least one participant agent and define clear collection dimensions.',
+  },
+  debate: {
+    summary: 'Best for multi-agent pro/con debate around the same topic before a coordinator converges the result.',
+    tip: 'Configure at least two participant agents and define explicit opposing stances.',
+  },
+  decision: {
+    summary: 'Best for generating actionable decisions with direction, priority, and dependencies from supporting analysis.',
+    tip: 'Structured output templates make it easier for downstream condition or deliverable nodes to consume.',
+  },
+  risk_review: {
+    summary: 'Best for parallel review of major risks, veto conditions, and remediation suggestions before execution.',
+    tip: 'Assign different participant agents to different risk dimensions.',
+  },
+  adjudication: {
+    summary: 'Best for final arbitration after multiple opinions, with clear ownership and execution milestones.',
+    tip: 'Use it as the final step in a decision flow and output verdict, owner, and milestones together.',
+  },
+};
+
+function getStepTypeHelp(type: StepType, locale: Locale): { summary: string; tip: string } {
+  return locale === 'zh' ? STEP_TYPE_HELP[type] : STEP_TYPE_HELP_EN[type];
+}
+
 const STEP_TYPE_COLORS: Record<StepType, string> = {
   agent: 'bg-indigo-600/20 ring-indigo-500/40 text-indigo-300',
   transform: 'bg-amber-600/20 ring-amber-500/40 text-amber-300',
@@ -460,6 +1157,51 @@ const STEP_TYPE_COLORS: Record<StepType, string> = {
   decision: 'bg-sky-600/20 ring-sky-500/40 text-sky-300',
   risk_review: 'bg-orange-600/20 ring-orange-500/40 text-orange-300',
   adjudication: 'bg-fuchsia-600/20 ring-fuchsia-500/40 text-fuchsia-300',
+};
+
+const STEP_TYPE_HELP: Record<
+  StepType,
+  {
+    summary: string;
+    tip: string;
+  }
+> = {
+  agent: {
+    summary: '适合单点执行、生成内容、调用工具或承接人工输入后的第一跳。',
+    tip: '先选 agent，再决定是否需要 JSON/Markdown 约束。',
+  },
+  transform: {
+    summary: '适合轻量文本整理、字段拼装、上下游格式桥接，不消耗额外模型调用。',
+    tip: '推荐只做小范围表达式转换，不承担复杂业务逻辑。',
+  },
+  condition: {
+    summary: '适合把流程分叉成不同处理路径，按分支顺序命中第一条规则。',
+    tip: '先写最严格的条件，再写兜底分支。',
+  },
+  http: {
+    summary: '适合调用外部 API、Webhook 或内部服务，把响应交给后续节点消费。',
+    tip: '需要字段提取时，建议让接口返回 JSON。',
+  },
+  multi_source: {
+    summary: '适合并行采集多维信息，再由协调 agent 统一汇总成一个结构化结论。',
+    tip: '至少配置 1 个参与 agent，并给出清晰的采集维度。',
+  },
+  debate: {
+    summary: '适合让多个 agent 围绕同一议题进行正反对抗，再由协调 agent 收敛结论。',
+    tip: '至少配置 2 个参与 agent，并明确对立立场。',
+  },
+  decision: {
+    summary: '适合结合补充分析视角生成可执行决策，输出方向、优先级和依赖。',
+    tip: '建议同时配置结构化模板，便于下游 condition 或 deliverable 直接消费。',
+  },
+  risk_review: {
+    summary: '适合在执行前并行识别主要风险、否决项和整改建议。',
+    tip: '建议让不同参与 agent 各自盯一类风险维度。',
+  },
+  adjudication: {
+    summary: '适合在多方意见之后最终拍板，明确责任归属与后续落地节奏。',
+    tip: '适合作为决策流最后一跳，统一输出 verdict、owner、milestones。',
+  },
 };
 
 function isSuperStepType(type: StepType): boolean {
@@ -687,6 +1429,543 @@ function buildSuperStepStructuredPreset(type: StepType): {
   }
 }
 
+function createDefaultStep(type: StepType = 'agent', messageTemplate = '{{prev_output}}'): WorkflowStep {
+  return {
+    id: newStepId(),
+    type,
+    agentId: type === 'agent' || isSuperStepType(type) ? '' : undefined,
+    messageTemplate,
+    condition: 'any',
+  };
+}
+
+function cloneStepForDuplicate(step: WorkflowStep): WorkflowStep {
+  return {
+    ...step,
+    id: newStepId(),
+    label: step.label ? `${step.label} 副本` : undefined,
+    nextStepId: undefined,
+    outputs: step.outputs?.map((output) => ({ ...output })),
+    branches: step.branches?.map((branch) => ({ ...branch })),
+    participantAgentIds: step.participantAgentIds ? [...step.participantAgentIds] : undefined,
+    superNodePrompts: step.superNodePrompts ? [...step.superNodePrompts] : undefined,
+  };
+}
+
+type StepReadinessPill = {
+  label: string;
+  tone: 'neutral' | 'good' | 'warn';
+};
+
+type StepCompletionMetrics = {
+  completed: number;
+  total: number;
+  percent: number;
+  issueCount: number;
+};
+
+function buildStepReadinessPills(step: WorkflowStep, locale: Locale = 'zh'): StepReadinessPill[] {
+  const type = step.type ?? 'agent';
+  const pills: StepReadinessPill[] = [];
+  const text =
+    locale === 'zh'
+      ? {
+          coordinatorReady: '已选协调者',
+          coordinatorMissing: '待选协调者',
+          participants: '参与者',
+          participantsMissing: '待配参与者',
+          prompts: '视角',
+          promptsMissing: '待写视角',
+          branches: '分支',
+          branchesMissing: '待配分支',
+          httpConfigured: '已配置',
+          urlMissing: '待填 URL',
+          expressionReady: '表达式已填写',
+          expressionMissing: '待写表达式',
+          taskReady: '任务说明已填写',
+          taskMissing: '待写任务说明',
+          output: '输出',
+          vars: '变量',
+          retries: '重试',
+        }
+      : {
+          coordinatorReady: 'Coordinator set',
+          coordinatorMissing: 'Coordinator needed',
+          participants: 'Participants',
+          participantsMissing: 'Participants needed',
+          prompts: 'Prompts',
+          promptsMissing: 'Prompts needed',
+          branches: 'Branches',
+          branchesMissing: 'Branches needed',
+          httpConfigured: 'configured',
+          urlMissing: 'URL needed',
+          expressionReady: 'Expression ready',
+          expressionMissing: 'Expression needed',
+          taskReady: 'Task ready',
+          taskMissing: 'Task needed',
+          output: 'Output',
+          vars: 'Vars',
+          retries: 'Retries',
+        };
+
+  if (type === 'agent' || isSuperStepType(type)) {
+    pills.push({
+      label: step.agentId?.trim() ? text.coordinatorReady : text.coordinatorMissing,
+      tone: step.agentId?.trim() ? 'good' : 'warn',
+    });
+  }
+
+  if (isSuperStepType(type)) {
+    const participantCount = step.participantAgentIds?.length ?? 0;
+    const promptCount = step.superNodePrompts?.length ?? 0;
+    pills.push({
+      label: participantCount > 0 ? `${text.participants} ${participantCount}` : text.participantsMissing,
+      tone: participantCount > 0 ? 'good' : 'warn',
+    });
+    pills.push({
+      label: promptCount > 0 ? `${text.prompts} ${promptCount}` : text.promptsMissing,
+      tone: promptCount > 0 ? 'good' : 'warn',
+    });
+  }
+
+  if (type === 'condition') {
+    const branchCount = step.branches?.length ?? 0;
+    pills.push({
+      label: branchCount > 0 ? `${text.branches} ${branchCount}` : text.branchesMissing,
+      tone: branchCount > 0 ? 'good' : 'warn',
+    });
+  }
+
+  if (type === 'http') {
+    pills.push({
+      label: step.url?.trim() ? `${step.method ?? 'GET'} ${text.httpConfigured}` : text.urlMissing,
+      tone: step.url?.trim() ? 'good' : 'warn',
+    });
+  }
+
+  if (type === 'transform') {
+    pills.push({
+      label: step.transformCode?.trim() || step.messageTemplate.trim() ? text.expressionReady : text.expressionMissing,
+      tone: step.transformCode?.trim() || step.messageTemplate.trim() ? 'good' : 'warn',
+    });
+  }
+
+  if (type !== 'condition') {
+    pills.push({
+      label: step.messageTemplate.trim() ? text.taskReady : text.taskMissing,
+      tone: step.messageTemplate.trim() ? 'good' : 'warn',
+    });
+  }
+
+  if (step.outputFormat) {
+    pills.push({
+      label: `${text.output}:${step.outputFormat}`,
+      tone: 'neutral',
+    });
+  }
+
+  if ((step.outputs?.length ?? 0) > 0) {
+    pills.push({
+      label: `${text.vars} ${step.outputs?.length ?? 0}`,
+      tone: 'neutral',
+    });
+  }
+
+  if ((step.maxRetries ?? 0) > 0) {
+    pills.push({
+      label: `${text.retries} ${step.maxRetries}`,
+      tone: 'neutral',
+    });
+  }
+
+  return pills;
+}
+
+function buildStepCompletionMetrics(step: WorkflowStep, issues: string[], locale: Locale = 'zh'): StepCompletionMetrics {
+  const pills = buildStepReadinessPills(step, locale);
+  const completed = pills.filter((pill) => pill.tone !== 'warn').length;
+  const total = pills.length || 1;
+  return {
+    completed,
+    total,
+    percent: Math.round((completed / total) * 100),
+    issueCount: issues.length,
+  };
+}
+
+function completionTone(percent: number, issueCount: number): string {
+  if (issueCount > 0) {
+    return 'text-red-200 bg-red-500/10 ring-red-500/25';
+  }
+  if (percent >= 80) {
+    return 'text-emerald-200 bg-emerald-500/10 ring-emerald-500/25';
+  }
+  if (percent >= 50) {
+    return 'text-amber-200 bg-amber-500/10 ring-amber-500/25';
+  }
+  return 'text-slate-300 bg-slate-800/70 ring-slate-700/60';
+}
+
+type WorkflowStarter = {
+  id: string;
+  category?: string;
+  title: string;
+  summary: string;
+  steps: WorkflowStep[];
+  suggestedName: string;
+  suggestedDescription: string;
+};
+
+function withStructuredPreset(step: WorkflowStep): WorkflowStep {
+  const type = step.type ?? 'agent';
+  if (!isSuperStepType(type)) {
+    return step;
+  }
+  const preset = buildSuperStepStructuredPreset(type);
+  if (!preset) {
+    return step;
+  }
+  return {
+    ...step,
+    outputFormat: preset.outputFormat,
+    outputFormatMode: preset.outputFormatMode,
+    outputFormatPrompt: preset.outputFormatPrompt,
+    outputs: preset.outputs,
+  };
+}
+
+function buildWorkflowStarters(): WorkflowStarter[] {
+  const blankAgent = createDefaultStep('agent', '{{input}}');
+  blankAgent.label = '起始节点';
+
+  const multiSource = createDefaultStep('multi_source', '{{input}}');
+  multiSource.label = '情报采集';
+  multiSource.superNodePrompts = ['市场动向', '竞品动作', '用户反馈'];
+  multiSource.domainRules = '优先使用最近资料；列出明显冲突信息。';
+
+  const decision = createDefaultStep('decision', '{{prev_output}}');
+  decision.label = '决策生成';
+  decision.superNodePrompts = ['商业收益', '执行成本'];
+
+  const riskReview = createDefaultStep('risk_review', '{{prev_output}}');
+  riskReview.label = '风险审核';
+  riskReview.superNodePrompts = ['合规风险', '交付风险'];
+
+  const adjudication = createDefaultStep('adjudication', '{{prev_output}}');
+  adjudication.label = '最终裁定';
+  adjudication.superNodePrompts = ['负责人视角', '落地节奏'];
+
+  const debate = createDefaultStep('debate', '{{input}}');
+  debate.label = '对抗辩论';
+  debate.superNodePrompts = ['支持推进', '反对推进'];
+
+  const debateDecision = createDefaultStep('decision', '{{prev_output}}');
+  debateDecision.label = '辩后决策';
+
+  const debateRisk = createDefaultStep('risk_review', '{{prev_output}}');
+  debateRisk.label = '辩后风控';
+  debateRisk.superNodePrompts = ['法律与合规', '资源与时程'];
+
+  const chainMultiSource = createDefaultStep('multi_source', '{{input}}');
+  chainMultiSource.label = '多源采集';
+  chainMultiSource.superNodePrompts = ['市场情报', '竞品动态', '用户信号'];
+  chainMultiSource.domainRules = '优先引用最近资料，保留相互冲突的证据。';
+
+  const chainDebate = createDefaultStep('debate', '{{prev_output}}');
+  chainDebate.label = '多维对抗辩论';
+  chainDebate.superNodePrompts = ['支持推进', '反对推进', '中立质询'];
+  chainDebate.domainRules = '必须互相回应论点，不允许只重复自身立场。';
+
+  const chainDecision = createDefaultStep('decision', '{{prev_output}}');
+  chainDecision.label = '决策生成';
+  chainDecision.superNodePrompts = ['增长收益', '执行成本', '组织牵引'];
+  chainDecision.domainRules = '必须给出优先级、依赖和最小可执行方案。';
+
+  const chainRiskReview = createDefaultStep('risk_review', '{{prev_output}}');
+  chainRiskReview.label = '风险审核';
+  chainRiskReview.superNodePrompts = ['合规风险', '交付风险', '资源风险'];
+  chainRiskReview.domainRules = '高风险项必须附整改建议和否决条件。';
+
+  const chainAdjudication = createDefaultStep('adjudication', '{{prev_output}}');
+  chainAdjudication.label = '最终裁定';
+  chainAdjudication.superNodePrompts = ['责任归属', '里程碑安排'];
+  chainAdjudication.domainRules = '必须明确 owner、milestones 和后续观察项。';
+
+  const agentDraft = createDefaultStep('agent', '{{input}}');
+  agentDraft.label = '初稿生成';
+
+  const polish = createDefaultStep('transform', 'prev_output');
+  polish.label = '结果整理';
+  polish.transformCode = 'prev_output';
+  polish.messageTemplate = 'prev_output';
+
+  const gate = createDefaultStep('condition', '{{prev_output}}');
+  gate.label = '是否结束';
+  gate.branches = [
+    { expression: "output.includes('完成')", goto: '$end' },
+    { expression: 'output.length > 0', goto: '$end' },
+  ];
+
+  return [
+    {
+      id: 'blank-scene',
+      category: '空白起步',
+      title: '空白场景模板',
+      summary: '仅保留一个空白起始节点，适合完全从零搭建',
+      suggestedName: '未命名工作流',
+      suggestedDescription: '从空白场景开始，自由拼接所需节点。',
+      steps: [blankAgent],
+    },
+    {
+      id: 'full-super-chain',
+      category: '完整链路',
+      title: '超级节点全链路模板',
+      summary: '多源采集 → 多维对抗辩论 → 决策生成 → 风险审核 → 最终裁定',
+      suggestedName: '超级节点全链路工作流',
+      suggestedDescription: '适合从信息采集一路推进到辩论、决策、风控与最终拍板。',
+      steps: [
+        withStructuredPreset(chainMultiSource),
+        withStructuredPreset(chainDebate),
+        withStructuredPreset(chainDecision),
+        withStructuredPreset(chainRiskReview),
+        withStructuredPreset(chainAdjudication),
+      ],
+    },
+    {
+      id: 'intel-decision',
+      category: '快速上手',
+      title: '情报研判流',
+      summary: '多源采集 → 决策生成 → 风险审核 → 最终裁定',
+      suggestedName: '情报研判工作流',
+      suggestedDescription: '适合从资料采集一路推进到决策与拍板。',
+      steps: [
+        withStructuredPreset(multiSource),
+        withStructuredPreset(decision),
+        withStructuredPreset(riskReview),
+        withStructuredPreset(adjudication),
+      ],
+    },
+    {
+      id: 'debate-review',
+      category: '快速上手',
+      title: '对抗评审流',
+      summary: '对抗辩论 → 决策生成 → 风险审核',
+      suggestedName: '对抗评审工作流',
+      suggestedDescription: '适合多方意见冲突、需要先辩论再给结论。',
+      steps: [
+        withStructuredPreset(debate),
+        withStructuredPreset(debateDecision),
+        withStructuredPreset(debateRisk),
+      ],
+    },
+    {
+      id: 'quick-pilot',
+      category: '快速上手',
+      title: '快速试跑流',
+      summary: 'Agent 起草 → Transform 整理 → Condition 收尾',
+      suggestedName: '快速试跑工作流',
+      suggestedDescription: '适合先验证链路，再逐步替换成超级节点。',
+      steps: [agentDraft, polish, gate],
+    },
+  ];
+}
+
+type SuperStepExperiencePreset = {
+  id: string;
+  title: string;
+  summary: string;
+  patch: Partial<WorkflowStep>;
+};
+
+function buildSuperStepExperiencePresets(type: StepType): SuperStepExperiencePreset[] {
+  switch (type) {
+    case 'multi_source':
+      return [
+        {
+          id: 'market-scan',
+          title: '市场扫描',
+          summary: '适合做行业动态、竞品动作和用户反馈并行采集。',
+          patch: {
+            label: '市场扫描',
+            messageTemplate: '{{input}}',
+            superNodePrompts: ['行业动态', '竞品动作', '用户反馈'],
+            domainRules: '优先使用最近30天信息；保留明显冲突数据。',
+          },
+        },
+        {
+          id: 'project-intel',
+          title: '项目尽调',
+          summary: '适合拉齐商业、技术、交付多维线索。',
+          patch: {
+            label: '项目尽调',
+            messageTemplate: '{{input}}',
+            superNodePrompts: ['商业前景', '技术可行性', '交付约束'],
+            domainRules: '结论必须标注证据来源和不确定性。',
+          },
+        },
+      ];
+    case 'debate':
+      return [
+        {
+          id: 'go-no-go',
+          title: '是否推进',
+          summary: '适合对一个方案做推进与反对的正面对抗。',
+          patch: {
+            label: '是否推进',
+            messageTemplate: '{{input}}',
+            superNodePrompts: ['支持推进', '反对推进'],
+            domainRules: '必须指出对方论证中的漏洞，不要重复自己的观点。',
+          },
+        },
+        {
+          id: 'plan-a-b',
+          title: '方案对抗',
+          summary: '适合两个候选方案的优劣辩论。',
+          patch: {
+            label: '方案对抗',
+            messageTemplate: '{{input}}',
+            superNodePrompts: ['支持方案A', '支持方案B'],
+            domainRules: '必须比较成本、速度、风险，不允许空泛评价。',
+          },
+        },
+      ];
+    case 'decision':
+      return [
+        {
+          id: 'business-decision',
+          title: '经营决策',
+          summary: '适合输出推进方向、优先级、依赖与依据。',
+          patch: {
+            label: '经营决策',
+            messageTemplate: '{{prev_output}}',
+            superNodePrompts: ['增长收益', '执行成本'],
+            domainRules: '优先给出最小可执行方案，并标明主要依赖。',
+          },
+        },
+        {
+          id: 'product-choice',
+          title: '产品路线',
+          summary: '适合在多个路线中选出优先方向。',
+          patch: {
+            label: '产品路线',
+            messageTemplate: '{{prev_output}}',
+            superNodePrompts: ['用户价值', '工程复杂度'],
+            domainRules: '必须给出不选其他路线的理由。',
+          },
+        },
+      ];
+    case 'risk_review':
+      return [
+        {
+          id: 'launch-audit',
+          title: '上线前审核',
+          summary: '适合在执行前做合规、质量和资源风险排查。',
+          patch: {
+            label: '上线前审核',
+            messageTemplate: '{{prev_output}}',
+            superNodePrompts: ['合规风险', '质量风险', '资源风险'],
+            domainRules: '高风险项必须附整改建议和否决条件。',
+          },
+        },
+        {
+          id: 'investment-risk',
+          title: '投资风控',
+          summary: '适合做项目或客户合作前的风控审查。',
+          patch: {
+            label: '投资风控',
+            messageTemplate: '{{prev_output}}',
+            superNodePrompts: ['财务风险', '法务风险', '履约风险'],
+            domainRules: '必须区分可缓解风险与直接否决项。',
+          },
+        },
+      ];
+    case 'adjudication':
+      return [
+        {
+          id: 'final-call',
+          title: '最终拍板',
+          summary: '适合形成最终 verdict、owner 和 milestones。',
+          patch: {
+            label: '最终拍板',
+            messageTemplate: '{{prev_output}}',
+            superNodePrompts: ['负责人视角', '落地节奏'],
+            domainRules: '必须明确负责人、时间点和继续观察项。',
+          },
+        },
+        {
+          id: 'meeting-ruling',
+          title: '会议裁定',
+          summary: '适合对会议结论进行定责和排期。',
+          patch: {
+            label: '会议裁定',
+            messageTemplate: '{{prev_output}}',
+            superNodePrompts: ['责任归属', '里程碑安排'],
+            domainRules: '必须明确谁拍板、谁执行、何时复盘。',
+          },
+        },
+      ];
+    default:
+      return [];
+  }
+}
+
+function summarizeStepPreview(step: WorkflowStep, allSteps: WorkflowStep[], locale: Locale): string[] {
+  const type = step.type ?? 'agent';
+  const lines: string[] = [];
+  const text =
+    locale === 'zh'
+      ? {
+          task: '任务',
+          participants: '参与者',
+          prompts: '视角',
+          branchCount: '分支数',
+          request: '请求',
+          missingUrl: '未填写 URL',
+          outputs: '输出变量',
+          next: '显式下一步',
+          endFlow: '结束流程',
+        }
+      : {
+          task: 'Task',
+          participants: 'Participants',
+          prompts: 'Prompts',
+          branchCount: 'Branches',
+          request: 'Request',
+          missingUrl: 'URL missing',
+          outputs: 'Outputs',
+          next: 'Next',
+          endFlow: 'End Flow',
+        };
+
+  if (step.messageTemplate.trim()) {
+    lines.push(`${text.task}: ${step.messageTemplate.trim().replace(/\s+/g, ' ').slice(0, 88)}`);
+  }
+  if (isSuperStepType(type)) {
+    lines.push(`${text.participants}: ${step.participantAgentIds?.length ?? 0} | ${text.prompts}: ${step.superNodePrompts?.length ?? 0}`);
+  }
+  if (type === 'condition') {
+    lines.push(`${text.branchCount}: ${step.branches?.length ?? 0}`);
+  }
+  if (type === 'http') {
+    lines.push(`${text.request}: ${step.method ?? 'GET'} ${step.url ?? text.missingUrl}`);
+  }
+  if ((step.outputs?.length ?? 0) > 0) {
+    lines.push(`${text.outputs}: ${step.outputs?.map((item) => item.name).filter(Boolean).join(', ')}`);
+  }
+  if (step.nextStepId) {
+    const nextStep = allSteps.find((candidate) => candidate.id === step.nextStepId);
+    lines.push(`${text.next}: ${step.nextStepId === '$end' ? text.endFlow : nextStep?.label ?? step.nextStepId}`);
+  }
+
+  return lines.slice(0, 4);
+}
+
+function formatWorkflowStepOptionLabel(step: WorkflowStep, locale: Locale): string {
+  return step.label
+    ? `${step.label}【${step.id}】`
+    : `${getStepTypeLabel(step.type ?? 'agent', locale)}【${step.id}】`;
+}
+
 function normalizeStepForType(step: WorkflowStep, nextType: StepType): WorkflowStep {
   if (nextType === 'condition') {
     return { ...step, type: nextType };
@@ -800,6 +2079,23 @@ function ConditionBranchList({
   steps: WorkflowStep[];
   onChange: (b: ConditionBranch[]) => void;
 }) {
+  const { locale } = useLocale();
+  const branchEditorText =
+    locale === 'zh'
+      ? {
+          title: '分支条件',
+          addBranch: '+ 添加分支',
+          targetPlaceholder: '— 选择目标 —',
+          endFlow: '结束流程',
+          expressionPlaceholder: "output.includes('yes')",
+        }
+      : {
+          title: 'Branch Conditions',
+          addBranch: '+ Add Branch',
+          targetPlaceholder: '— Select Target —',
+          endFlow: 'End Flow',
+          expressionPlaceholder: "output.includes('yes')",
+        };
   const updateBranch = (i: number, b: ConditionBranch) =>
     onChange(branches.map((x, j) => (j === i ? b : x)));
   const removeBranch = (i: number) => onChange(branches.filter((_, j) => j !== i));
@@ -809,9 +2105,9 @@ function ConditionBranchList({
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2">
-        <span className="text-xs text-slate-400">分支条件</span>
+        <span className="text-xs text-slate-400">{branchEditorText.title}</span>
         <button onClick={addBranch} className="text-xs text-indigo-400 hover:text-indigo-300">
-          + 添加分支
+          {branchEditorText.addBranch}
         </button>
       </div>
       {branches.map((b, i) => (
@@ -819,7 +2115,7 @@ function ConditionBranchList({
           <textarea
             rows={1}
             className={`${inputCls} font-mono text-xs resize-none`}
-            placeholder="output.includes('yes')"
+            placeholder={branchEditorText.expressionPlaceholder}
             value={b.expression}
             onChange={(e) => updateBranch(i, { ...b, expression: e.target.value })}
           />
@@ -830,13 +2126,11 @@ function ConditionBranchList({
               value={b.goto}
               onChange={(e) => updateBranch(i, { ...b, goto: e.target.value })}
             >
-              <option value="">— 选择目标 —</option>
-              <option value="$end">$end (结束流程)</option>
+              <option value="">{branchEditorText.targetPlaceholder}</option>
+              <option value="$end">$end ({branchEditorText.endFlow})</option>
               {steps.map((s) => (
                 <option key={s.id} value={s.id}>
-                  {s.label
-                    ? `${s.label}【${s.id}】`
-                    : `${STEP_TYPE_LABELS[s.type ?? 'agent']}【${s.id}】`}
+                  {formatWorkflowStepOptionLabel(s, locale)}
                 </option>
               ))}
             </select>
@@ -953,11 +2247,16 @@ function StepRow({
   allSteps,
   issues,
   selected,
+  collapsed,
   onChange,
   onMoveUp,
   onMoveDown,
+  onInsertBelow,
+  onDuplicate,
   onRemove,
   onSelect,
+  onToggleCollapse,
+  showCollapseToggle = true,
 }: {
   step: WorkflowStep;
   index: number;
@@ -966,12 +2265,18 @@ function StepRow({
   allSteps: WorkflowStep[];
   issues: string[];
   selected: boolean;
+  collapsed: boolean;
   onChange: (s: WorkflowStep) => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
+  onInsertBelow: () => void;
+  onDuplicate: () => void;
   onRemove: () => void;
   onSelect: () => void;
+  onToggleCollapse: () => void;
+  showCollapseToggle?: boolean;
 }) {
+  const { locale } = useLocale();
   const type: StepType = step.type ?? 'agent';
   const isSuperNode = isSuperStepType(type);
   const selectedAgent = step.agentId
@@ -979,6 +2284,38 @@ function StepRow({
     : undefined;
   const preferredAgent = getPreferredAgent(agents);
   const workflowAgentHint = type === 'agent' || isSuperNode ? getWorkflowAgentHint(step, agents) : null;
+  const stepHelp = getStepTypeHelp(type, locale);
+  const readinessPills = buildStepReadinessPills(step, locale);
+  const experiencePresets = isSuperNode ? buildSuperStepExperiencePresets(type) : [];
+  const previewLines = summarizeStepPreview(step, allSteps, locale);
+  const completion = buildStepCompletionMetrics(step, issues, locale);
+  const recommendedAgents = isSuperNode ? rankSuperStepAgents(type, agents) : null;
+  const rowText =
+    locale === 'zh'
+      ? {
+          stepLabelPlaceholder: `Step label (ID: ${step.id})`,
+          issueCount: `${issues.length} 个问题`,
+          located: '已定位',
+          locate: '定位',
+          expand: '展开',
+          collapse: '折叠',
+          nodePurpose: '节点用途',
+          completion: `完成度 ${completion.percent}%`,
+          defaultNext: '默认顺延',
+          endFlow: '结束流程',
+        }
+      : {
+          stepLabelPlaceholder: `Step label (ID: ${step.id})`,
+          issueCount: `${issues.length} issues`,
+          located: 'Focused',
+          locate: 'Locate',
+          expand: 'Expand',
+          collapse: 'Collapse',
+          nodePurpose: 'Node Purpose',
+          completion: `Completion ${completion.percent}%`,
+          defaultNext: 'Default Next Step',
+          endFlow: 'End Flow',
+        };
 
   return (
     <div
@@ -1005,7 +2342,7 @@ function StepRow({
         >
           {(Object.keys(STEP_TYPE_LABELS) as StepType[]).map((t) => (
             <option key={t} value={t}>
-              {STEP_TYPE_LABELS[t]}
+              {getStepTypeLabel(t, locale)}
             </option>
           ))}
         </select>
@@ -1013,7 +2350,7 @@ function StepRow({
         {/* Step label */}
         <input
           className={`${inputCls} flex-1`}
-          placeholder={`Step label (ID: ${step.id})`}
+          placeholder={rowText.stepLabelPlaceholder}
           value={step.label ?? ''}
           onChange={(e) => onChange({ ...step, label: e.target.value || undefined })}
         />
@@ -1025,7 +2362,7 @@ function StepRow({
             className="rounded-lg bg-red-500/10 ring-1 ring-red-500/30 px-2 py-1 text-[11px] text-red-300 hover:bg-red-500/15"
             title={issues.join('\n')}
           >
-            {issues.length} 个问题
+            {rowText.issueCount}
           </button>
         )}
 
@@ -1038,11 +2375,37 @@ function StepRow({
               : 'bg-slate-900/50 ring-slate-700/60 text-slate-400 hover:text-slate-200'
           }`}
         >
-          {selected ? '已定位' : '定位'}
+          {selected ? rowText.located : rowText.locate}
         </button>
+
+        {showCollapseToggle && (
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            className="rounded-lg px-2 py-1 text-[11px] ring-1 bg-slate-900/50 ring-slate-700/60 text-slate-400 hover:text-slate-200"
+          >
+            {collapsed ? rowText.expand : rowText.collapse}
+          </button>
+        )}
 
         {/* Move + remove */}
         <div className="flex gap-1 shrink-0">
+          <button
+            type="button"
+            onClick={onInsertBelow}
+            className="px-1.5 py-1 rounded text-slate-500 hover:text-indigo-300"
+            title="在下方插入同类型步骤"
+          >
+            ＋
+          </button>
+          <button
+            type="button"
+            onClick={onDuplicate}
+            className="px-1.5 py-1 rounded text-slate-500 hover:text-sky-300"
+            title="复制当前步骤"
+          >
+            ⧉
+          </button>
           <button
             disabled={index === 0}
             onClick={onMoveUp}
@@ -1065,6 +2428,47 @@ function StepRow({
           </button>
         </div>
       </div>
+
+      <div className="rounded-lg bg-slate-900/35 ring-1 ring-slate-700/40 px-3 py-3 flex flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[10px] uppercase tracking-wider text-slate-500">{rowText.nodePurpose}</span>
+          <span className="text-xs text-slate-200">{stepHelp.summary}</span>
+          <span
+            className={`rounded-full px-2 py-1 text-[11px] ring-1 ${completionTone(completion.percent, completion.issueCount)}`}
+          >
+            {rowText.completion}
+          </span>
+        </div>
+        <div className="text-[11px] text-slate-500">{stepHelp.tip}</div>
+        <div className="flex flex-wrap gap-2">
+          {readinessPills.map((pill) => (
+            <span
+              key={pill.label}
+              className={`rounded-full px-2 py-1 text-[11px] ring-1 ${
+                pill.tone === 'good'
+                  ? 'bg-emerald-500/10 text-emerald-200 ring-emerald-500/25'
+                  : pill.tone === 'warn'
+                    ? 'bg-amber-500/10 text-amber-200 ring-amber-500/25'
+                    : 'bg-slate-800/80 text-slate-300 ring-slate-700/60'
+              }`}
+            >
+              {pill.label}
+            </span>
+          ))}
+        </div>
+        {collapsed && previewLines.length > 0 && (
+          <div className="rounded-lg bg-slate-950/35 ring-1 ring-slate-800/50 px-3 py-2 flex flex-col gap-1">
+            {previewLines.map((line) => (
+              <div key={line} className="text-[11px] text-slate-400">
+                {line}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {collapsed ? null : (
+        <>
 
       {/* Agent selector */}
       {(type === 'agent' || isSuperNode) && (
@@ -1111,6 +2515,140 @@ function StepRow({
 
       {isSuperNode && (
         <div className="flex flex-col gap-3 rounded-lg bg-slate-900/35 ring-1 ring-slate-700/40 p-3">
+          {recommendedAgents && (
+            <div className="rounded-lg bg-emerald-950/20 ring-1 ring-emerald-900/45 px-3 py-3 flex flex-col gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-col gap-1">
+                  <span className="text-[11px] uppercase tracking-wider text-emerald-300 font-medium">
+                    智能推荐 Agent
+                  </span>
+                  <span className="text-[11px] text-slate-400">
+                    根据 agent 名称、别名和 sandboxProfile 做轻量推荐，可一键填入。
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="rounded-md bg-emerald-500/15 px-3 py-1.5 text-xs text-emerald-300 ring-1 ring-emerald-500/30 hover:bg-emerald-500/20"
+                  onClick={() =>
+                    onChange({
+                      ...step,
+                      agentId: recommendedAgents.coordinator?.agent.agentId ?? step.agentId,
+                      participantAgentIds:
+                        recommendedAgents.participants.length > 0
+                          ? recommendedAgents.participants.map((item) => item.agent.agentId)
+                          : step.participantAgentIds,
+                    })
+                  }
+                >
+                  一键填入推荐
+                </button>
+              </div>
+              <div className="flex flex-col gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[11px] text-slate-500">推荐协调者</span>
+                  {recommendedAgents.coordinator ? (
+                    <>
+                      <span className="rounded-full bg-slate-900/70 px-2 py-1 text-[11px] text-slate-200 ring-1 ring-slate-700/60">
+                        {formatAgentOptionLabel(recommendedAgents.coordinator.agent)}
+                      </span>
+                      {recommendedAgents.coordinator.reasons.map((reason) => (
+                        <span
+                          key={reason}
+                          className="rounded-full bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-200 ring-1 ring-emerald-500/20"
+                        >
+                          {reason}
+                        </span>
+                      ))}
+                      <button
+                        type="button"
+                        className="rounded-md bg-slate-900/70 px-2 py-1 text-[11px] text-emerald-300 ring-1 ring-emerald-500/25 hover:bg-slate-900"
+                        onClick={() => onChange({ ...step, agentId: recommendedAgents.coordinator?.agent.agentId ?? '' })}
+                      >
+                        使用
+                      </button>
+                    </>
+                  ) : (
+                    <span className="text-[11px] text-slate-500">暂无推荐</span>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[11px] text-slate-500">推荐参与者</span>
+                  {recommendedAgents.participants.length > 0 ? (
+                    <>
+                      {recommendedAgents.participants.map((item) => (
+                        <div key={item.agent.agentId} className="inline-flex items-center gap-1.5 rounded-full bg-slate-900/70 px-2 py-1 ring-1 ring-slate-700/60">
+                          <span className="text-[11px] text-slate-200">{formatAgentOptionLabel(item.agent)}</span>
+                          {item.reasons.map((reason) => (
+                            <span
+                              key={`${item.agent.agentId}-${reason}`}
+                              className="rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-200 ring-1 ring-emerald-500/20"
+                            >
+                              {reason}
+                            </span>
+                          ))}
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        className="rounded-md bg-slate-900/70 px-2 py-1 text-[11px] text-emerald-300 ring-1 ring-emerald-500/25 hover:bg-slate-900"
+                        onClick={() =>
+                          onChange({
+                            ...step,
+                            participantAgentIds: recommendedAgents.participants.map((item) => item.agent.agentId),
+                          })
+                        }
+                      >
+                        使用
+                      </button>
+                    </>
+                  ) : (
+                    <span className="text-[11px] text-slate-500">暂无推荐</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {experiencePresets.length > 0 && (
+            <div className="rounded-lg bg-cyan-950/25 ring-1 ring-cyan-900/45 px-3 py-3 flex flex-col gap-2">
+              <div className="flex flex-col gap-1">
+                <span className="text-[11px] uppercase tracking-wider text-cyan-300 font-medium">
+                  推荐配置
+                </span>
+                <span className="text-[11px] text-slate-400">
+                  一键填入更贴近业务场景的任务说明、视角与行业规则。
+                </span>
+              </div>
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-2">
+                {experiencePresets.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => {
+                      const structuredPreset = buildSuperStepStructuredPreset(type);
+                      onChange({
+                        ...step,
+                        ...preset.patch,
+                        ...(structuredPreset
+                          ? {
+                              outputFormat: structuredPreset.outputFormat,
+                              outputFormatMode: structuredPreset.outputFormatMode,
+                              outputFormatPrompt: structuredPreset.outputFormatPrompt,
+                              outputs: structuredPreset.outputs,
+                            }
+                          : {}),
+                      });
+                    }}
+                    className="rounded-lg bg-slate-900/55 px-3 py-3 ring-1 ring-slate-700/50 hover:ring-cyan-500/35 hover:bg-slate-900/75 transition-colors text-left flex flex-col gap-1"
+                  >
+                    <span className="text-sm font-medium text-slate-100">{preset.title}</span>
+                    <span className="text-[11px] text-slate-400">{preset.summary}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="flex flex-col gap-1">
             <label className="text-[11px] text-slate-500">参与 Agent</label>
             <div className="text-[11px] text-slate-600">{superStepParticipantHint(type)}</div>
@@ -1395,15 +2933,13 @@ function StepRow({
               })
             }
           >
-            <option value="">默认顺延</option>
-            <option value="$end">$end (结束流程)</option>
+            <option value="">{rowText.defaultNext}</option>
+            <option value="$end">$end ({rowText.endFlow})</option>
             {allSteps
               .filter((candidate) => candidate.id !== step.id)
               .map((candidate) => (
                 <option key={candidate.id} value={candidate.id}>
-                  {candidate.label
-                    ? `${candidate.label}【${candidate.id}】`
-                    : `${STEP_TYPE_LABELS[candidate.type ?? 'agent']}【${candidate.id}】`}
+                  {formatWorkflowStepOptionLabel(candidate, locale)}
                 </option>
               ))}
           </select>
@@ -1418,6 +2954,8 @@ function StepRow({
             </div>
           ))}
         </div>
+      )}
+        </>
       )}
     </div>
   );
@@ -1438,6 +2976,165 @@ export function WorkflowEditor({
   onSave: (w: WorkflowDef) => void;
   onCancel: () => void;
 }) {
+  const { locale } = useLocale();
+  const graphText =
+    locale === 'zh'
+      ? {
+          formMode: '当前表单版',
+          graphMode: '图形设计器',
+          compatibility: '图形设计器与当前 workflow 定义完全兼容，切换后仍保存同一份 steps 配置。',
+          canvasEntryEyebrow: '画布入口',
+          canvasEntryTitle: '画布版入口就在这里。',
+          canvasEntryBody: '适合拖动节点、查看连线、整理阶段布局，再在右侧属性面板继续完成完整配置。',
+          openCanvas: '进入画布设计器',
+          entryGuide: '查看入口说明',
+          canvasTitle: '工作流画布',
+          canvasSubtitle: '拖动节点调整布局，选中节点后在右侧属性面板编辑完整配置。',
+          fitView: '适配视图',
+          autoLayout: '自动排布',
+          locateCurrent: '定位当前节点',
+          tidySelected: '整理所选节点',
+          cancelMainLink: '取消主链连线',
+          startMainLink: '从当前节点发起主链',
+          sameCardSize: '统一卡片尺寸',
+          clickToSelect: '点击节点选中',
+          marqueeSelect: '空白处拖拽可框选多个节点',
+          dragHandle: '拖动顶部把手改变布局',
+          endNodeHint: '右侧终止节点可绑定到 $end',
+          selectedMany: '已选择 {count} 个节点，可整体拖动',
+          configureNode: '继续配置节点属性',
+          runnable: '可运行结构',
+          branches: '{count} 分支',
+          outputs: '{count} 输出',
+          noOutputs: '无输出变量',
+          terminal: '终止节点',
+          endFlow: '结束流程',
+          bindToEnd: '点击绑定当前连线到结束',
+          canEnd: '可作为主链或分支终点',
+          propertyPanel: '属性面板',
+          propertyPanelBody: '选中节点后，在这里继续使用当前完整版配置能力。',
+          resetNode: '归位当前节点',
+          coordinates: '坐标 {x}, {y}',
+          multiMove: '当前处于多节点选择，拖动标题栏会整体移动',
+          branchWiring: '分支连线',
+          newBranchLink: '+ 新建分支并连线',
+          branch: '分支 {index}',
+          cancelBind: '取消绑定',
+          bindInCanvas: '在画布中绑定目标',
+          conditionSummary: '条件摘要',
+          branchExpressionPlaceholder: 'branch condition expression',
+          branchTarget: '目标: {target}',
+          targetUnbound: '尚未绑定',
+          bindToFinish: '绑定到结束',
+          noBranches: '当前还没有分支。点击上方按钮即可创建并在画布中绑定目标节点。',
+          pickNode: '先在左侧画布选择一个节点，再在这里编辑它的详细属性。',
+          issueCount: '{count} 个问题',
+          linkingMain: '正在从该节点发起主链连线',
+          linkingBranch: '正在绑定分支 {index}',
+        }
+      : {
+          formMode: 'Form Editor',
+          graphMode: 'Graph Designer',
+          compatibility: 'The graph designer is fully compatible with the current workflow definition and saves the same steps config.',
+          canvasEntryEyebrow: 'Canvas Entry',
+          canvasEntryTitle: 'The canvas designer starts here.',
+          canvasEntryBody: 'Use it to drag nodes, inspect links, and tidy stage layouts, then continue full configuration in the property panel.',
+          openCanvas: 'Open Canvas Designer',
+          entryGuide: 'How to Find It',
+          canvasTitle: 'Workflow Canvas',
+          canvasSubtitle: 'Drag nodes to adjust layout, then edit the full configuration for the selected node in the property panel.',
+          fitView: 'Fit View',
+          autoLayout: 'Auto Layout',
+          locateCurrent: 'Locate Current Node',
+          tidySelected: 'Tidy Selected Nodes',
+          cancelMainLink: 'Cancel Main Link',
+          startMainLink: 'Start Main Link',
+          sameCardSize: 'Uniform card size',
+          clickToSelect: 'Click to select nodes',
+          marqueeSelect: 'Drag on empty space to marquee-select multiple nodes',
+          dragHandle: 'Drag the top handle to move layout',
+          endNodeHint: 'Bind links to the $end terminal node on the right',
+          selectedMany: '{count} nodes selected, drag any selected handle to move together',
+          configureNode: 'Continue configuring this node',
+          runnable: 'Runnable structure',
+          branches: '{count} branches',
+          outputs: '{count} outputs',
+          noOutputs: 'No output vars',
+          terminal: 'Terminal',
+          endFlow: 'End Flow',
+          bindToEnd: 'Click to bind the active link to end',
+          canEnd: 'Available as a main-path or branch terminal',
+          propertyPanel: 'Property Panel',
+          propertyPanelBody: 'Select a node to keep editing its full configuration here.',
+          resetNode: 'Reset Current Node',
+          coordinates: 'Position {x}, {y}',
+          multiMove: 'Multi-selection is active. Dragging the header will move the whole group.',
+          branchWiring: 'Branch Wiring',
+          newBranchLink: '+ Create Branch and Link',
+          branch: 'Branch {index}',
+          cancelBind: 'Cancel Binding',
+          bindInCanvas: 'Bind in Canvas',
+          conditionSummary: 'Condition Summary',
+          branchExpressionPlaceholder: 'branch condition expression',
+          branchTarget: 'Target: {target}',
+          targetUnbound: 'unbound',
+          bindToFinish: 'Bind to End',
+          noBranches: 'No branches yet. Use the button above to create one and bind its target in the canvas.',
+          pickNode: 'Select a node in the canvas first, then edit its detailed properties here.',
+          issueCount: '{count} issues',
+          linkingMain: 'Starting a main-path link from this node',
+          linkingBranch: 'Binding branch {index}',
+        };
+  const formText =
+    locale === 'zh'
+      ? {
+          statSteps: '步骤数',
+          statSuperNodes: '超级节点',
+          statOutputs: '输出变量',
+          statTargets: '传播目标',
+          stageSummary: '阶段摘要',
+          stageSummaryHint: '按当前步骤自动聚合',
+          stageSummaryEmpty: '添加步骤后会自动出现阶段摘要。',
+          checklist: '当前待补清单',
+          checklistHint: '模板应用后优先补齐这些项',
+          healthy: '当前工作流关键配置已基本齐备，可以开始试跑或继续做细节优化。',
+          locateStage: '定位阶段',
+          tidyStage: '整理阶段',
+          stageIssues: '问题',
+          stagePending: '待补',
+          stageNodes: '个节点',
+          stepConfig: '步骤配置',
+          expandAll: '全部展开',
+          collapseAll: '全部折叠',
+          noSteps: '暂无步骤',
+          continueConfig: '继续填写节点配置',
+          issuePending: '{count} 个问题待处理',
+          currentStepEmpty: '当前步骤还没有足够配置，继续在下方填写字段即可。',
+        }
+      : {
+          statSteps: 'Steps',
+          statSuperNodes: 'Super Nodes',
+          statOutputs: 'Output Vars',
+          statTargets: 'Targets',
+          stageSummary: 'Stage Summary',
+          stageSummaryHint: 'Automatically grouped from current steps',
+          stageSummaryEmpty: 'Stage summaries will appear after you add steps.',
+          checklist: 'Checklist',
+          checklistHint: 'Prioritize these after applying a template',
+          healthy: 'The main workflow configuration is in good shape. You can run it or continue refining details.',
+          locateStage: 'Locate Stage',
+          tidyStage: 'Tidy Stage',
+          stageIssues: 'Issues',
+          stagePending: 'Pending',
+          stageNodes: 'nodes',
+          stepConfig: 'Step Configuration',
+          expandAll: 'Expand All',
+          collapseAll: 'Collapse All',
+          noSteps: 'No steps yet',
+          continueConfig: 'Continue filling this node',
+          issuePending: '{count} issues pending',
+          currentStepEmpty: 'This step is not configured enough yet. Continue filling fields below.',
+        };
   const [name, setName] = useState(workflow?.name ?? '');
   const [description, setDescription] = useState(workflow?.description ?? '');
   const [steps, setSteps] = useState<WorkflowStep[]>(
@@ -1462,21 +3159,77 @@ export function WorkflowEditor({
   const [publicationTargets, setPublicationTargets] = useState<PublicationTargetConfig[]>(
     workflow?.publicationTargets ?? [],
   );
+  const [designerLayout, setDesignerLayout] = useState<WorkflowDesignerLayout>(() =>
+    normalizeWorkflowDesignerLayout(workflow?.steps ?? [], workflow?.designerLayout),
+  );
+  const [graphZoom, setGraphZoom] = useState(1);
+  const [editorMode, setEditorMode] = useState<WorkflowEditorMode>(
+    workflow?.designerLayout?.preferredMode === 'graph' ? 'graph' : 'form',
+  );
+  const [connectionState, setConnectionState] = useState<GraphConnectionState | null>(null);
+  const [dragState, setDragState] = useState<DragState | null>(null);
+  const [graphSelectionStepIds, setGraphSelectionStepIds] = useState<string[]>(
+    workflow?.steps[0]?.id ? [workflow.steps[0].id] : [],
+  );
+  const [graphMarquee, setGraphMarquee] = useState<GraphMarqueeState | null>(null);
   const [showHelp, setShowHelp] = useState(false);
   const [diagnosis, setDiagnosis] = useState<WorkflowDiagnoseResult | null>(null);
   const [diagnosisLoading, setDiagnosisLoading] = useState(false);
   const [diagnosisError, setDiagnosisError] = useState<string | null>(null);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(workflow?.steps[0]?.id ?? null);
+  const [collapsedStepIds, setCollapsedStepIds] = useState<string[]>([]);
+  const workflowStarters = useMemo(() => buildWorkflowStarters(), []);
+  const graphViewportRef = useRef<HTMLDivElement | null>(null);
 
   const stepIssueMap = useMemo(() => collectStepIssueMap(diagnosis), [diagnosis]);
   const workflowIssueMessages = useMemo(() => collectWorkflowIssueMessages(diagnosis), [diagnosis]);
   const issueStepCount = Object.keys(stepIssueMap).length;
+  const selectedStep = useMemo(
+    () => steps.find((step) => step.id === selectedStepId) ?? null,
+    [selectedStepId, steps],
+  );
+  const superStepCount = useMemo(
+    () => steps.filter((step) => isSuperStepType(step.type ?? 'agent')).length,
+    [steps],
+  );
+  const outputVarCount = useMemo(
+    () => steps.reduce((sum, step) => sum + (step.outputs?.length ?? 0), 0),
+    [steps],
+  );
+  const workflowStages = useMemo(() => collectWorkflowStages(steps, locale), [locale, steps]);
+  const workflowStageSummaries = useMemo(
+    () => collectWorkflowStageSummaries(steps, stepIssueMap, locale),
+    [locale, stepIssueMap, steps],
+  );
+  const workflowChecklist = useMemo(
+    () => collectWorkflowChecklistItems(name, steps, stepIssueMap, publicationTargets, locale),
+    [locale, name, publicationTargets, stepIssueMap, steps],
+  );
+  const allStepsCollapsed = steps.length > 0 && steps.every((step) => collapsedStepIds.includes(step.id));
+  const nodePositions = designerLayout.positions ?? {};
+  const graphEdges = useMemo(() => buildWorkflowGraphEdges(steps), [steps]);
+  const endNodePosition = useMemo(
+    () => buildWorkflowGraphEndPosition(steps, nodePositions),
+    [nodePositions, steps],
+  );
+  const graphCanvasMetrics = useMemo(
+    () => buildWorkflowGraphCanvasMetrics(steps, nodePositions, endNodePosition),
+    [endNodePosition, nodePositions, steps],
+  );
+  const connectionDescription = useMemo(
+    () => describeGraphConnectionState(connectionState, steps, locale),
+    [connectionState, locale, steps],
+  );
 
   const buildDraftWorkflow = (): WorkflowDef => ({
     id: draftId,
     name: name.trim(),
     description: description.trim() || undefined,
     steps,
+    designerLayout: {
+      preferredMode: editorMode,
+      positions: nodePositions,
+    },
     publicationTargets: publicationTargets.length > 0 ? publicationTargets : undefined,
     variables: Object.keys(variables).length > 0 ? variables : undefined,
     inputRequired: inputRequired ? undefined : false,
@@ -1534,13 +3287,377 @@ export function WorkflowEditor({
     setSelectedStepId(getFirstIssueStepId(diagnosis) ?? steps[0]?.id ?? null);
   }, [diagnosis, selectedStepId, steps]);
 
+  useEffect(() => {
+    const stepIds = new Set(steps.map((step) => step.id));
+    setCollapsedStepIds((current) => current.filter((stepId) => stepIds.has(stepId)));
+  }, [steps]);
+
+  useEffect(() => {
+    const stepIds = new Set(steps.map((step) => step.id));
+    setConnectionState((current) =>
+      current && stepIds.has(current.sourceStepId) ? current : null,
+    );
+    setDragState((current) =>
+      current && current.stepIds.every((stepId) => stepIds.has(stepId)) ? current : null,
+    );
+    setGraphSelectionStepIds((current) => current.filter((stepId) => stepIds.has(stepId)));
+  }, [steps]);
+
+  useEffect(() => {
+    setDesignerLayout((current) => {
+      const normalized = normalizeWorkflowDesignerLayout(steps, current);
+      const previousPositions = current.positions ?? {};
+      const nextPositions = normalized.positions ?? {};
+      const keys = Object.keys(nextPositions);
+      const unchanged =
+        keys.length === Object.keys(previousPositions).length &&
+        keys.every(
+          (key) =>
+            previousPositions[key]?.x === nextPositions[key]?.x &&
+            previousPositions[key]?.y === nextPositions[key]?.y,
+        );
+      if (unchanged) {
+        return current.preferredMode === editorMode ? current : { ...current, preferredMode: editorMode };
+      }
+      return {
+        preferredMode: editorMode,
+        positions: nextPositions,
+      };
+    });
+  }, [editorMode, steps]);
+
+  useEffect(() => {
+    if (!dragState && !graphMarquee) {
+      return;
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      if (dragState && event.pointerId === dragState.pointerId) {
+        const deltaX = event.clientX - dragState.startX;
+        const deltaY = event.clientY - dragState.startY;
+        setDesignerLayout((current) => {
+          const nextPositions = { ...(current.positions ?? {}) };
+          dragState.stepIds.forEach((stepId) => {
+            const origin = dragState.origins[stepId] ?? { x: 72, y: 72 };
+            nextPositions[stepId] = clampDesignerPosition({
+              x: origin.x + deltaX / graphZoom,
+              y: origin.y + deltaY / graphZoom,
+            });
+          });
+          return {
+            preferredMode: current.preferredMode ?? editorMode,
+            positions: nextPositions,
+          };
+        });
+      }
+
+      if (graphMarquee && event.pointerId === graphMarquee.pointerId) {
+        const viewport = graphViewportRef.current;
+        if (!viewport) {
+          return;
+        }
+        const viewportRect = viewport.getBoundingClientRect();
+        const nextX = (viewport.scrollLeft + event.clientX - viewportRect.left) / graphZoom;
+        const nextY = (viewport.scrollTop + event.clientY - viewportRect.top) / graphZoom;
+        setGraphMarquee((current) =>
+          current
+            ? {
+                ...current,
+                currentX: nextX,
+                currentY: nextY,
+              }
+            : current,
+        );
+      }
+    };
+
+    const handlePointerUp = (event: PointerEvent) => {
+      if (dragState && event.pointerId === dragState.pointerId) {
+        setDragState(null);
+      }
+
+      if (graphMarquee && event.pointerId === graphMarquee.pointerId) {
+        const selectionBounds = buildGraphSelectionBounds(graphMarquee);
+        const selectedIds =
+          selectionBounds.width < 8 && selectionBounds.height < 8
+            ? []
+            : steps
+                .filter((step) =>
+                  intersectsGraphSelection(nodePositions[step.id] ?? { x: 72, y: 72 }, selectionBounds),
+                )
+                .map((step) => step.id);
+        setGraphSelectionStepIds(selectedIds);
+        if (selectedIds[0]) {
+          setSelectedStepId(selectedIds[0]);
+        }
+        setGraphMarquee(null);
+      }
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+  }, [dragState, editorMode, graphMarquee, graphZoom, nodePositions, steps]);
+
   const focusStep = (stepId: string) => {
     setSelectedStepId(stepId);
-    scrollToWorkflowStep(stepId);
+    if (editorMode === 'form') {
+      scrollToWorkflowStep(stepId);
+    }
+  };
+
+  const focusGraphRegion = (
+    position: WorkflowDesignerPosition,
+    size: { width: number; height: number },
+  ) => {
+    const viewport = graphViewportRef.current;
+    if (!viewport) {
+      return;
+    }
+    const targetLeft = position.x * graphZoom - viewport.clientWidth / 2 + (size.width * graphZoom) / 2;
+    const targetTop = position.y * graphZoom - viewport.clientHeight / 2 + (size.height * graphZoom) / 2;
+    viewport.scrollTo({
+      left: Math.max(0, targetLeft),
+      top: Math.max(0, targetTop),
+      behavior: 'smooth',
+    });
+  };
+
+  const focusGraphStep = (stepId: string) => {
+    const position = nodePositions[stepId];
+    if (!position) {
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      focusGraphRegion(position, { width: GRAPH_NODE_WIDTH, height: GRAPH_NODE_HEIGHT });
+    });
+  };
+
+  const revealAndFocusStep = (stepId: string) => {
+    setCollapsedStepIds((current) => current.filter((value) => value !== stepId));
+    focusStep(stepId);
+    if (editorMode === 'graph') {
+      focusGraphStep(stepId);
+    }
+  };
+
+  const beginNodeDrag = (stepId: string, pointerId: number, clientX: number, clientY: number) => {
+    const activeStepIds =
+      graphSelectionStepIds.includes(stepId) && graphSelectionStepIds.length > 1
+        ? graphSelectionStepIds
+        : [stepId];
+    const origins = Object.fromEntries(
+      activeStepIds.map((activeStepId) => [activeStepId, nodePositions[activeStepId] ?? { x: 72, y: 72 }]),
+    );
+    setGraphSelectionStepIds(activeStepIds);
+    setSelectedStepId(stepId);
+    setDragState({ stepIds: activeStepIds, pointerId, startX: clientX, startY: clientY, origins });
+  };
+
+  const beginGraphMarquee = (pointerId: number, clientX: number, clientY: number) => {
+    const viewport = graphViewportRef.current;
+    if (!viewport) {
+      return;
+    }
+    const viewportRect = viewport.getBoundingClientRect();
+    const startX = (viewport.scrollLeft + clientX - viewportRect.left) / graphZoom;
+    const startY = (viewport.scrollTop + clientY - viewportRect.top) / graphZoom;
+    setConnectionState(null);
+    setGraphMarquee({ pointerId, startX, startY, currentX: startX, currentY: startY });
+  };
+
+  const moveNodeTo = (stepId: string, position: WorkflowDesignerPosition) => {
+    setDesignerLayout((current) => ({
+      preferredMode: current.preferredMode ?? editorMode,
+      positions: {
+        ...(current.positions ?? {}),
+        [stepId]: clampDesignerPosition(position),
+      },
+    }));
+  };
+
+  const connectSelectedNodeTo = (targetStepId: string) => {
+    if (!connectionState) {
+      return;
+    }
+    setSteps((current) =>
+      current.map((step) => {
+        if (step.id !== connectionState.sourceStepId) {
+          return step;
+        }
+        if (connectionState.mode === 'next' && step.type !== 'condition') {
+          return { ...step, nextStepId: targetStepId };
+        }
+        if (connectionState.mode === 'branch' && step.type === 'condition' && typeof connectionState.branchIndex === 'number') {
+          const branches = [...(step.branches ?? [])];
+          const existing = branches[connectionState.branchIndex] ?? { expression: 'true', goto: '' };
+          branches[connectionState.branchIndex] = { ...existing, goto: targetStepId };
+          return { ...step, branches };
+        }
+        return step;
+      }),
+    );
+    setConnectionState(null);
+    revealAndFocusStep(targetStepId);
+  };
+
+  const connectSelectedNodeToEnd = () => {
+    if (!connectionState) {
+      return;
+    }
+    setSteps((current) =>
+      current.map((step) => {
+        if (step.id !== connectionState.sourceStepId) {
+          return step;
+        }
+        if (connectionState.mode === 'next' && step.type !== 'condition') {
+          return { ...step, nextStepId: '$end' };
+        }
+        if (connectionState.mode === 'branch' && step.type === 'condition' && typeof connectionState.branchIndex === 'number') {
+          const branches = [...(step.branches ?? [])];
+          const existing = branches[connectionState.branchIndex] ?? { expression: 'true', goto: '' };
+          branches[connectionState.branchIndex] = { ...existing, goto: '$end' };
+          return { ...step, branches };
+        }
+        return step;
+      }),
+    );
+    setConnectionState(null);
+  };
+
+  const beginNextConnectionFromStep = (stepId: string) => {
+    setConnectionState((current) =>
+      current?.sourceStepId === stepId && current.mode === 'next'
+        ? null
+        : { sourceStepId: stepId, mode: 'next' },
+    );
+  };
+
+  const beginConditionBranchConnection = (stepId: string, branchIndex: number) => {
+    setSteps((current) =>
+      current.map((step) => {
+        if (step.id !== stepId || step.type !== 'condition') {
+          return step;
+        }
+        const branches = [...(step.branches ?? [])];
+        while (branches.length <= branchIndex) {
+          branches.push({ expression: `branch_${branches.length + 1}`, goto: '' });
+        }
+        return { ...step, branches };
+      }),
+    );
+    setConnectionState((current) =>
+      current?.sourceStepId === stepId && current.mode === 'branch' && current.branchIndex === branchIndex
+        ? null
+        : { sourceStepId: stepId, mode: 'branch', branchIndex },
+    );
+  };
+
+  const adjustGraphZoom = (delta: number) => {
+    setGraphZoom((current) => Math.min(1.8, Math.max(0.55, Number((current + delta).toFixed(2)))));
+  };
+
+  const resetGraphZoom = () => {
+    setGraphZoom(1);
+  };
+
+  const fitGraphToView = () => {
+    const widthZoom = 1120 / graphCanvasMetrics.width;
+    const heightZoom = 680 / graphCanvasMetrics.height;
+    const nextZoom = Math.min(1.25, Math.max(0.55, Math.min(widthZoom, heightZoom)));
+    setGraphZoom(Number(nextZoom.toFixed(2)));
+  };
+
+  const tidyStageNodes = (stageId: string) => {
+    const stageSteps = steps.filter((step) => getWorkflowStageMeta(step.type ?? 'agent', locale).id === stageId);
+    if (stageSteps.length === 0) {
+      return;
+    }
+
+    const orderedStageSteps = [...stageSteps].sort((left, right) => {
+      const leftPosition = nodePositions[left.id] ?? { x: 72, y: 72 };
+      const rightPosition = nodePositions[right.id] ?? { x: 72, y: 72 };
+      if (leftPosition.y !== rightPosition.y) {
+        return leftPosition.y - rightPosition.y;
+      }
+      return steps.findIndex((step) => step.id === left.id) - steps.findIndex((step) => step.id === right.id);
+    });
+
+    const anchorX = Math.min(...orderedStageSteps.map((step) => nodePositions[step.id]?.x ?? 72));
+    const anchorY = Math.min(...orderedStageSteps.map((step) => nodePositions[step.id]?.y ?? 72));
+
+    setDesignerLayout((current) => {
+      const nextPositions = { ...(current.positions ?? {}) };
+      orderedStageSteps.forEach((step, index) => {
+        nextPositions[step.id] = clampDesignerPosition({
+          x: anchorX,
+          y: anchorY + index * GRAPH_STAGE_GAP_Y,
+        });
+      });
+      return {
+        preferredMode: current.preferredMode ?? editorMode,
+        positions: nextPositions,
+      };
+    });
+
+    const firstStepId = orderedStageSteps[0]?.id;
+    if (firstStepId) {
+      setSelectedStepId(firstStepId);
+      window.setTimeout(() => focusGraphStep(firstStepId), 40);
+    }
+  };
+
+  const tidySelectedNodes = () => {
+    if (graphSelectionStepIds.length < 2) {
+      return;
+    }
+
+    const orderedSelectedIds = [...graphSelectionStepIds].sort((leftId, rightId) => {
+      const leftPosition = nodePositions[leftId] ?? { x: 72, y: 72 };
+      const rightPosition = nodePositions[rightId] ?? { x: 72, y: 72 };
+      if (leftPosition.y !== rightPosition.y) {
+        return leftPosition.y - rightPosition.y;
+      }
+      return steps.findIndex((step) => step.id === leftId) - steps.findIndex((step) => step.id === rightId);
+    });
+
+    const anchorX = Math.min(...orderedSelectedIds.map((stepId) => nodePositions[stepId]?.x ?? 72));
+    const anchorY = Math.min(...orderedSelectedIds.map((stepId) => nodePositions[stepId]?.y ?? 72));
+
+    setDesignerLayout((current) => {
+      const nextPositions = { ...(current.positions ?? {}) };
+      orderedSelectedIds.forEach((stepId, index) => {
+        nextPositions[stepId] = clampDesignerPosition({
+          x: anchorX,
+          y: anchorY + index * GRAPH_STAGE_GAP_Y,
+        });
+      });
+      return {
+        preferredMode: current.preferredMode ?? editorMode,
+        positions: nextPositions,
+      };
+    });
+
+    if (orderedSelectedIds[0]) {
+      window.setTimeout(() => focusGraphStep(orderedSelectedIds[0]), 40);
+    }
   };
 
   const updateStep = (i: number, s: WorkflowStep) =>
     setSteps((p) => p.map((x, j) => (j === i ? s : x)));
+  const insertStepAt = (index: number, type: StepType = 'agent') => {
+    const step = createDefaultStep(type);
+    setSteps((current) => {
+      const next = [...current];
+      next.splice(index, 0, step);
+      return next;
+    });
+    setSelectedStepId(step.id);
+  };
   const moveUp = (i: number) =>
     setSteps((p) => {
       const a = [...p];
@@ -1556,19 +3673,35 @@ export function WorkflowEditor({
   const removeStep = (i: number) => setSteps((p) => p.filter((_, j) => j !== i));
   const addStep = (type: StepType = 'agent') =>
     setSteps((p) => {
-      const stepId = newStepId();
-      setSelectedStepId(stepId);
-      return [
-        ...p,
-        {
-          id: stepId,
-          type,
-          agentId: type === 'agent' || isSuperStepType(type) ? '' : undefined,
-          messageTemplate: '{{prev_output}}',
-          condition: 'any',
-        },
-      ];
+      const step = createDefaultStep(type);
+      setSelectedStepId(step.id);
+      return [...p, step];
     });
+  const duplicateStepAt = (index: number) => {
+    setSteps((current) => {
+      const next = [...current];
+      const duplicated = cloneStepForDuplicate(current[index]!);
+      next.splice(index + 1, 0, duplicated);
+      setSelectedStepId(duplicated.id);
+      return next;
+    });
+  };
+  const applyWorkflowStarter = (starter: WorkflowStarter) => {
+    setName(starter.suggestedName);
+    setDescription(starter.suggestedDescription);
+    setSteps(starter.steps);
+    setSelectedStepId(starter.steps[0]?.id ?? null);
+    setInputRequired(true);
+    setCollapsedStepIds([]);
+  };
+  const toggleStepCollapse = (stepId: string) => {
+    setCollapsedStepIds((current) =>
+      current.includes(stepId) ? current.filter((value) => value !== stepId) : [...current, stepId],
+    );
+  };
+  const setAllStepsCollapsed = (collapsed: boolean) => {
+    setCollapsedStepIds(collapsed ? steps.map((step) => step.id) : []);
+  };
 
   const handleSave = () => {
     if (!name.trim()) {
@@ -1631,6 +3764,156 @@ export function WorkflowEditor({
             value={description}
             onChange={(e) => setDescription(e.target.value)}
           />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {[
+          { label: formText.statSteps, value: String(steps.length) },
+          { label: formText.statSuperNodes, value: String(superStepCount) },
+          { label: formText.statOutputs, value: String(outputVarCount) },
+          { label: formText.statTargets, value: String(publicationTargets.length) },
+        ].map((item) => (
+          <div
+            key={item.label}
+            className="rounded-xl bg-slate-800/45 ring-1 ring-slate-700/50 px-4 py-3 flex flex-col gap-1"
+          >
+            <span className="text-[11px] uppercase tracking-wider text-slate-500">{item.label}</span>
+            <span className="text-lg font-semibold text-slate-100">{item.value}</span>
+          </div>
+        ))}
+      </div>
+
+      {!workflow && (
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-slate-400">从场景模板起步</span>
+            <span className="text-[11px] text-slate-500">先铺好骨架，再替换 agent 与提示词</span>
+          </div>
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+            {workflowStarters.map((starter) => (
+              <button
+                key={starter.id}
+                type="button"
+                onClick={() => applyWorkflowStarter(starter)}
+                className="rounded-xl bg-slate-800/55 ring-1 ring-slate-700/50 px-4 py-4 text-left hover:bg-slate-800/75 hover:ring-indigo-500/35 transition-colors flex flex-col gap-2"
+              >
+                {starter.category && (
+                  <span className="inline-flex w-fit rounded-full bg-slate-900/70 px-2 py-1 text-[10px] uppercase tracking-wider text-slate-400 ring-1 ring-slate-700/60">
+                    {starter.category}
+                  </span>
+                )}
+                <span className="text-sm font-semibold text-slate-100">{starter.title}</span>
+                <span className="text-xs text-slate-400">{starter.summary}</span>
+                <span className="text-[11px] text-slate-500">{starter.suggestedDescription}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] gap-3">
+        <div className="rounded-2xl bg-slate-800/45 ring-1 ring-slate-700/50 px-4 py-4 flex flex-col gap-3">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs text-slate-400">{formText.stageSummary}</span>
+            <span className="text-[11px] text-slate-500">{formText.stageSummaryHint}</span>
+          </div>
+          {workflowStageSummaries.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+              {workflowStageSummaries.map((summary) => (
+                <div
+                  key={summary.stage.id}
+                  className="rounded-xl bg-slate-900/55 ring-1 ring-slate-800/70 px-3 py-3 flex flex-col gap-2"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={`rounded-full px-2 py-1 text-[10px] ring-1 ${summary.stage.accent}`}>
+                      {summary.stage.title}
+                    </span>
+                    <span className={`rounded-full px-2 py-1 text-[10px] ring-1 ${completionTone(summary.avgCompletion, summary.issueCount)}`}>
+                      {summary.avgCompletion}%
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-400">{summary.stepCount} {formText.stageNodes}</div>
+                  <div className="flex flex-wrap gap-2 text-[11px]">
+                    <span className="rounded-full bg-slate-800/80 px-2 py-1 text-slate-300 ring-1 ring-slate-700/60">
+                      {formText.stageIssues} {summary.issueCount}
+                    </span>
+                    <span className="rounded-full bg-slate-800/80 px-2 py-1 text-slate-300 ring-1 ring-slate-700/60">
+                      {formText.stagePending} {summary.waitingCount}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {summary.firstStepId && (
+                      <button
+                        type="button"
+                        onClick={() => revealAndFocusStep(summary.firstStepId!)}
+                        className="rounded-lg bg-slate-800/80 px-2.5 py-1 text-[11px] text-slate-200 ring-1 ring-slate-700/60 hover:bg-slate-800"
+                      >
+                        {formText.locateStage}
+                      </button>
+                    )}
+                    {editorMode === 'graph' && summary.stepCount > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => tidyStageNodes(summary.stage.id)}
+                        className="rounded-lg bg-fuchsia-500/10 px-2.5 py-1 text-[11px] text-fuchsia-200 ring-1 ring-fuchsia-500/20 hover:bg-fuchsia-500/15"
+                      >
+                        {formText.tidyStage}
+                      </button>
+                    )}
+                    {summary.actions.map((action) => (
+                      <button
+                        key={action.id}
+                        type="button"
+                        onClick={() => revealAndFocusStep(action.stepId)}
+                        className="rounded-lg bg-cyan-500/10 px-2.5 py-1 text-[11px] text-cyan-200 ring-1 ring-cyan-500/20 hover:bg-cyan-500/15"
+                      >
+                        {action.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-xs text-slate-500">{formText.stageSummaryEmpty}</div>
+          )}
+        </div>
+
+        <div className="rounded-2xl bg-slate-800/45 ring-1 ring-slate-700/50 px-4 py-4 flex flex-col gap-3">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs text-slate-400">{formText.checklist}</span>
+            <span className="text-[11px] text-slate-500">{formText.checklistHint}</span>
+          </div>
+          {workflowChecklist.length > 0 ? (
+            <div className="flex flex-col gap-2">
+              {workflowChecklist.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => {
+                    if (item.stepId) {
+                      revealAndFocusStep(item.stepId);
+                    }
+                  }}
+                  className={`rounded-xl px-3 py-3 text-left ring-1 transition-colors ${
+                    item.tone === 'warn'
+                      ? 'bg-amber-500/10 ring-amber-500/20 text-amber-100 hover:bg-amber-500/15'
+                      : 'bg-slate-900/55 ring-slate-800/70 text-slate-300 hover:bg-slate-900/75'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs">{item.message}</span>
+                    {item.stepId && <span className="text-[10px] text-slate-500 font-mono">{item.stepId}</span>}
+                  </div>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-xl bg-emerald-500/10 ring-1 ring-emerald-500/20 px-3 py-3 text-xs text-emerald-200">
+              {formText.healthy}
+            </div>
+          )}
         </div>
       </div>
 
@@ -1810,6 +4093,629 @@ export function WorkflowEditor({
         </div>
       </div>
 
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2 rounded-2xl bg-slate-900/50 p-1 ring-1 ring-slate-700/60">
+          <button
+            type="button"
+            onClick={() => {
+              setEditorMode('form');
+              setConnectionState(null);
+            }}
+            className={`rounded-xl px-3 py-2 text-xs transition-colors ${
+              editorMode === 'form'
+                ? 'bg-indigo-500/20 text-indigo-100 ring-1 ring-indigo-500/30'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            {graphText.formMode}
+          </button>
+          <button
+            type="button"
+            onClick={() => setEditorMode('graph')}
+            className={`rounded-xl px-3 py-2 text-xs transition-colors ${
+              editorMode === 'graph'
+                ? 'bg-cyan-500/20 text-cyan-100 ring-1 ring-cyan-500/30'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            {graphText.graphMode}
+          </button>
+        </div>
+        <div className="text-[11px] text-slate-500">
+          {graphText.compatibility}
+        </div>
+      </div>
+
+      {editorMode === 'form' && (
+        <div className="rounded-2xl bg-[linear-gradient(135deg,rgba(6,182,212,0.14),rgba(15,23,42,0.92))] ring-1 ring-cyan-500/20 px-4 py-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="flex flex-col gap-1">
+            <span className="text-xs uppercase tracking-[0.18em] text-cyan-300">{graphText.canvasEntryEyebrow}</span>
+            <span className="text-sm text-slate-100">{graphText.canvasEntryTitle}</span>
+            <span className="text-xs text-slate-300">
+              {graphText.canvasEntryBody}
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setEditorMode('graph')}
+              className="rounded-xl bg-cyan-500/15 px-4 py-2 text-sm text-cyan-100 ring-1 ring-cyan-500/30 hover:bg-cyan-500/20"
+            >
+              {graphText.openCanvas}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowHelp(true)}
+              className="rounded-xl bg-slate-900/70 px-4 py-2 text-sm text-slate-200 ring-1 ring-slate-700/60 hover:bg-slate-900"
+            >
+              {graphText.entryGuide}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {editorMode === 'graph' && (
+        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.7fr)_420px] gap-4">
+          <div className="rounded-[28px] overflow-hidden bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.12),transparent_38%),linear-gradient(180deg,rgba(15,23,42,0.96),rgba(2,6,23,0.98))] ring-1 ring-slate-700/60 shadow-[0_20px_80px_rgba(2,6,23,0.45)]">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/70 px-4 py-4">
+              <div className="flex flex-col gap-1">
+                <span className="text-xs uppercase tracking-[0.18em] text-cyan-300">{graphText.canvasTitle}</span>
+                <span className="text-sm text-slate-300">{graphText.canvasSubtitle}</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-1 rounded-xl bg-slate-950/65 px-2 py-1 ring-1 ring-slate-700/60">
+                  <button
+                    type="button"
+                    onClick={() => adjustGraphZoom(-0.1)}
+                    className="rounded-lg px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800/80"
+                  >
+                    －
+                  </button>
+                  <button
+                    type="button"
+                    onClick={resetGraphZoom}
+                    className="rounded-lg px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800/80"
+                  >
+                    {Math.round(graphZoom * 100)}%
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => adjustGraphZoom(0.1)}
+                    className="rounded-lg px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800/80"
+                  >
+                    ＋
+                  </button>
+                  <button
+                    type="button"
+                    onClick={fitGraphToView}
+                    className="rounded-lg px-2 py-1 text-[11px] text-cyan-200 hover:bg-slate-800/80"
+                  >
+                    {graphText.fitView}
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDesignerLayout({
+                      preferredMode: 'graph',
+                      positions: buildDefaultWorkflowDesignerPositions(steps),
+                    });
+                    setConnectionState(null);
+                  }}
+                  className="rounded-xl bg-slate-900/70 px-3 py-2 text-[11px] text-slate-200 ring-1 ring-slate-700/60 hover:bg-slate-900"
+                >
+                  {graphText.autoLayout}
+                </button>
+                {selectedStep && (
+                  <button
+                    type="button"
+                    onClick={() => focusGraphStep(selectedStep.id)}
+                    className="rounded-xl bg-slate-900/70 px-3 py-2 text-[11px] text-slate-200 ring-1 ring-slate-700/60 hover:bg-slate-900"
+                  >
+                    {graphText.locateCurrent}
+                  </button>
+                )}
+                {graphSelectionStepIds.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={tidySelectedNodes}
+                    className="rounded-xl bg-fuchsia-500/10 px-3 py-2 text-[11px] text-fuchsia-100 ring-1 ring-fuchsia-500/25 hover:bg-fuchsia-500/15"
+                  >
+                    {graphText.tidySelected}
+                  </button>
+                )}
+                {selectedStep && selectedStep.type !== 'condition' && (
+                  <button
+                    type="button"
+                    onClick={() => beginNextConnectionFromStep(selectedStep.id)}
+                    className={`rounded-xl px-3 py-2 text-[11px] ring-1 transition-colors ${
+                      connectionState?.sourceStepId === selectedStep.id && connectionState.mode === 'next'
+                        ? 'bg-cyan-500/20 text-cyan-100 ring-cyan-500/30'
+                        : 'bg-slate-900/70 text-slate-200 ring-slate-700/60 hover:bg-slate-900'
+                    }`}
+                  >
+                    {connectionState?.sourceStepId === selectedStep.id && connectionState.mode === 'next'
+                      ? graphText.cancelMainLink
+                      : graphText.startMainLink}
+                  </button>
+                )}
+                {(Object.keys(STEP_TYPE_LABELS) as StepType[]).map((type) => (
+                  <button
+                    key={`graph-add-${type}`}
+                    type="button"
+                    onClick={() => {
+                      addStep(type);
+                      setEditorMode('graph');
+                    }}
+                    className="rounded-xl bg-slate-900/70 px-3 py-2 text-[11px] text-slate-300 ring-1 ring-slate-700/60 hover:text-slate-100"
+                  >
+                    + {getStepTypeLabel(type, locale)}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="border-b border-slate-800/70 px-4 py-3 flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+              <span className="rounded-full bg-slate-900/70 px-2.5 py-1 ring-1 ring-slate-700/60">{graphText.sameCardSize}</span>
+              <span className="rounded-full bg-slate-900/70 px-2.5 py-1 ring-1 ring-slate-700/60">{graphText.clickToSelect}</span>
+              <span className="rounded-full bg-slate-900/70 px-2.5 py-1 ring-1 ring-slate-700/60">{graphText.marqueeSelect}</span>
+              <span className="rounded-full bg-slate-900/70 px-2.5 py-1 ring-1 ring-slate-700/60">{graphText.dragHandle}</span>
+              <span className="rounded-full bg-slate-900/70 px-2.5 py-1 ring-1 ring-slate-700/60">{graphText.endNodeHint}</span>
+              {graphSelectionStepIds.length > 1 && (
+                <span className="rounded-full bg-fuchsia-500/10 px-2.5 py-1 text-fuchsia-200 ring-1 ring-fuchsia-500/20">
+                  {graphText.selectedMany.replace('{count}', String(graphSelectionStepIds.length))}
+                </span>
+              )}
+              {connectionDescription && (
+                <span className="rounded-full bg-cyan-500/10 px-2.5 py-1 text-cyan-200 ring-1 ring-cyan-500/20">
+                  {connectionDescription}
+                </span>
+              )}
+            </div>
+
+            <div ref={graphViewportRef} className="relative min-h-[720px] overflow-auto bg-[linear-gradient(rgba(51,65,85,0.18)_1px,transparent_1px),linear-gradient(90deg,rgba(51,65,85,0.18)_1px,transparent_1px)] [background-size:24px_24px]">
+              <div
+                className="relative"
+                style={{
+                  width: `${Math.ceil(graphCanvasMetrics.width * graphZoom)}px`,
+                  height: `${Math.ceil(graphCanvasMetrics.height * graphZoom)}px`,
+                }}
+              >
+              <svg
+                className="absolute left-0 top-0 pointer-events-none"
+                style={{
+                  width: `${graphCanvasMetrics.width}px`,
+                  height: `${graphCanvasMetrics.height}px`,
+                  transform: `scale(${graphZoom})`,
+                  transformOrigin: 'top left',
+                }}
+              >
+                {graphEdges.map((edge) => {
+                  const from = nodePositions[edge.fromStepId];
+                  const to =
+                    edge.toStepId === GRAPH_END_NODE_ID
+                      ? endNodePosition
+                      : nodePositions[edge.toStepId];
+                  if (!from || !to) {
+                    return null;
+                  }
+                  const startX = from.x + GRAPH_NODE_WIDTH;
+                  const startY = from.y + GRAPH_NODE_HEIGHT / 2;
+                  const endX = edge.toStepId === GRAPH_END_NODE_ID ? to.x : to.x;
+                  const endY =
+                    edge.toStepId === GRAPH_END_NODE_ID
+                      ? to.y + GRAPH_END_NODE_HEIGHT / 2
+                      : to.y + GRAPH_NODE_HEIGHT / 2;
+                  const delta = Math.max(72, Math.abs(endX - startX) / 2);
+                  const path = `M ${startX} ${startY} C ${startX + delta} ${startY}, ${endX - delta} ${endY}, ${endX} ${endY}`;
+                  const labelX = (startX + endX) / 2;
+                  const labelY = (startY + endY) / 2;
+                  const labelWidth = Math.max(56, (edge.label?.length ?? 0) * 8 + 18);
+                  return (
+                    <g key={edge.id}>
+                      <path
+                        d={path}
+                        fill="none"
+                        stroke={edge.tone === 'branch' ? 'rgba(244,114,182,0.75)' : 'rgba(56,189,248,0.7)'}
+                        strokeWidth={edge.tone === 'branch' ? 2 : 2.5}
+                        strokeDasharray={edge.tone === 'branch' ? '7 6' : undefined}
+                      />
+                      {edge.label && (
+                        <g>
+                          <rect
+                            x={labelX - labelWidth / 2}
+                            y={labelY - 10}
+                            width={labelWidth}
+                            height={20}
+                            rx={10}
+                            fill="rgba(15,23,42,0.92)"
+                            stroke="rgba(244,114,182,0.35)"
+                          />
+                          <text
+                            x={labelX}
+                            y={labelY + 3}
+                            textAnchor="middle"
+                            fontSize="10"
+                            fill="rgba(251,207,232,0.92)"
+                          >
+                            {edge.label}
+                          </text>
+                        </g>
+                      )}
+                    </g>
+                  );
+                })}
+              </svg>
+
+              <div
+                className="relative"
+                style={{
+                  width: `${graphCanvasMetrics.width}px`,
+                  height: `${graphCanvasMetrics.height}px`,
+                  transform: `scale(${graphZoom})`,
+                  transformOrigin: 'top left',
+                }}
+                onPointerDown={(event) => {
+                  if (event.target !== event.currentTarget) {
+                    return;
+                  }
+                  beginGraphMarquee(event.pointerId, event.clientX, event.clientY);
+                }}
+              >
+                {graphMarquee && (() => {
+                  const selectionBounds = buildGraphSelectionBounds(graphMarquee);
+                  return (
+                    <div
+                      className="absolute rounded-lg border border-cyan-300/70 bg-cyan-400/10"
+                      style={{
+                        left: `${selectionBounds.left}px`,
+                        top: `${selectionBounds.top}px`,
+                        width: `${selectionBounds.width}px`,
+                        height: `${selectionBounds.height}px`,
+                      }}
+                    />
+                  );
+                })()}
+                {steps.map((step) => {
+                  const position = nodePositions[step.id] ?? { x: 72, y: 72 };
+                  const type = step.type ?? 'agent';
+                  const issues = stepIssueMap[step.id] ?? [];
+                  const completion = buildStepCompletionMetrics(step, issues);
+                  const preview = summarizeStepPreview(step, steps, locale).slice(0, 2);
+                  const stage = getWorkflowStageMeta(type, locale);
+                  const isSelected = selectedStepId === step.id;
+                  const isGroupSelected = graphSelectionStepIds.includes(step.id);
+                  const isConnectSource = connectionState?.sourceStepId === step.id;
+                  const branchCount = step.type === 'condition' ? step.branches?.length ?? 0 : 0;
+
+                  return (
+                    <button
+                      key={step.id}
+                      type="button"
+                      onClick={(event) => {
+                        if (connectionState && connectionState.sourceStepId !== step.id) {
+                          connectSelectedNodeTo(step.id);
+                          return;
+                        }
+                        setConnectionState(null);
+                        if (event.metaKey || event.ctrlKey || event.shiftKey) {
+                          setGraphSelectionStepIds((current) => {
+                            const exists = current.includes(step.id);
+                            return exists ? current.filter((value) => value !== step.id) : [...current, step.id];
+                          });
+                          setSelectedStepId(step.id);
+                          return;
+                        }
+                        setGraphSelectionStepIds([step.id]);
+                        focusStep(step.id);
+                      }}
+                      className={`absolute rounded-[22px] text-left transition-all ${
+                        isSelected
+                          ? 'ring-2 ring-cyan-300/80 shadow-[0_0_0_1px_rgba(34,211,238,0.35),0_24px_60px_rgba(8,145,178,0.24)]'
+                          : isGroupSelected
+                            ? 'ring-2 ring-fuchsia-300/70 shadow-[0_0_0_1px_rgba(217,70,239,0.26),0_18px_36px_rgba(88,28,135,0.2)]'
+                          : isConnectSource
+                            ? 'ring-2 ring-fuchsia-300/80 shadow-[0_0_0_1px_rgba(244,114,182,0.35),0_20px_40px_rgba(131,24,67,0.32)]'
+                            : 'ring-1 ring-slate-700/70 hover:ring-slate-500/80 hover:-translate-y-0.5'
+                      }`}
+                      style={{
+                        width: `${GRAPH_NODE_WIDTH}px`,
+                        height: `${GRAPH_NODE_HEIGHT}px`,
+                        left: `${position.x}px`,
+                        top: `${position.y}px`,
+                        background:
+                          'linear-gradient(160deg, rgba(15,23,42,0.98), rgba(30,41,59,0.92) 62%, rgba(15,23,42,0.98))',
+                      }}
+                    >
+                      <div
+                        className="flex items-center justify-between rounded-t-[22px] border-b border-slate-800/80 px-4 py-3 cursor-grab active:cursor-grabbing"
+                        onPointerDown={(event) => {
+                          event.preventDefault();
+                          beginNodeDrag(step.id, event.pointerId, event.clientX, event.clientY);
+                        }}
+                      >
+                        <span className={`rounded-full px-2 py-1 text-[10px] ring-1 ${stage.accent}`}>
+                          {getStepTypeLabel(type, locale)}
+                        </span>
+                        <span className={`rounded-full px-2 py-1 text-[10px] ring-1 ${completionTone(completion.percent, completion.issueCount)}`}>
+                          {completion.percent}%
+                        </span>
+                      </div>
+                      <div className="flex h-[calc(100%-53px)] flex-col justify-between px-4 py-3">
+                        <div>
+                          <div className="truncate text-sm font-semibold text-slate-100">{step.label ?? step.id}</div>
+                          <div className="mt-1 text-[11px] text-slate-500 font-mono truncate">{step.id}</div>
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          {preview.length > 0 ? (
+                            preview.map((line) => (
+                              <div key={line} className="truncate text-[11px] text-slate-400">
+                                {line}
+                              </div>
+                            ))
+                          ) : (
+                            <div className="text-[11px] text-slate-500">{graphText.configureNode}</div>
+                          )}
+                        </div>
+                        <div className="flex items-center justify-between pt-2 text-[10px] text-slate-500">
+                          <span>{issues.length > 0 ? graphText.issueCount.replace('{count}', String(issues.length)) : graphText.runnable}</span>
+                          <span>
+                            {step.type === 'condition'
+                              ? graphText.branches.replace('{count}', String(branchCount))
+                              : (step.outputs?.length ?? 0) > 0
+                                ? graphText.outputs.replace('{count}', String(step.outputs?.length ?? 0))
+                                : graphText.noOutputs}
+                          </span>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (connectionState) {
+                      connectSelectedNodeToEnd();
+                    }
+                  }}
+                  className={`absolute rounded-[22px] text-left transition-all ${
+                    connectionState
+                      ? 'ring-2 ring-amber-300/80 shadow-[0_0_0_1px_rgba(251,191,36,0.35),0_20px_40px_rgba(120,53,15,0.3)]'
+                      : 'ring-1 ring-slate-700/70'
+                  }`}
+                  style={{
+                    width: `${GRAPH_END_NODE_WIDTH}px`,
+                    height: `${GRAPH_END_NODE_HEIGHT}px`,
+                    left: `${endNodePosition.x}px`,
+                    top: `${endNodePosition.y}px`,
+                    background:
+                      'linear-gradient(160deg, rgba(120,53,15,0.95), rgba(146,64,14,0.88) 60%, rgba(15,23,42,0.96))',
+                  }}
+                >
+                  <div className="flex h-full flex-col justify-between px-4 py-3">
+                    <span className="w-fit rounded-full bg-amber-500/15 px-2 py-1 text-[10px] text-amber-100 ring-1 ring-amber-500/30">
+                      {graphText.terminal}
+                    </span>
+                    <div>
+                      <div className="text-sm font-semibold text-amber-50">{graphText.endFlow}</div>
+                      <div className="mt-1 text-[11px] text-amber-100/80">$end</div>
+                    </div>
+                    <div className="text-[10px] text-amber-100/70">
+                      {connectionState ? graphText.bindToEnd : graphText.canEnd}
+                    </div>
+                  </div>
+                </button>
+              </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-[28px] bg-slate-900/75 ring-1 ring-slate-700/60 p-4 flex flex-col gap-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex flex-col gap-1">
+                <span className="text-xs uppercase tracking-[0.18em] text-slate-500">{graphText.propertyPanel}</span>
+                <span className="text-sm text-slate-200">{graphText.propertyPanelBody}</span>
+              </div>
+              {selectedStep && (
+                <button
+                  type="button"
+                  onClick={() => moveNodeTo(selectedStep.id, buildDefaultWorkflowDesignerPositions([selectedStep])[selectedStep.id] ?? { x: 72, y: 72 })}
+                  className="rounded-xl bg-slate-800/80 px-3 py-2 text-[11px] text-slate-200 ring-1 ring-slate-700/60 hover:bg-slate-800"
+                >
+                  {graphText.resetNode}
+                </button>
+              )}
+            </div>
+
+            {selectedStep ? (
+              <>
+                <div className="rounded-2xl bg-[linear-gradient(135deg,rgba(6,182,212,0.12),rgba(15,23,42,0.9))] ring-1 ring-cyan-500/15 px-4 py-4 flex flex-col gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`rounded-lg px-2.5 py-1 text-xs font-medium ring-1 ${STEP_TYPE_COLORS[selectedStep.type ?? 'agent']}`}>
+                      {getStepTypeLabel(selectedStep.type ?? 'agent', locale)}
+                    </span>
+                    <span className="text-sm font-semibold text-slate-100">{selectedStep.label ?? selectedStep.id}</span>
+                  </div>
+                  <div className="text-xs text-slate-400">
+                    {getStepTypeHelp(selectedStep.type ?? 'agent', locale).summary}
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-[11px]">
+                    <span className="rounded-full bg-slate-900/70 px-2.5 py-1 text-slate-300 ring-1 ring-slate-700/60">
+                      {graphText.coordinates
+                        .replace('{x}', String(Math.round(nodePositions[selectedStep.id]?.x ?? 0)))
+                        .replace('{y}', String(Math.round(nodePositions[selectedStep.id]?.y ?? 0)))}
+                    </span>
+                    {graphSelectionStepIds.length > 1 && graphSelectionStepIds.includes(selectedStep.id) && (
+                      <span className="rounded-full bg-fuchsia-500/10 px-2.5 py-1 text-fuchsia-200 ring-1 ring-fuchsia-500/20">
+                        {graphText.multiMove}
+                      </span>
+                    )}
+                    {connectionState?.sourceStepId === selectedStep.id && (
+                      <span className="rounded-full bg-fuchsia-500/10 px-2.5 py-1 text-fuchsia-200 ring-1 ring-fuchsia-500/20">
+                        {connectionState.mode === 'next'
+                          ? graphText.linkingMain
+                          : graphText.linkingBranch.replace('{index}', String((connectionState.branchIndex ?? 0) + 1))}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {selectedStep.type === 'condition' && (
+                  <div className="rounded-2xl bg-slate-800/55 ring-1 ring-slate-700/50 px-4 py-4 flex flex-col gap-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-xs uppercase tracking-[0.16em] text-slate-500">{graphText.branchWiring}</span>
+                      <button
+                        type="button"
+                        onClick={() => beginConditionBranchConnection(selectedStep.id, selectedStep.branches?.length ?? 0)}
+                        className="rounded-xl bg-fuchsia-500/10 px-3 py-2 text-[11px] text-fuchsia-200 ring-1 ring-fuchsia-500/20 hover:bg-fuchsia-500/15"
+                      >
+                        {graphText.newBranchLink}
+                      </button>
+                    </div>
+                    {(selectedStep.branches ?? []).length > 0 ? (
+                      <div className="flex flex-col gap-2">
+                        {(selectedStep.branches ?? []).map((branch, branchIndex) => (
+                          <div
+                            key={`${selectedStep.id}-branch-${branchIndex}`}
+                            className="rounded-xl bg-slate-900/65 ring-1 ring-slate-700/60 px-3 py-3 flex flex-col gap-2"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs text-slate-200">{graphText.branch.replace('{index}', String(branchIndex + 1))}</span>
+                              <button
+                                type="button"
+                                onClick={() => beginConditionBranchConnection(selectedStep.id, branchIndex)}
+                                className={`rounded-lg px-2.5 py-1 text-[11px] ring-1 ${
+                                  connectionState?.sourceStepId === selectedStep.id &&
+                                  connectionState.mode === 'branch' &&
+                                  connectionState.branchIndex === branchIndex
+                                    ? 'bg-fuchsia-500/20 text-fuchsia-100 ring-fuchsia-500/30'
+                                    : 'bg-slate-800/80 text-slate-300 ring-slate-700/60 hover:bg-slate-800'
+                                }`}
+                              >
+                                {connectionState?.sourceStepId === selectedStep.id &&
+                                connectionState.mode === 'branch' &&
+                                connectionState.branchIndex === branchIndex
+                                  ? graphText.cancelBind
+                                  : graphText.bindInCanvas}
+                              </button>
+                            </div>
+                            <div className="text-[11px] text-slate-400 break-all">
+                              {graphText.conditionSummary}
+                            </div>
+                            <input
+                              className={`${inputCls} text-xs font-mono`}
+                              placeholder={graphText.branchExpressionPlaceholder}
+                              value={branch.expression}
+                              onChange={(event) => {
+                                const nextExpression = event.target.value;
+                                setSteps((current) =>
+                                  current.map((step) => {
+                                    if (step.id !== selectedStep.id || step.type !== 'condition') {
+                                      return step;
+                                    }
+                                    const branches = [...(step.branches ?? [])];
+                                    const existing = branches[branchIndex] ?? { expression: '', goto: '' };
+                                    branches[branchIndex] = { ...existing, expression: nextExpression };
+                                    return { ...step, branches };
+                                  }),
+                                );
+                              }}
+                            />
+                            <div className="text-[11px] text-slate-500 break-all">
+                              {graphText.branchTarget.replace('{target}', branch.goto || graphText.targetUnbound)}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const branchIndexToEnd = branchIndex;
+                                setSteps((current) =>
+                                  current.map((step) => {
+                                    if (step.id !== selectedStep.id || step.type !== 'condition') {
+                                      return step;
+                                    }
+                                    const branches = [...(step.branches ?? [])];
+                                    const existing = branches[branchIndexToEnd] ?? { expression: 'true', goto: '' };
+                                    branches[branchIndexToEnd] = { ...existing, goto: '$end' };
+                                    return { ...step, branches };
+                                  }),
+                                );
+                                setConnectionState(null);
+                              }}
+                              className="w-fit rounded-lg bg-amber-500/10 px-2.5 py-1 text-[11px] text-amber-200 ring-1 ring-amber-500/20 hover:bg-amber-500/15"
+                            >
+                              {graphText.bindToFinish}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-slate-500">{graphText.noBranches}</div>
+                    )}
+                  </div>
+                )}
+                <div className="max-h-[920px] overflow-auto pr-1">
+                  <StepRow
+                    step={selectedStep}
+                    index={Math.max(steps.findIndex((step) => step.id === selectedStep.id), 0)}
+                    total={steps.length}
+                    agents={agents}
+                    allSteps={steps}
+                    issues={stepIssueMap[selectedStep.id] ?? []}
+                    selected={true}
+                    collapsed={false}
+                    onChange={(updated) => {
+                      const index = steps.findIndex((step) => step.id === selectedStep.id);
+                      if (index >= 0) {
+                        updateStep(index, updated);
+                      }
+                    }}
+                    onMoveUp={() => {
+                      const index = steps.findIndex((step) => step.id === selectedStep.id);
+                      if (index > 0) {
+                        moveUp(index);
+                      }
+                    }}
+                    onMoveDown={() => {
+                      const index = steps.findIndex((step) => step.id === selectedStep.id);
+                      if (index >= 0 && index < steps.length - 1) {
+                        moveDown(index);
+                      }
+                    }}
+                    onInsertBelow={() => {
+                      const index = steps.findIndex((step) => step.id === selectedStep.id);
+                      if (index >= 0) {
+                        insertStepAt(index + 1, selectedStep.type ?? 'agent');
+                      }
+                    }}
+                    onDuplicate={() => {
+                      const index = steps.findIndex((step) => step.id === selectedStep.id);
+                      if (index >= 0) {
+                        duplicateStepAt(index);
+                      }
+                    }}
+                    onRemove={() => {
+                      const index = steps.findIndex((step) => step.id === selectedStep.id);
+                      if (index >= 0) {
+                        removeStep(index);
+                      }
+                    }}
+                    onSelect={() => setSelectedStepId(selectedStep.id)}
+                    onToggleCollapse={() => undefined}
+                    showCollapseToggle={false}
+                  />
+                </div>
+              </>
+            ) : (
+              <div className="rounded-2xl bg-slate-800/55 ring-1 ring-slate-700/50 px-4 py-6 text-sm text-slate-400">
+                {graphText.pickNode}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {editorMode === 'form' && (
+      <>
       {/* Pipeline visualizer */}
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between gap-3">
@@ -1820,17 +4726,28 @@ export function WorkflowEditor({
               : '当前未发现可定位的步骤级问题'}
           </span>
         </div>
+        {workflowStages.length > 1 && (
+          <div className="flex flex-wrap gap-2">
+            {workflowStages.map((stage) => (
+              <span key={stage.id} className={`rounded-full px-2.5 py-1 text-[11px] ring-1 ${stage.accent}`}>
+                {stage.title}
+              </span>
+            ))}
+          </div>
+        )}
         <div className="flex items-center gap-2 overflow-x-auto pb-1">
         {steps.map((s, i) => {
           const t: StepType = s.type ?? 'agent';
           const stepIssues = stepIssueMap[s.id] ?? [];
           const selected = selectedStepId === s.id;
+          const completion = buildStepCompletionMetrics(s, stepIssues, locale);
+          const preview = summarizeStepPreview(s, steps, locale)[0];
           return (
             <div key={s.id} className="flex items-center gap-1.5 shrink-0">
               <button
                 type="button"
                 onClick={() => focusStep(s.id)}
-                className={`rounded-lg px-3 py-1.5 text-xs font-medium ring-1 transition-colors ${STEP_TYPE_COLORS[t]} ${
+                className={`rounded-xl px-3 py-2 text-left min-w-[148px] ring-1 transition-colors ${STEP_TYPE_COLORS[t]} ${
                   selected
                     ? 'ring-2 ring-offset-2 ring-offset-slate-950 ring-white/80'
                     : stepIssues.length > 0
@@ -1838,40 +4755,102 @@ export function WorkflowEditor({
                       : ''
                 }`}
               >
-                {s.label ?? s.id}
-                {stepIssues.length > 0 && (
-                  <span className="ml-2 rounded-full bg-red-500/20 px-1.5 py-0.5 text-[10px] text-red-100">
-                    {stepIssues.length}
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-current">{s.label ?? s.id}</span>
+                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] ring-1 ${completionTone(completion.percent, completion.issueCount)}`}>
+                    {completion.percent}%
                   </span>
+                </div>
+                <div className="mt-1 text-[10px] opacity-80">{getStepTypeLabel(t, locale)}</div>
+                <div className="mt-1 text-[10px] opacity-75 truncate">{preview ?? formText.continueConfig}</div>
+                {stepIssues.length > 0 && (
+                  <div className="mt-1 text-[10px] text-red-100">{formText.issuePending.replace('{count}', String(stepIssues.length))}</div>
                 )}
               </button>
               {i < steps.length - 1 && <span className="text-slate-600">→</span>}
             </div>
           );
         })}
-        {steps.length === 0 && <span className="text-xs text-slate-600">暂无步骤</span>}
+        {steps.length === 0 && <span className="text-xs text-slate-600">{formText.noSteps}</span>}
         </div>
+        {selectedStep && (
+          <div className="rounded-2xl bg-[linear-gradient(135deg,rgba(15,23,42,0.95),rgba(30,41,59,0.86))] ring-1 ring-slate-700/50 px-4 py-4 flex flex-col gap-3 shadow-[0_12px_40px_rgba(15,23,42,0.2)]">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`rounded-lg px-2.5 py-1 text-xs font-medium ring-1 ${STEP_TYPE_COLORS[selectedStep.type ?? 'agent']}`}>
+                {getStepTypeLabel(selectedStep.type ?? 'agent', locale)}
+              </span>
+              <span className="text-sm font-semibold text-slate-100">
+                {selectedStep.label ?? selectedStep.id}
+              </span>
+              <span className="text-[11px] text-slate-500 font-mono">{selectedStep.id}</span>
+            </div>
+            <div className="text-xs text-slate-400">{getStepTypeHelp(selectedStep.type ?? 'agent', locale).summary}</div>
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-2">
+              {summarizeStepPreview(selectedStep, steps, locale).map((line) => (
+                <div
+                  key={line}
+                  className="rounded-lg bg-slate-900/55 px-3 py-2 text-xs text-slate-300 ring-1 ring-slate-800/70"
+                >
+                  {line}
+                </div>
+              ))}
+              {summarizeStepPreview(selectedStep, steps, locale).length === 0 && (
+                <div className="rounded-lg bg-slate-900/40 px-3 py-2 text-xs text-slate-500 ring-1 ring-slate-800/70">
+                  {formText.currentStepEmpty}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Steps */}
       <div className="flex flex-col gap-2">
-        {steps.map((s, i) => (
-          <StepRow
-            key={s.id}
-            step={s}
-            index={i}
-            total={steps.length}
-            agents={agents}
-            allSteps={steps}
-            issues={stepIssueMap[s.id] ?? []}
-            selected={selectedStepId === s.id}
-            onChange={(updated) => updateStep(i, updated)}
-            onMoveUp={() => moveUp(i)}
-            onMoveDown={() => moveDown(i)}
-            onRemove={() => removeStep(i)}
-            onSelect={() => focusStep(s.id)}
-          />
-        ))}
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-xs text-slate-400">{formText.stepConfig}</span>
+          <button
+            type="button"
+            onClick={() => setAllStepsCollapsed(!allStepsCollapsed)}
+            className="rounded-lg bg-slate-900/50 px-3 py-1.5 text-[11px] text-slate-300 ring-1 ring-slate-700/60 hover:text-slate-100"
+          >
+            {allStepsCollapsed ? formText.expandAll : formText.collapseAll}
+          </button>
+        </div>
+        {steps.map((s, i) => {
+          const stage = getWorkflowStageMeta(s.type ?? 'agent', locale);
+          const prevStage = i > 0 ? getWorkflowStageMeta(steps[i - 1]?.type ?? 'agent', locale) : null;
+          const showStageHeader = i === 0 || prevStage?.id !== stage.id;
+          return (
+            <div key={s.id} className="flex flex-col gap-2">
+              {showStageHeader && (
+                <div className="flex items-center gap-3 px-1 pt-1">
+                  <span className={`rounded-full px-2.5 py-1 text-[11px] ring-1 ${stage.accent}`}>
+                    {stage.title}
+                  </span>
+                  <div className="h-px flex-1 bg-slate-800/80" />
+                </div>
+              )}
+              <StepRow
+                step={s}
+                index={i}
+                total={steps.length}
+                agents={agents}
+                allSteps={steps}
+                issues={stepIssueMap[s.id] ?? []}
+                selected={selectedStepId === s.id}
+                collapsed={collapsedStepIds.includes(s.id)}
+                onChange={(updated) => updateStep(i, updated)}
+                onMoveUp={() => moveUp(i)}
+                onMoveDown={() => moveDown(i)}
+                onInsertBelow={() => insertStepAt(i + 1, s.type ?? 'agent')}
+                onDuplicate={() => duplicateStepAt(i)}
+                onRemove={() => removeStep(i)}
+                onSelect={() => focusStep(s.id)}
+                onToggleCollapse={() => toggleStepCollapse(s.id)}
+              />
+            </div>
+          );
+        })}
 
         {/* Add step buttons */}
         <div className="flex gap-2 flex-wrap">
@@ -1883,11 +4862,13 @@ export function WorkflowEditor({
                 'rounded-lg border border-dashed px-3 py-2 text-xs transition-colors border-slate-700 hover:border-indigo-500/40 text-slate-500 hover:text-slate-300'
               }
             >
-              + {STEP_TYPE_LABELS[t]}
+              + {getStepTypeLabel(t, locale)}
             </button>
           ))}
         </div>
       </div>
+      </>
+      )}
 
       {(diagnosisLoading ||
         diagnosisError ||

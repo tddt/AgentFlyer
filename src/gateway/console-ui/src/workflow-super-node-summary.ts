@@ -20,6 +20,7 @@ export interface WorkflowSuperNodeStructuredSummary {
   highlights: WorkflowSuperNodeSummaryHighlight[];
   texts: WorkflowSuperNodeSummaryTextSection[];
   lists: WorkflowSuperNodeSummaryListSection[];
+  missingFields: string[];
 }
 
 type SuperNodeStepType = Extract<
@@ -91,6 +92,18 @@ function pushHighlight(
   }
 }
 
+function trackMissingString(target: string[], label: string, value: unknown): void {
+  if (!readString(value)) {
+    target.push(label);
+  }
+}
+
+function trackMissingList(target: string[], label: string, value: unknown): void {
+  if (readStringArray(value).length === 0) {
+    target.push(label);
+  }
+}
+
 export function parseWorkflowSuperNodeStructuredSummary(
   type: StepType | undefined,
   output: string | undefined,
@@ -120,6 +133,7 @@ function buildSummaryByType(
   const highlights: WorkflowSuperNodeSummaryHighlight[] = [];
   const texts: WorkflowSuperNodeSummaryTextSection[] = [];
   const lists: WorkflowSuperNodeSummaryListSection[] = [];
+  const missingFields: string[] = [];
 
   switch (type) {
     case 'multi_source':
@@ -128,8 +142,13 @@ function buildSummaryByType(
       pushList(lists, '趋势信号', data.signals);
       pushList(lists, '异常点', data.anomalies);
       pushList(lists, '建议动作', data.recommendedActions);
+      trackMissingString(missingFields, '综合判断', data.synthesis);
+      trackMissingList(missingFields, '核心数据', data.coreData);
+      trackMissingList(missingFields, '趋势信号', data.signals);
+      trackMissingList(missingFields, '异常点', data.anomalies);
+      trackMissingList(missingFields, '建议动作', data.recommendedActions);
       return texts.length > 0 || lists.length > 0
-        ? { title: '行业信息整合包', highlights, texts, lists }
+        ? { title: '行业信息整合包', highlights, texts, lists, missingFields }
         : null;
     case 'debate':
       pushText(texts, '主持总结', data.moderatorSummary);
@@ -137,8 +156,13 @@ function buildSummaryByType(
       pushList(lists, '分歧点', data.disagreements);
       pushList(lists, '共识结论', data.consensus);
       pushList(lists, '待补证据', data.evidenceGaps);
+      trackMissingString(missingFields, '主持总结', data.moderatorSummary);
+      trackMissingList(missingFields, '核心观点', data.coreClaims);
+      trackMissingList(missingFields, '分歧点', data.disagreements);
+      trackMissingList(missingFields, '共识结论', data.consensus);
+      trackMissingList(missingFields, '待补证据', data.evidenceGaps);
       return texts.length > 0 || lists.length > 0
-        ? { title: '对抗辩论纪要', highlights, texts, lists }
+        ? { title: '对抗辩论纪要', highlights, texts, lists, missingFields }
         : null;
     case 'decision':
       pushHighlight(highlights, '方向', data.direction);
@@ -147,8 +171,14 @@ function buildSummaryByType(
       pushText(texts, '决策依据', data.rationale);
       pushList(lists, '执行步骤', data.executionSteps);
       pushList(lists, '关键依赖', data.dependencies);
+      trackMissingString(missingFields, '方向', data.direction);
+      trackMissingString(missingFields, '优先级', data.priority);
+      trackMissingString(missingFields, '置信度', data.confidence);
+      trackMissingString(missingFields, '决策依据', data.rationale);
+      trackMissingList(missingFields, '执行步骤', data.executionSteps);
+      trackMissingList(missingFields, '关键依赖', data.dependencies);
       return highlights.length > 0 || texts.length > 0 || lists.length > 0
-        ? { title: '结构化决策方案', highlights, texts, lists }
+        ? { title: '结构化决策方案', highlights, texts, lists, missingFields }
         : null;
     case 'risk_review':
       pushHighlight(highlights, '风险等级', data.riskLevel);
@@ -156,8 +186,13 @@ function buildSummaryByType(
       pushList(lists, '主要风险', data.majorRisks);
       pushList(lists, '整改建议', data.mitigations);
       pushList(lists, '否决项', data.vetoItems);
+      trackMissingString(missingFields, '风险等级', data.riskLevel);
+      trackMissingString(missingFields, '是否建议继续', data.proceedRecommendation);
+      trackMissingList(missingFields, '主要风险', data.majorRisks);
+      trackMissingList(missingFields, '整改建议', data.mitigations);
+      trackMissingList(missingFields, '否决项', data.vetoItems);
       return highlights.length > 0 || lists.length > 0
-        ? { title: '风险审核报告', highlights, texts, lists }
+        ? { title: '风险审核报告', highlights, texts, lists, missingFields }
         : null;
     case 'adjudication':
       pushHighlight(highlights, '拍板结果', data.verdict);
@@ -165,8 +200,13 @@ function buildSummaryByType(
       pushText(texts, '决策备忘', data.decisionMemo);
       pushList(lists, '落地节点', data.milestones);
       pushList(lists, '继续观察项', data.watchItems);
+      trackMissingString(missingFields, '拍板结果', data.verdict);
+      trackMissingString(missingFields, '责任归属', data.owner);
+      trackMissingString(missingFields, '决策备忘', data.decisionMemo);
+      trackMissingList(missingFields, '落地节点', data.milestones);
+      trackMissingList(missingFields, '继续观察项', data.watchItems);
       return highlights.length > 0 || texts.length > 0 || lists.length > 0
-        ? { title: '最终执行方案', highlights, texts, lists }
+        ? { title: '最终执行方案', highlights, texts, lists, missingFields }
         : null;
   }
 }

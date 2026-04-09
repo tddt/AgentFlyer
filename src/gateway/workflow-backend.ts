@@ -124,11 +124,22 @@ export interface WorkflowStep {
   outputFormatMode?: 'append' | 'prepend';
 }
 
+export interface WorkflowDesignerPosition {
+  x: number;
+  y: number;
+}
+
+export interface WorkflowDesignerLayout {
+  preferredMode?: 'form' | 'graph';
+  positions?: Record<string, WorkflowDesignerPosition>;
+}
+
 export interface WorkflowDef {
   id: string;
   name: string;
   description?: string;
   steps: WorkflowStep[];
+  designerLayout?: WorkflowDesignerLayout;
   publicationTargets?: Array<{
     channelId: string;
     threadKey: string;

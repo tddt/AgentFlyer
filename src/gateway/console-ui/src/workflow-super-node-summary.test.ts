@@ -24,6 +24,7 @@ describe('parseWorkflowSuperNodeStructuredSummary', () => {
         { label: '异常点', items: ['华东退货率偏高'] },
         { label: '建议动作', items: ['追踪高退货 SKU', '加码复购运营'] },
       ],
+      missingFields: [],
     });
   });
 
@@ -51,6 +52,22 @@ describe('parseWorkflowSuperNodeStructuredSummary', () => {
       { label: '执行步骤', items: ['锁定代理商', '签订季度目标'] },
       { label: '关键依赖', items: ['区域预算审批'] },
     ]);
+    expect(summary?.missingFields).toEqual([]);
+  });
+
+  it('reports missing structured fields when json is incomplete', () => {
+    const summary = parseWorkflowSuperNodeStructuredSummary(
+      'risk_review',
+      JSON.stringify({
+        riskLevel: '高',
+        majorRisks: ['核心供应商单点依赖'],
+      }),
+    );
+
+    expect(summary?.title).toBe('风险审核报告');
+    expect(summary?.highlights).toEqual([{ label: '风险等级', value: '高' }]);
+    expect(summary?.lists).toEqual([{ label: '主要风险', items: ['核心供应商单点依赖'] }]);
+    expect(summary?.missingFields).toEqual(['是否建议继续', '整改建议', '否决项']);
   });
 
   it('returns null for non-json or non-super-node outputs', () => {

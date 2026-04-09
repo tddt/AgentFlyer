@@ -99,7 +99,26 @@ function renderSuperNodeStructuredSummary(
           Structured Summary
         </span>
         <span className="text-xs text-slate-200 font-medium">{summary.title}</span>
+        {summary.missingFields.length > 0 && <Badge variant="yellow">missing fields</Badge>}
       </div>
+
+      {summary.missingFields.length > 0 && (
+        <div className="rounded-md bg-amber-500/10 px-3 py-2 ring-1 ring-amber-500/20 flex flex-col gap-1.5">
+          <span className="text-[10px] uppercase tracking-wider text-amber-300 font-medium">
+            Output schema gaps
+          </span>
+          <div className="flex flex-wrap gap-2">
+            {summary.missingFields.map((field) => (
+              <span
+                key={field}
+                className="rounded-md bg-amber-400/10 px-2 py-1 text-[11px] text-amber-200 ring-1 ring-amber-400/15"
+              >
+                {field}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {summary.highlights.length > 0 && (
         <div className="flex flex-wrap gap-2">

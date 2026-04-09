@@ -256,6 +256,205 @@ function lastStepText(run: WorkflowRunRecord): string {
   return '';
 }
 
+function parseDeliverableJsonRecord(output: string | undefined): Record<string, unknown> | null {
+  if (!output?.trim()) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(output);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function readDeliverableString(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function readDeliverableStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => (typeof item === 'string' ? item.trim() : ''))
+    .filter(Boolean);
+}
+
+function joinSummaryParts(parts: string[]): string {
+  return parts.filter(Boolean).join(' | ');
+}
+
+function compactSummaryParts(parts: Array<string | null | undefined>): string[] {
+  return parts.filter((part): part is string => typeof part === 'string' && part.trim().length > 0);
+}
+
+function formatListPreview(label: string, value: unknown, maxItems = 3): string | null {
+  const items = readDeliverableStringArray(value);
+  if (items.length === 0) {
+    return null;
+  }
+  return `${label}: ${items.slice(0, maxItems).join(' / ')}`;
+}
+
+function formatMissingFields(fields: string[]): string | null {
+  return fields.length > 0 ? `缺失字段: ${fields.join('、')}` : null;
+}
+
+function buildStructuredSuperNodeDeliverableSummary(
+  workflow: WorkflowDef,
+  run: WorkflowRunRecord,
+): { summary: string; previewText: string } | null {
+  const lastStepResult = run.stepResults[run.stepResults.length - 1];
+  if (!lastStepResult?.output?.trim()) {
+    return null;
+  }
+
+  const lastStep = workflow.steps.find((step) => step.id === lastStepResult.stepId);
+  const type = lastStep?.type;
+  if (
+    type !== 'multi_source' &&
+    type !== 'debate' &&
+    type !== 'decision' &&
+    type !== 'risk_review' &&
+    type !== 'adjudication'
+  ) {
+    return null;
+  }
+
+  const data = parseDeliverableJsonRecord(lastStepResult.output);
+  if (!data) {
+    return null;
+  }
+
+  const missingFields: string[] = [];
+  let title = '';
+  let summaryParts: string[] = [];
+  let previewParts: string[] = [];
+
+  switch (type) {
+    case 'multi_source': {
+      title = '行业信息整合包';
+      const synthesis = readDeliverableString(data.synthesis);
+      if (!synthesis) missingFields.push('综合判断');
+      if (readDeliverableStringArray(data.coreData).length === 0) missingFields.push('核心数据');
+      if (readDeliverableStringArray(data.signals).length === 0) missingFields.push('趋势信号');
+      if (readDeliverableStringArray(data.anomalies).length === 0) missingFields.push('异常点');
+      if (readDeliverableStringArray(data.recommendedActions).length === 0) missingFields.push('建议动作');
+      summaryParts = [title, synthesis ?? formatListPreview('核心数据', data.coreData, 1) ?? '待补充'];
+      previewParts = compactSummaryParts([
+        title,
+        synthesis ? `综合判断: ${synthesis}` : '',
+        formatListPreview('核心数据', data.coreData),
+        formatListPreview('趋势信号', data.signals),
+        formatListPreview('异常点', data.anomalies),
+        formatListPreview('建议动作', data.recommendedActions),
+        formatMissingFields(missingFields),
+      ]);
+      break;
+    }
+    case 'debate': {
+      title = '对抗辩论纪要';
+      const moderatorSummary = readDeliverableString(data.moderatorSummary);
+      if (!moderatorSummary) missingFields.push('主持总结');
+      if (readDeliverableStringArray(data.coreClaims).length === 0) missingFields.push('核心观点');
+      if (readDeliverableStringArray(data.disagreements).length === 0) missingFields.push('分歧点');
+      if (readDeliverableStringArray(data.consensus).length === 0) missingFields.push('共识结论');
+      if (readDeliverableStringArray(data.evidenceGaps).length === 0) missingFields.push('待补证据');
+      summaryParts = [title, moderatorSummary ?? formatListPreview('共识结论', data.consensus, 1) ?? '待补充'];
+      previewParts = compactSummaryParts([
+        title,
+        moderatorSummary ? `主持总结: ${moderatorSummary}` : '',
+        formatListPreview('核心观点', data.coreClaims),
+        formatListPreview('分歧点', data.disagreements),
+        formatListPreview('共识结论', data.consensus),
+        formatListPreview('待补证据', data.evidenceGaps),
+        formatMissingFields(missingFields),
+      ]);
+      break;
+    }
+    case 'decision': {
+      title = '结构化决策方案';
+      const direction = readDeliverableString(data.direction);
+      const priority = readDeliverableString(data.priority);
+      const confidence = readDeliverableString(data.confidence);
+      const rationale = readDeliverableString(data.rationale);
+      if (!direction) missingFields.push('方向');
+      if (!priority) missingFields.push('优先级');
+      if (!confidence) missingFields.push('置信度');
+      if (!rationale) missingFields.push('决策依据');
+      if (readDeliverableStringArray(data.executionSteps).length === 0) missingFields.push('执行步骤');
+      if (readDeliverableStringArray(data.dependencies).length === 0) missingFields.push('关键依赖');
+      summaryParts = [title, direction ? `方向:${direction}` : '方向待补充', priority ? `优先级:${priority}` : ''];
+      previewParts = compactSummaryParts([
+        title,
+        direction ? `方向: ${direction}` : '',
+        priority ? `优先级: ${priority}` : '',
+        confidence ? `置信度: ${confidence}` : '',
+        rationale ? `决策依据: ${rationale}` : '',
+        formatListPreview('执行步骤', data.executionSteps),
+        formatListPreview('关键依赖', data.dependencies),
+        formatMissingFields(missingFields),
+      ]);
+      break;
+    }
+    case 'risk_review': {
+      title = '风险审核报告';
+      const riskLevel = readDeliverableString(data.riskLevel);
+      const proceedRecommendation = readDeliverableString(data.proceedRecommendation);
+      if (!riskLevel) missingFields.push('风险等级');
+      if (!proceedRecommendation) missingFields.push('是否建议继续');
+      if (readDeliverableStringArray(data.majorRisks).length === 0) missingFields.push('主要风险');
+      if (readDeliverableStringArray(data.mitigations).length === 0) missingFields.push('整改建议');
+      if (readDeliverableStringArray(data.vetoItems).length === 0) missingFields.push('否决项');
+      summaryParts = [title, riskLevel ? `风险等级:${riskLevel}` : '风险等级待补充', proceedRecommendation ? `建议:${proceedRecommendation}` : ''];
+      previewParts = compactSummaryParts([
+        title,
+        riskLevel ? `风险等级: ${riskLevel}` : '',
+        proceedRecommendation ? `是否建议继续: ${proceedRecommendation}` : '',
+        formatListPreview('主要风险', data.majorRisks),
+        formatListPreview('整改建议', data.mitigations),
+        formatListPreview('否决项', data.vetoItems),
+        formatMissingFields(missingFields),
+      ]);
+      break;
+    }
+    case 'adjudication': {
+      title = '最终执行方案';
+      const verdict = readDeliverableString(data.verdict);
+      const owner = readDeliverableString(data.owner);
+      const decisionMemo = readDeliverableString(data.decisionMemo);
+      if (!verdict) missingFields.push('拍板结果');
+      if (!owner) missingFields.push('责任归属');
+      if (!decisionMemo) missingFields.push('决策备忘');
+      if (readDeliverableStringArray(data.milestones).length === 0) missingFields.push('落地节点');
+      if (readDeliverableStringArray(data.watchItems).length === 0) missingFields.push('继续观察项');
+      summaryParts = [title, verdict ? `拍板:${verdict}` : '拍板待补充', owner ? `责任:${owner}` : ''];
+      previewParts = compactSummaryParts([
+        title,
+        verdict ? `拍板结果: ${verdict}` : '',
+        owner ? `责任归属: ${owner}` : '',
+        decisionMemo ? `决策备忘: ${decisionMemo}` : '',
+        formatListPreview('落地节点', data.milestones),
+        formatListPreview('继续观察项', data.watchItems),
+        formatMissingFields(missingFields),
+      ]);
+      break;
+    }
+  }
+
+  return {
+    summary: summarizeText(joinSummaryParts(summaryParts)),
+    previewText: summarizeText(joinSummaryParts(previewParts), 400),
+  };
+}
+
 function workflowStatus(run: WorkflowRunRecord): DeliverableStatus {
   if (run.status === 'error') return 'error';
   if (run.status === 'cancelled') return 'cancelled';
@@ -333,11 +532,12 @@ export function buildWorkflowDeliverable(
   const stepArtifacts = workflowStepArtifacts(workflow, run, createdAt);
   const artifacts = [textArtifact, ...stepArtifacts, ...fileArtifacts];
   const successfulSteps = run.stepResults.filter((step) => !!step.output && !step.error).length;
+  const structuredSummary = buildStructuredSuperNodeDeliverableSummary(workflow, run);
 
   return {
     title: `${workflow.name} Deliverable`,
-    summary: summarizeText(primaryText),
-    previewText: summarizeText(primaryText, 400),
+    summary: structuredSummary?.summary ?? summarizeText(primaryText),
+    previewText: structuredSummary?.previewText ?? summarizeText(primaryText, 400),
     status: workflowStatus(run),
     source: {
       kind: 'workflow_run',
@@ -353,6 +553,7 @@ export function buildWorkflowDeliverable(
       successfulSteps,
       stepArtifactCount: stepArtifacts.length,
       artifactCount: artifacts.length,
+      structuredSummary: structuredSummary ? 'true' : 'false',
     },
     createdAt,
     updatedAt: createdAt,
