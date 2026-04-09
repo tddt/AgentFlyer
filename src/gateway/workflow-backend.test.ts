@@ -216,6 +216,7 @@ function createRpcContext(dataDir: string, runner: AgentRunner = createRunner())
     } as never,
     deliverableStore: new DeliverableStore(dataDir),
     channels: new Map(),
+    getMcpStatus: () => [],
     runningTasks: new Map(),
   };
 }
@@ -224,16 +225,30 @@ function createRpcContextWithConfig(
   dataDir: string,
   config: { agents?: Array<{ id: string; tools?: { sandboxProfile?: string } }> },
   runner: AgentRunner = createRunner(),
+  overrides: Partial<RpcContext> = {},
 ): RpcContext {
   return {
     ...createRpcContext(dataDir, runner),
     getConfig: () => config as never,
+    ...overrides,
   };
 }
 
 async function writeWorkflows(dataDir: string, workflows: WorkflowDef[]): Promise<void> {
   await mkdir(dataDir, { recursive: true });
   await writeFile(join(dataDir, 'workflows.json'), JSON.stringify(workflows, null, 2), 'utf-8');
+}
+
+async function writeMcpHistory(
+  dataDir: string,
+  records: Array<Record<string, unknown>>,
+): Promise<void> {
+  await mkdir(dataDir, { recursive: true });
+  await writeFile(
+    join(dataDir, 'mcp-server-history.json'),
+    JSON.stringify(records, null, 2),
+    'utf-8',
+  );
 }
 
 async function waitForWorkflowStatus(
@@ -602,6 +617,83 @@ describe('workflow-backend kernel integration', () => {
           kind: 'workflow-advisory',
           message:
             "workflow does not currently target any sandbox-bound agent. Prefer 'agent-safe' (sandbox:readonly-output) for readonly execution paths.",
+        },
+      ],
+      graphDiagnostics: [],
+    });
+  });
+
+  it('adds MCP runtime advisories through workflow.diagnose when operator attention exists', async () => {
+    const dataDir = join(process.cwd(), `.tmp-workflow-backend-test-diagnose-mcp-${ulid()}`);
+    await writeMcpHistory(dataDir, [
+      {
+        serverId: 'github',
+        transport: 'stdio',
+        trigger: 'startup',
+        outcome: 'error',
+        timestamp: 100,
+        toolPrefix: 'mcp_github',
+        approval: 'inherit',
+        timeoutMs: 20_000,
+        toolCount: 0,
+        lastErrorCode: 'STDIO_COMMAND_MISSING',
+        autoRetryEligible: false,
+      },
+    ]);
+    const ctx = createRpcContextWithConfig(
+      dataDir,
+      {
+        agents: [{ id: 'agent-main', tools: {} }],
+      },
+      createRunner(),
+      {
+        getMcpStatus: () => [
+          {
+            serverId: 'github',
+            transport: 'stdio',
+            enabled: true,
+            toolPrefix: 'mcp_github',
+            approval: 'inherit',
+            timeoutMs: 20_000,
+            status: 'error',
+            toolCount: 0,
+            tools: [],
+            lastErrorCode: 'STDIO_COMMAND_MISSING',
+            autoRetryEligible: false,
+            retryCount: 1,
+          },
+        ],
+      },
+    );
+    const workflow = createWorkflow({
+      id: 'wf-diagnose-mcp',
+      steps: [
+        {
+          id: 'agent-step',
+          type: 'agent',
+          agentId: 'agent-main',
+          messageTemplate: 'hello',
+          condition: 'on_success',
+        },
+      ],
+    });
+
+    const response = await dispatchWorkflowRpc('workflow.diagnose', 11.95, workflow, ctx);
+
+    expect(response.result).toEqual({
+      valid: true,
+      validationError: null,
+      validationDiagnostics: [
+        {
+          kind: 'step-advisory',
+          stepId: 'agent-step',
+          message:
+            "agent step 'agent-step' targets 'agent-main' without sandboxProfile. Consider binding a sandbox profile such as readonly-output before using this workflow for scheduled or autonomous execution.",
+        },
+        {
+          kind: 'workflow-advisory',
+          message:
+            'MCP runtime is degraded: github needs manual fix (STDIO_COMMAND_MISSING). Automation that depends on MCP tools may stall or fail until recovery. Workflow agent steps that depend on MCP tools may pause, retry, or fail until the affected servers recover.',
         },
       ],
       graphDiagnostics: [],

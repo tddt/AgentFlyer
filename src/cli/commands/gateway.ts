@@ -142,7 +142,13 @@ const gatewayStatus = defineCommand({
           uptime: number;
         }>,
         callRpc(port, token, 'agent.list', {}).catch(() => ({ agents: [] })) as Promise<{
-          agents: Array<{ id: string; name: string; model: string; role: string }>;
+          agents: Array<{
+            id?: string;
+            agentId?: string;
+            name: string;
+            model: string;
+            role: string;
+          }>;
         }>,
         callRpc(port, token, 'session.list', {}).catch(() => ({ sessions: [] })) as Promise<{
           sessions: Array<{
@@ -178,7 +184,10 @@ const gatewayStatus = defineCommand({
             ? `${Math.floor(upSeconds / 60)}m ${upSeconds % 60}s`
             : `${Math.floor(upSeconds / 3600)}h ${Math.floor((upSeconds % 3600) / 60)}m`;
 
-      const agents = agentResult.agents ?? [];
+      const agents = (agentResult.agents ?? []).map((agent) => ({
+        ...agent,
+        id: agent.id ?? agent.agentId ?? '',
+      }));
       const sessions = sessionResult.sessions ?? [];
 
       // Most recently active sessions (top 5)

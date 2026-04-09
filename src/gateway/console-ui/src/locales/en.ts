@@ -684,6 +684,7 @@ export const en: Record<string, string> = {
   'config.sections.skills': 'Skills',
   'config.sections.search': 'Search',
   'config.sections.memory': 'Memory',
+  'config.sections.mcp': 'MCP',
   'config.sections.federation': 'Federation',
   'config.sections.log': 'Logging',
   'config.sections.json': 'Raw JSON',

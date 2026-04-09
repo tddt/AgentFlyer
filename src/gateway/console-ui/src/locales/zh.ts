@@ -681,6 +681,7 @@ export const zh: Record<string, string> = {
   'config.sections.skills': '技能',
   'config.sections.search': '搜索',
   'config.sections.memory': '记忆',
+  'config.sections.mcp': 'MCP',
   'config.sections.federation': '联邦',
   'config.sections.log': '日志',
   'config.sections.json': '原始 JSON',

@@ -7,6 +7,7 @@ import { SessionStore } from '../core/session/store.js';
 import type { StreamChunk } from '../core/types.js';
 import type { LLMProvider, RunParams } from './llm/provider.js';
 import { AgentRunner } from './runner.js';
+import type { RegisteredTool } from './tools/registry.js';
 import { ToolRegistry } from './tools/registry.js';
 
 const tempDirs: string[] = [];
@@ -95,5 +96,83 @@ describe('AgentRunner recoverable stream retry', () => {
     expect(provider.getAttemptCount()).toBe(2);
     expect(result.text).toContain('retry success');
     expect(result.text).not.toContain('任务执行失败');
+  });
+
+  it('replaces tools for a category without rebuilding the runner', async () => {
+    const dataDir = await createTempDir();
+    const provider = new RecoverableRetryProvider();
+    const registry = new ToolRegistry();
+    const runner = new AgentRunner(
+      {
+        id: 'agent-main',
+        name: 'Agent Main',
+        mentionAliases: [],
+        workspace: dataDir,
+        skills: [],
+        model: 'fake-model',
+        mesh: {
+          role: 'worker',
+          capabilities: [],
+          accepts: ['task', 'query', 'notification'],
+          visibility: 'public',
+          triggers: [],
+        },
+        owners: [],
+        tools: { allow: [], deny: [], approval: [], maxRounds: 4 },
+        persona: { language: 'zh-CN', outputDir: 'output' },
+      },
+      {
+        provider,
+        toolRegistry: registry,
+        sessionStore: new SessionStore(join(dataDir, 'sessions')),
+        metaStore: new SessionMetaStore(join(dataDir, 'sessions')),
+        skillsText: '',
+      },
+    );
+
+    const firstTools: RegisteredTool[] = [
+      {
+        category: 'mcp',
+        definition: {
+          name: 'mcp_github_search',
+          description: 'search',
+          inputSchema: { type: 'object', properties: {} },
+        },
+        async handler() {
+          return { isError: false, content: 'search-ok' };
+        },
+      },
+    ];
+    const secondTools: RegisteredTool[] = [
+      {
+        category: 'mcp',
+        definition: {
+          name: 'mcp_github_issue',
+          description: 'issue',
+          inputSchema: { type: 'object', properties: {} },
+        },
+        async handler() {
+          return { isError: false, content: 'issue-ok' };
+        },
+      },
+    ];
+
+    runner.replaceToolsForCategory('mcp', firstTools);
+    expect(runner.listTools().map((tool) => tool.name)).toEqual(['mcp_github_search']);
+    await expect(registry.execute('mcp_github_search', {})).resolves.toEqual({
+      isError: false,
+      content: 'search-ok',
+    });
+
+    runner.replaceToolsForCategory('mcp', secondTools);
+    expect(runner.listTools().map((tool) => tool.name)).toEqual(['mcp_github_issue']);
+    await expect(registry.execute('mcp_github_search', {})).resolves.toEqual({
+      isError: true,
+      content: 'Unknown tool: mcp_github_search',
+    });
+    await expect(registry.execute('mcp_github_issue', {})).resolves.toEqual({
+      isError: false,
+      content: 'issue-ok',
+    });
   });
 });

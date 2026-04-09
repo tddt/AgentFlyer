@@ -115,6 +115,27 @@ function describeAgentTarget(agentId: string | undefined, agents: AgentInfo[]): 
   return agent ? formatAgentLabel(agent) : agentId;
 }
 
+function renderTaskAdvisory(task: TaskInfo) {
+  if (!task.advisory) {
+    return null;
+  }
+
+  const extraDetails = (task.advisory.details ?? []).filter(
+    (detail) => detail !== task.advisory?.message,
+  );
+
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-[11px] text-amber-300 leading-relaxed">{task.advisory.message}</span>
+      {extraDetails.map((detail) => (
+        <span key={detail} className="text-[11px] text-amber-200/75 leading-relaxed">
+          {detail}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function buildSchedulerAgentAdvisory(agentId: string | undefined, agents: AgentInfo[]): string | null {
   if (!agentId) {
     return null;
@@ -699,21 +720,16 @@ export function SchedulerTab() {
                     )}
                   </td>
                   <td className="px-4 py-3 text-slate-400 font-mono text-xs">
-                    {task.workflowId ? (
-                      <span className="text-purple-400">
-                        ⚡{' '}
-                        {workflows.find((w) => w.id === task.workflowId)?.name ?? task.workflowId}
-                      </span>
-                    ) : (
-                      <div className="flex flex-col gap-1">
+                    <div className="flex flex-col gap-1">
+                      {task.workflowId ? (
+                        <span className="text-purple-400">
+                          ⚡ {workflows.find((w) => w.id === task.workflowId)?.name ?? task.workflowId}
+                        </span>
+                      ) : (
                         <span>{describeAgentTarget(task.agentId, agents)}</span>
-                        {task.advisory?.kind === 'sandbox-advisory' && (
-                          <span className="text-[11px] text-amber-300 leading-relaxed">
-                            {task.advisory.message}
-                          </span>
-                        )}
-                      </div>
-                    )}
+                      )}
+                      {renderTaskAdvisory(task)}
+                    </div>
                   </td>
                   <td className="px-4 py-3">
                     <code className="text-xs bg-slate-700/60 px-1.5 py-0.5 rounded text-slate-300 font-mono">

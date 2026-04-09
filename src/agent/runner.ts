@@ -38,6 +38,7 @@ import {
   filterAllowedTools,
   policyBlockedResult,
 } from './tools/policy.js';
+import type { RegisteredTool } from './tools/registry.js';
 import type { ToolRegistry } from './tools/registry.js';
 
 const logger = createLogger('agent:runner');
@@ -481,6 +482,11 @@ export class AgentRunner {
     }));
   }
 
+  replaceToolsForCategory(category: string, tools: RegisteredTool[]): void {
+    this.deps.toolRegistry.replaceCategory(category, tools);
+    this.toolResultCache.clear();
+  }
+
   /**
    * Force-clear the busy flag after an orphaned turn (e.g. LLM provider unreachable).
    * Only call when you are certain the previous turn will never complete.
@@ -519,13 +525,27 @@ export class AgentRunner {
 
   private getToolPolicyResult(toolName: string): PolicyEnforcedResult {
     const tools = this.config.tools;
-    const isSkillTool = this.deps.toolRegistry.get(toolName)?.category === 'skill';
+    const registeredTool = this.deps.toolRegistry.get(toolName);
+    const isSkillTool = registeredTool?.category === 'skill';
     const effectiveAllowlist = isSkillTool ? undefined : tools.allow;
-    return checkPolicy(toolName, {
+    const baseResult = checkPolicy(toolName, {
       allowlist: effectiveAllowlist,
       denylist: tools.deny,
       requireApproval: tools.approval,
     });
+
+    if (!baseResult.allowed) {
+      return baseResult;
+    }
+
+    switch (registeredTool?.approvalMode ?? 'inherit') {
+      case 'always':
+        return { ...baseResult, requiresApproval: true };
+      case 'never':
+        return { ...baseResult, requiresApproval: false };
+      default:
+        return baseResult;
+    }
   }
 
   private hasApprovalPending(pendingToolCalls: SerializedPendingToolCall[]): boolean {

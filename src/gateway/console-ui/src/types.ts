@@ -60,8 +60,9 @@ export interface PublicationTargetConfig {
 }
 
 export interface SchedulerTargetAdvisory {
-  kind: 'sandbox-advisory';
+  kind: 'sandbox-advisory' | 'workflow-advisory' | 'mcp-advisory';
   message: string;
+  details?: string[];
   recommendedAgentId?: string;
   recommendedSandboxProfile?: string;
 }

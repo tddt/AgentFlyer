@@ -288,6 +288,64 @@ const SandboxConfigSchema = z.object({
   profiles: z.record(z.string(), SandboxProfileSchema).default(DEFAULT_SANDBOX_PROFILES),
 });
 
+// ─── MCP ─────────────────────────────────────────────────────────────────────
+
+const McpApprovalModeSchema = z.enum(['inherit', 'always', 'never']).default('inherit');
+
+const McpServerConfigSchema = z
+  .object({
+    id: z.string(),
+    transport: z.enum(['stdio', 'sse']).default('stdio'),
+    enabled: z.boolean().default(true),
+    toolPrefix: z.string().optional(),
+    approval: McpApprovalModeSchema,
+    timeoutMs: z.number().int().positive().default(20_000),
+    command: z.string().optional(),
+    args: z.array(z.string()).default([]),
+    cwd: z.string().optional(),
+    url: z.string().optional(),
+    env: z.record(z.string(), z.string()).default({}),
+    allowTools: z.array(z.string()).optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.transport === 'stdio' && !value.command) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'stdio MCP server requires command',
+        path: ['command'],
+      });
+    }
+    if (value.transport === 'sse' && !value.url) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'sse MCP server requires url',
+        path: ['url'],
+      });
+    }
+  });
+
+const McpAutoReconnectSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    pollIntervalMs: z.number().int().positive().default(5_000),
+    baseDelayMs: z.number().int().positive().default(15_000),
+    maxDelayMs: z.number().int().positive().default(300_000),
+  })
+  .superRefine((value, ctx) => {
+    if (value.maxDelayMs < value.baseDelayMs) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'maxDelayMs must be greater than or equal to baseDelayMs',
+        path: ['maxDelayMs'],
+      });
+    }
+  });
+
+const McpConfigSchema = z.object({
+  servers: z.array(McpServerConfigSchema).default([]),
+  autoReconnect: McpAutoReconnectSchema.default({}),
+});
+
 // ─── Federation ───────────────────────────────────────────────────────────────
 
 const FederationEconomySchema = z.object({
@@ -511,6 +569,7 @@ export const ConfigSchema = z.object({
   skills: SkillsConfigSchema.default({}),
   memory: MemoryConfigSchema.default({}),
   sandbox: SandboxConfigSchema.default({}),
+  mcp: McpConfigSchema.default({}),
   search: SearchConfigSchema.default({}),
   federation: FederationConfigSchema.default({}),
   channels: ChannelsConfigSchema.default({}),
@@ -534,6 +593,8 @@ export type FederationConfig = z.infer<typeof FederationConfigSchema>;
 export type MemoryConfig = z.infer<typeof MemoryConfigSchema>;
 export type SandboxProfileConfig = z.infer<typeof SandboxProfileSchema>;
 export type SandboxConfig = z.infer<typeof SandboxConfigSchema>;
+export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;
+export type McpConfig = z.infer<typeof McpConfigSchema>;
 export type ChannelsConfig = z.infer<typeof ChannelsConfigSchema>;
 export type RoutingConfig = z.infer<typeof RoutingConfigSchema>;
 export type LogConfig = z.infer<typeof LogConfigSchema>;

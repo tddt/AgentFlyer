@@ -18,6 +18,8 @@ export {
   type ToolsConfig,
   type FederationConfig,
   type MemoryConfig,
+  type McpConfig,
+  type McpServerConfig,
   type LogConfig,
 } from './schema.js';
 export { migrateFromOpenclaw, migrateV1toV2, detectOpenclawConfig } from './migrate.js';

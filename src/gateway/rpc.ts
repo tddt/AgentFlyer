@@ -21,6 +21,13 @@ import {
 } from '../core/session/recovery.js';
 import type { SessionStore, StoredMessage } from '../core/session/store.js';
 import { type MessageContent, asSessionKey } from '../core/types.js';
+import {
+  buildMcpServerOperatorAttention,
+  formatMcpAttentionSummary,
+  readMcpServerHistory,
+  summarizeMcpServerHistory,
+} from '../mcp/index.js';
+import type { McpServerRuntimeStatus } from '../mcp/index.js';
 import type { EmbedConfig } from '../memory/embed.js';
 import { searchMemory } from '../memory/search.js';
 import type { MemoryStore } from '../memory/store.js';
@@ -50,7 +57,10 @@ import type { DeliverableStore } from './deliverables.js';
 import type { InboxBroadcaster } from './inbox-broadcaster.js';
 import {
   type WorkflowRpcMethod,
+  diagnoseWorkflowGraph,
+  diagnoseWorkflowValidation,
   dispatchWorkflowRpc,
+  readWorkflowsFile,
   runWorkflowForScheduler,
 } from './workflow-backend.js';
 
@@ -296,6 +306,9 @@ export type RpcMethod =
   | 'memory.delete'
   | 'stats.get'
   | 'mesh.status'
+  | 'mcp.status'
+  | 'mcp.history'
+  | 'mcp.refresh'
   | 'federation.peers'
   | 'docs.list'
   | 'docs.get'
@@ -324,6 +337,8 @@ export interface RpcContext {
   shutdown: () => Promise<void>;
   /** Reload agent(s) from the config file on disk. Pass agentId to refresh a single agent. */
   reload: (agentId?: string) => Promise<{ reloaded: string[] }>;
+  /** Refresh MCP runtime without re-reading config from disk. */
+  refreshMcp?: (serverId?: string) => Promise<{ reloaded: string[]; refreshed: string[] }>;
   /** Return skill metadata from the current registry. */
   listSkills: () => import('../skills/registry.js').SkillMeta[];
   /** Session message store — used by session.list and session.messages RPC methods. */
@@ -354,6 +369,8 @@ export interface RpcContext {
       lastSeen?: number;
     }>;
   };
+  /** MCP registry status snapshot — used for mcp.status. */
+  getMcpStatus?: () => McpServerRuntimeStatus[];
   /** In-memory registry of currently executing scheduler tasks (cleared on restart). */
   runningTasks: Map<
     string,
@@ -400,10 +417,32 @@ function intervalToCron(minutes: number): string {
 }
 
 interface SchedulerTargetAdvisory {
-  kind: 'sandbox-advisory';
+  kind: 'sandbox-advisory' | 'workflow-advisory' | 'mcp-advisory';
   message: string;
+  details?: string[];
   recommendedAgentId?: string;
   recommendedSandboxProfile?: string;
+}
+
+function mergeSchedulerTargetAdvisories(
+  advisories: Array<SchedulerTargetAdvisory | undefined>,
+): SchedulerTargetAdvisory | undefined {
+  const resolved = advisories.filter(
+    (advisory): advisory is SchedulerTargetAdvisory => advisory !== undefined,
+  );
+  if (resolved.length === 0) {
+    return undefined;
+  }
+
+  const [primary, ...rest] = resolved;
+  if (!primary) {
+    return undefined;
+  }
+
+  const details = Array.from(
+    new Set([primary.message, ...rest.map((advisory) => advisory.message)]),
+  );
+  return details.length > 1 ? { ...primary, details } : primary;
 }
 
 function recommendSandboxSchedulerAgent(
@@ -448,6 +487,72 @@ function buildSchedulerTargetAdvisory(
     kind: 'sandbox-advisory',
     message:
       'scheduled task targets an agent without sandboxProfile. Consider binding readonly-output or another sandbox profile before unattended execution.',
+  };
+}
+
+async function buildSchedulerWorkflowAdvisory(
+  task: Pick<ScheduledTaskRecord, 'workflowId'>,
+  ctx: RpcContext,
+  workflowsById: Map<string, import('./workflow-backend.js').WorkflowDef>,
+): Promise<SchedulerTargetAdvisory | undefined> {
+  if (!task.workflowId) {
+    return undefined;
+  }
+
+  const workflow = workflowsById.get(task.workflowId);
+  if (!workflow) {
+    return {
+      kind: 'workflow-advisory',
+      message: `scheduled task targets workflow '${task.workflowId}', but that workflow is not present in current workflow store.`,
+    };
+  }
+
+  const validationDiagnostics = diagnoseWorkflowValidation(workflow, {
+    agents: ctx.getConfig().agents ?? [],
+  });
+  const graphDiagnostics = diagnoseWorkflowGraph(workflow);
+  const advisory = validationDiagnostics.find(
+    (diagnostic) => diagnostic.kind === 'step-advisory' || diagnostic.kind === 'workflow-advisory',
+  );
+  if (advisory) {
+    return {
+      kind: 'workflow-advisory',
+      message: advisory.message,
+    };
+  }
+
+  const graphDiagnostic = graphDiagnostics[0];
+  if (graphDiagnostic) {
+    return {
+      kind: 'workflow-advisory',
+      message:
+        graphDiagnostic.kind === 'cycle'
+          ? `scheduled task targets workflow '${workflow.id}' with a cycle at step '${graphDiagnostic.stepId}'.`
+          : `scheduled task targets workflow '${workflow.id}' with unreachable steps: ${graphDiagnostic.stepIds.join(', ')}.`,
+    };
+  }
+
+  return undefined;
+}
+
+async function buildSchedulerMcpAdvisory(
+  ctx: RpcContext,
+): Promise<SchedulerTargetAdvisory | undefined> {
+  const statuses = ctx.getMcpStatus ? ctx.getMcpStatus() : [];
+  if (statuses.length === 0) {
+    return undefined;
+  }
+
+  const history = await readMcpServerHistory(ctx.dataDir);
+  const attention = buildMcpServerOperatorAttention(statuses, summarizeMcpServerHistory(history));
+  const message = formatMcpAttentionSummary(attention);
+  if (!message) {
+    return undefined;
+  }
+
+  return {
+    kind: 'mcp-advisory',
+    message,
   };
 }
 
@@ -806,6 +911,55 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         };
       }
 
+      case 'mcp.status': {
+        const servers = ctx.getMcpStatus ? ctx.getMcpStatus() : [];
+        const history = await readMcpServerHistory(ctx.dataDir);
+        const summaries = summarizeMcpServerHistory(history);
+        const attention = buildMcpServerOperatorAttention(servers, summaries);
+        return {
+          id,
+          result: {
+            servers,
+            summaries,
+            attention,
+          },
+        };
+      }
+
+      case 'mcp.history': {
+        const historyParams = (params ?? {}) as { serverId?: string; limit?: number };
+        const serverId =
+          typeof historyParams.serverId === 'string' && historyParams.serverId.trim().length > 0
+            ? historyParams.serverId.trim()
+            : undefined;
+        const requestedLimit = Number(historyParams.limit);
+        const limit = Number.isFinite(requestedLimit)
+          ? Math.max(1, Math.min(200, requestedLimit))
+          : 50;
+        const allRecords = await readMcpServerHistory(ctx.dataDir);
+        const records = (
+          serverId ? allRecords.filter((record) => record.serverId === serverId) : allRecords
+        ).slice(0, limit);
+        return {
+          id,
+          result: {
+            records,
+          },
+        };
+      }
+
+      case 'mcp.refresh': {
+        const serverId = (params as { serverId?: string } | undefined)?.serverId;
+        const result = ctx.refreshMcp ? await ctx.refreshMcp(serverId) : await ctx.reload();
+        return {
+          id,
+          result: {
+            ...result,
+            servers: ctx.getMcpStatus ? ctx.getMcpStatus() : [],
+          },
+        };
+      }
+
       case 'agent.chat': {
         const { agentId, message, thread } = (params ?? {}) as {
           agentId?: string;
@@ -935,7 +1089,7 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         const stored = await ctx.sessionStore.readAll(safeSessionKey);
         const messages = stored
           .map(convertToDisplay)
-          .filter((m) => includeToolResults || !m.isToolResult);
+          .filter((message) => includeToolResults || !message.isToolResult);
         return { id, result: { sessionKey: safeSessionKey, messages } };
       }
 
@@ -1004,12 +1158,22 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
           await readScheduledTaskHistory(ctx.dataDir),
         );
         const configuredAgents = ctx.getConfig().agents ?? [];
-        const enriched = tasks.map((t) => ({
-          ...stripTaskExecutionSummary(t),
-          ...summaryByTaskId.get(t.id),
-          nextRunAt: ctx.scheduler.get(t.id)?.nextRunAt,
-          advisory: buildSchedulerTargetAdvisory(t, configuredAgents),
-        }));
+        const mcpAdvisory = await buildSchedulerMcpAdvisory(ctx);
+        const workflowsById = new Map(
+          (await readWorkflowsFile(ctx.dataDir)).map((workflow) => [workflow.id, workflow]),
+        );
+        const enriched = await Promise.all(
+          tasks.map(async (t) => ({
+            ...stripTaskExecutionSummary(t),
+            ...summaryByTaskId.get(t.id),
+            nextRunAt: ctx.scheduler.get(t.id)?.nextRunAt,
+            advisory: mergeSchedulerTargetAdvisories([
+              buildSchedulerTargetAdvisory(t, configuredAgents),
+              await buildSchedulerWorkflowAdvisory(t, ctx, workflowsById),
+              mcpAdvisory,
+            ]),
+          })),
+        );
         return { id, result: { tasks: enriched } };
       }
 
@@ -1089,12 +1253,17 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         await writeTasksFile(ctx.dataDir, tasks);
         if (task.enabled !== false) scheduleRuntimeTask(ctx, task.id);
 
+        const mcpAdvisory = await buildSchedulerMcpAdvisory(ctx);
+
         return {
           id,
           result: {
             task: {
               ...task,
-              advisory: buildSchedulerTargetAdvisory(task, ctx.getConfig().agents ?? []),
+              advisory: mergeSchedulerTargetAdvisories([
+                buildSchedulerTargetAdvisory(task, ctx.getConfig().agents ?? []),
+                mcpAdvisory,
+              ]),
             },
           },
         };
@@ -1175,12 +1344,17 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         ctx.scheduler.cancel(updated.id);
         if (updated.enabled !== false) scheduleRuntimeTask(ctx, updated.id);
 
+        const mcpAdvisory = await buildSchedulerMcpAdvisory(ctx);
+
         return {
           id,
           result: {
             task: {
               ...updated,
-              advisory: buildSchedulerTargetAdvisory(updated, ctx.getConfig().agents ?? []),
+              advisory: mergeSchedulerTargetAdvisories([
+                buildSchedulerTargetAdvisory(updated, ctx.getConfig().agents ?? []),
+                mcpAdvisory,
+              ]),
             },
           },
         };

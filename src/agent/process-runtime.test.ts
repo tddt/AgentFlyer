@@ -100,7 +100,11 @@ function createRunner(dataDir: string): AgentRunner {
 function createRunnerWithProvider(
   dataDir: string,
   provider: LLMProvider,
-  options: { approval?: string[]; approvalHandler?: ApprovalHandler } = {},
+  options: {
+    approval?: string[];
+    approvalHandler?: ApprovalHandler;
+    toolApprovalMode?: RegisteredTool['approvalMode'];
+  } = {},
 ): AgentRunner {
   const toolRegistry = new ToolRegistry();
   const echoTool: RegisteredTool = {
@@ -110,6 +114,7 @@ function createRunnerWithProvider(
       description: 'Echo test tool',
       inputSchema: { type: 'object', properties: { message: { type: 'string' } } },
     },
+    approvalMode: options.toolApprovalMode,
     async handler(input) {
       const message = (input as { message?: string }).message ?? '';
       return { isError: false, content: `echo:${message}` };
@@ -500,6 +505,117 @@ describe('AgentTurnProcessRuntime', () => {
     expect((completedSnapshot?.state as { result?: { text?: string } }).result?.text).toContain(
       'tool loop completed',
     );
+  });
+
+  it('requires approval when the tool enforces approval locally', async () => {
+    const dataDir = await createTempDir();
+    const runner = createRunnerWithProvider(dataDir, new FakeToolLoopProvider(), {
+      approvalHandler: async () => true,
+      toolApprovalMode: 'always',
+    });
+    const runtime = new AgentTurnProcessRuntime(new Map([['agent-main', runner]]));
+
+    const initialState = runtime.createInitialState({
+      agentId: 'agent-main',
+      runId: 'run-tool-approval-always',
+      userMessage: 'tool-local approval',
+      threadKey: 'tool-local-approval-thread',
+    });
+
+    const prepared = await runtime.step(initialState, {
+      pid: 'pid-tool-approval-always' as never,
+      now: Date.now(),
+      runCount: 0,
+      retryCount: 0,
+      metadata: {},
+    });
+    expect(prepared.signal).toBe('YIELD');
+
+    const waitLlm = await runtime.step(prepared.state, {
+      pid: 'pid-tool-approval-always' as never,
+      now: Date.now(),
+      runCount: 1,
+      retryCount: 0,
+      metadata: {},
+    });
+    expect(waitLlm.signal).toBe('WAITING_SYSCALL');
+    if (!waitLlm.syscall) {
+      throw new Error('expected llm syscall');
+    }
+
+    const llmResolution = await runtime.executePendingSyscall(
+      waitLlm.state,
+      waitLlm.syscall,
+      Date.now(),
+    );
+    const waitApproval = await runtime.step(waitLlm.state, {
+      pid: 'pid-tool-approval-always' as never,
+      now: Date.now(),
+      runCount: 2,
+      retryCount: 0,
+      lastSyscallResult: llmResolution,
+      metadata: {},
+    });
+
+    expect(waitApproval.signal).toBe('WAITING_SYSCALL');
+    expect(waitApproval.state.phase).toBe('waiting_approval');
+    expect(waitApproval.syscall?.operation).toBe('agent.turn.approval-request');
+  });
+
+  it('skips agent approval when the tool disables approval locally', async () => {
+    const dataDir = await createTempDir();
+    const runner = createRunnerWithProvider(dataDir, new FakeToolLoopProvider(), {
+      approval: ['echo_tool'],
+      approvalHandler: async () => false,
+      toolApprovalMode: 'never',
+    });
+    const runtime = new AgentTurnProcessRuntime(new Map([['agent-main', runner]]));
+
+    const initialState = runtime.createInitialState({
+      agentId: 'agent-main',
+      runId: 'run-tool-approval-never',
+      userMessage: 'tool-local no approval',
+      threadKey: 'tool-local-no-approval-thread',
+    });
+
+    const prepared = await runtime.step(initialState, {
+      pid: 'pid-tool-approval-never' as never,
+      now: Date.now(),
+      runCount: 0,
+      retryCount: 0,
+      metadata: {},
+    });
+    expect(prepared.signal).toBe('YIELD');
+
+    const waitLlm = await runtime.step(prepared.state, {
+      pid: 'pid-tool-approval-never' as never,
+      now: Date.now(),
+      runCount: 1,
+      retryCount: 0,
+      metadata: {},
+    });
+    expect(waitLlm.signal).toBe('WAITING_SYSCALL');
+    if (!waitLlm.syscall) {
+      throw new Error('expected llm syscall');
+    }
+
+    const llmResolution = await runtime.executePendingSyscall(
+      waitLlm.state,
+      waitLlm.syscall,
+      Date.now(),
+    );
+    const waitTool = await runtime.step(waitLlm.state, {
+      pid: 'pid-tool-approval-never' as never,
+      now: Date.now(),
+      runCount: 2,
+      retryCount: 0,
+      lastSyscallResult: llmResolution,
+      metadata: {},
+    });
+
+    expect(waitTool.signal).toBe('WAITING_SYSCALL');
+    expect(waitTool.state.phase).toBe('waiting_tool');
+    expect(waitTool.syscall?.operation).toBe('agent.turn.tool-call-batch');
   });
 
   it('restores a partially completed turn from checkpoints and finishes on a new kernel instance', async () => {

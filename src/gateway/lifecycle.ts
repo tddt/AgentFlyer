@@ -23,6 +23,7 @@ import {
   createWebSearchTool,
 } from '../agent/tools/builtin/web-search.js';
 import { createMeshTools } from '../agent/tools/mesh-tools.js';
+import type { RegisteredTool } from '../agent/tools/registry.js';
 import { ToolRegistry } from '../agent/tools/registry.js';
 import { DiscordChannel } from '../channels/discord/index.js';
 import { FeishuChannel } from '../channels/feishu/index.js';
@@ -46,6 +47,17 @@ import { SessionMetaStore } from '../core/session/meta.js';
 import { SessionStore } from '../core/session/store.js';
 import { asAgentId, asThreadKey } from '../core/types.js';
 import { FederationNode } from '../federation/node.js';
+import {
+  McpRegistry,
+  adaptMcpRegistryToTools,
+  appendMcpServerHistoryRecord,
+  resolveMcpAutoReconnectPolicy,
+} from '../mcp/index.js';
+import type {
+  McpAutoReconnectPolicy,
+  McpHistoryTrigger,
+  McpServerHistoryRecord,
+} from '../mcp/index.js';
 import { MemoryOrganizer } from '../memory/organizer.js';
 import { MemoryStore } from '../memory/store.js';
 import { createSandboxRuntime } from '../sandbox/runtime.js';
@@ -56,6 +68,10 @@ import { buildRegistry, scanSkillsDir } from '../skills/registry.js';
 import { createSkillTools } from '../skills/skill-tools.js';
 import { getAgentKernelService } from './agent-kernel.js';
 import { AgentQueueRegistry } from './agent-queue.js';
+import {
+  resolveMcpApprovalModeForSandbox,
+  resolveSandboxApprovalHandler,
+} from './approval-policy.js';
 import { generateToken } from './auth.js';
 import { captureChatTurnDeliverable } from './chat-deliverables.js';
 import { ContentStore } from './content-store.js';
@@ -82,6 +98,7 @@ export interface GatewayState {
   authToken: string;
   dataDir: string;
   scheduler: CronScheduler;
+  mcpRegistry: McpRegistry | null;
   /** Active config file watcher — stopped on shutdown. */
   configWatcher: ConfigWatcher | null;
 }
@@ -94,6 +111,16 @@ export interface GatewayInstance {
 
 let _server: GatewayServer | null = null;
 let _pidFile: string | null = null;
+
+function resolveGatewayMcpReconnectPolicy(config: Config): McpAutoReconnectPolicy {
+  return resolveMcpAutoReconnectPolicy(config.mcp?.autoReconnect);
+}
+
+function createMcpHistoryRecorder(dataDir: string) {
+  return async (record: McpServerHistoryRecord): Promise<void> => {
+    await appendMcpServerHistoryRecord(dataDir, record);
+  };
+}
 
 function hasUsableApiKey(value: string | undefined): boolean {
   if (!value) return false;
@@ -323,6 +350,7 @@ function buildRunner(
   // Tool registry
   const tools = new ToolRegistry();
   const sandboxRuntime = createSandboxRuntime({ dataDir, config: config.sandbox });
+  const approvalHandler = resolveSandboxApprovalHandler(agentCfg.tools.sandboxProfile);
   // Pass skill dirs so the agent can read files inside skill directories
   const skillAllowedDirs = agentSkillRegistry
     ? agentSkillRegistry.list().map((s) => dirname(s.filePath))
@@ -337,6 +365,7 @@ function buildRunner(
       outputDir: agentCfg.persona?.outputDir ?? 'output',
       sandboxProfile: agentCfg.tools.sandboxProfile,
       mirrorDirs: skillAllowedDirs,
+      approvalHandler,
     }),
   );
   tools.registerMany(createMemoryTools(memoryStore, config.memory));
@@ -357,6 +386,9 @@ function buildRunner(
       workspaceDir,
     }),
   );
+  if (state.mcpRegistry) {
+    tools.registerMany(buildRunnerMcpTools(agentCfg, state.mcpRegistry));
+  }
 
   // Web search — build provider list from config
   const searchProviders: SearchProvider[] = [];
@@ -416,6 +448,7 @@ function buildRunner(
     toolRegistry: tools,
     sessionStore,
     metaStore,
+    approvalHandler,
     skillsText,
     systemPromptMaxTokens: config.context?.systemPrompt?.maxTokens,
     dataDir,
@@ -427,6 +460,18 @@ function buildRunner(
       temperature: modelEntry?.temperature,
     },
   });
+}
+
+function buildRunnerMcpTools(agentCfg: AgentConfig, registry: McpRegistry): RegisteredTool[] {
+  return adaptMcpRegistryToTools(registry).map((tool) => ({
+    definition: tool.definition,
+    handler: tool.invoke,
+    category: tool.metadata.category,
+    approvalMode: resolveMcpApprovalModeForSandbox({
+      sandboxProfile: agentCfg.tools.sandboxProfile,
+      toolApprovalMode: tool.approvalMode,
+    }),
+  }));
 }
 
 /**
@@ -451,6 +496,13 @@ export async function startGateway(
 
   const runners = new Map<string, AgentRunner>();
   const scheduler = new CronScheduler();
+  const mcpReconnectPolicy = resolveGatewayMcpReconnectPolicy(config);
+  const mcpHistoryRecorder = createMcpHistoryRecorder(dataDir);
+  const mcpRegistry = await McpRegistry.create(config.mcp?.servers ?? [], {
+    retryPolicy: mcpReconnectPolicy,
+    historyRecorder: mcpHistoryRecorder,
+    historyTrigger: 'startup',
+  });
   const state: GatewayState = {
     runners,
     config,
@@ -458,13 +510,113 @@ export async function startGateway(
     authToken,
     dataDir,
     scheduler,
+    mcpRegistry,
     configWatcher: null,
   };
+  let mcpAutoReconnectTimer: ReturnType<typeof setInterval> | null = null;
+  const mcpRefreshInFlight = new Set<string>();
 
   // Build global skill registry once; each agent gets its own filtered slice
   // RATIONALE: let so it can be updated when config is reloaded with new skill dirs
   let globalSkillRegistry = buildRegistry(config, config.defaults.workspace ?? process.cwd());
   logger.info('Global skill registry ready', { total: globalSkillRegistry.size() });
+
+  function syncMcpToolsIntoRunners(): string[] {
+    if (!state.mcpRegistry) {
+      return [];
+    }
+
+    const synchronized: string[] = [];
+    for (const agentCfg of state.config.agents) {
+      const runner = runners.get(agentCfg.id);
+      if (!runner) {
+        continue;
+      }
+
+      runner.replaceToolsForCategory('mcp', buildRunnerMcpTools(agentCfg, state.mcpRegistry));
+      synchronized.push(agentCfg.id);
+    }
+
+    return synchronized;
+  }
+
+  async function rebuildConfiguredAgents(params: {
+    nextConfig: Config;
+    agentId?: string;
+    syncAgentSet: boolean;
+    rebuildSkillRegistry: boolean;
+  }): Promise<{ reloaded: string[] }> {
+    const { nextConfig, agentId, syncAgentSet, rebuildSkillRegistry } = params;
+
+    if (agentId) {
+      const agentCfg = nextConfig.agents.find((a) => a.id === agentId);
+      if (!agentCfg) throw new Error(`Agent "${agentId}" not found in config`);
+    }
+
+    if (rebuildSkillRegistry) {
+      globalSkillRegistry = buildRegistry(
+        nextConfig,
+        nextConfig.defaults.workspace ?? process.cwd(),
+      );
+      logger.info('Global skill registry rebuilt on reload', { total: globalSkillRegistry.size() });
+    }
+
+    let toReload: AgentConfig[];
+    if (agentId) {
+      const nextAgent = nextConfig.agents.find((a) => a.id === agentId);
+      if (!nextAgent) throw new Error(`Agent "${agentId}" not found in config`);
+      toReload = [nextAgent];
+    } else {
+      if (syncAgentSet) {
+        const oldIds = new Set(runners.keys());
+        const newIds = new Set(nextConfig.agents.map((a) => a.id));
+        for (const id of oldIds) {
+          if (!newIds.has(id)) {
+            runners.delete(id);
+            logger.info('Agent removed on reload', { agentId: id });
+          }
+        }
+      }
+      toReload = nextConfig.agents;
+    }
+
+    const reloaded: string[] = [];
+    for (const agentCfg of toReload) {
+      try {
+        const explicitSkills = filterSkillsForAgent(
+          globalSkillRegistry.list(),
+          agentCfg.skills ?? [],
+        );
+        const workspaceSkills = [];
+        if (agentCfg.workspace) {
+          const explicitIds = new Set(explicitSkills.map((s) => s.id));
+          for (const s of scanSkillsDir(
+            join(agentCfg.workspace, 'skills'),
+            nextConfig.skills.summaryLength ?? 60,
+          )) {
+            if (!explicitIds.has(s.id)) {
+              workspaceSkills.push({ ...s, source: 'workspace' as const });
+            }
+          }
+        }
+
+        const agentSkills = [...explicitSkills, ...workspaceSkills];
+        const agentSkillsText = buildSkillsDirectory(
+          agentSkills,
+          nextConfig.skills.compact ?? true,
+        );
+        const agentSkillRegistry = new (await import('../skills/registry.js')).SkillRegistry();
+        for (const s of agentSkills) agentSkillRegistry.register(s);
+        runners.set(agentCfg.id, buildRunner(agentCfg, state, agentSkillsText, agentSkillRegistry));
+        reloaded.push(agentCfg.id);
+        logger.info('Agent reloaded', { agentId: agentCfg.id, skills: agentSkills.length });
+      } catch (err) {
+        logger.error('Failed to reload runner', { agentId: agentCfg.id, error: String(err) });
+      }
+    }
+
+    return { reloaded };
+  }
 
   // Build a runner for each agent
   for (const agentCfg of config.agents) {
@@ -529,71 +681,87 @@ export async function startGateway(
   async function reloadAgents(agentId?: string): Promise<{ reloaded: string[] }> {
     const newConfig = loadConfig(configFilePath);
     await hooks.emit('before:reload', { runners });
+    const newMcpRegistry = await McpRegistry.create(newConfig.mcp?.servers ?? [], {
+      retryPolicy: resolveGatewayMcpReconnectPolicy(newConfig),
+      historyRecorder: mcpHistoryRecorder,
+      historyTrigger: 'reload',
+    });
 
-    let toReload: AgentConfig[];
-
-    if (agentId) {
-      // Single-agent reload: find in new config, keep everything else intact
-      const agentCfg = newConfig.agents.find((a) => a.id === agentId);
-      if (!agentCfg) throw new Error(`Agent "${agentId}" not found in config`);
-      toReload = [agentCfg];
-    } else {
-      // Full reload: diff old/new sets, remove deleted agents
-      const oldIds = new Set(runners.keys());
-      const newIds = new Set(newConfig.agents.map((a) => a.id));
-      for (const id of oldIds) {
-        if (!newIds.has(id)) {
-          runners.delete(id);
-          logger.info('Agent removed on reload', { agentId: id });
-        }
-      }
-      toReload = newConfig.agents;
-    }
-
+    await state.mcpRegistry?.close().catch(() => undefined);
     state.config = newConfig;
-    // Rebuild the global registry once with new config (picks up new extraSkillDirs)
-    globalSkillRegistry = buildRegistry(newConfig, newConfig.defaults.workspace ?? process.cwd());
-    logger.info('Global skill registry rebuilt on reload', { total: globalSkillRegistry.size() });
-    const reloaded: string[] = [];
-    for (const agentCfg of toReload) {
-      try {
-        // 1. Skills explicitly selected from the global pool
-        const explicitSkills = filterSkillsForAgent(
-          globalSkillRegistry.list(),
-          agentCfg.skills ?? [],
-        );
-
-        // 2. Auto-merge per-agent workspace skills (<workspace>/skills/)
-        const workspaceSkills = [];
-        if (agentCfg.workspace) {
-          const explicitIds = new Set(explicitSkills.map((s) => s.id));
-          for (const s of scanSkillsDir(
-            join(agentCfg.workspace, 'skills'),
-            newConfig.skills.summaryLength ?? 60,
-          )) {
-            if (!explicitIds.has(s.id))
-              workspaceSkills.push({ ...s, source: 'workspace' as const });
-          }
-        }
-
-        const agentSkills = [...explicitSkills, ...workspaceSkills];
-        const agentSkillsText = buildSkillsDirectory(agentSkills, newConfig.skills.compact ?? true);
-        const agentSkillRegistry = new (await import('../skills/registry.js')).SkillRegistry();
-        for (const s of agentSkills) agentSkillRegistry.register(s);
-        runners.set(agentCfg.id, buildRunner(agentCfg, state, agentSkillsText, agentSkillRegistry));
-        reloaded.push(agentCfg.id);
-        logger.info('Agent reloaded', { agentId: agentCfg.id, skills: agentSkills.length });
-      } catch (err) {
-        logger.error('Failed to reload runner', { agentId: agentCfg.id, error: String(err) });
-      }
-    }
+    state.mcpRegistry = newMcpRegistry;
+    const result = await rebuildConfiguredAgents({
+      nextConfig: newConfig,
+      agentId,
+      syncAgentSet: !agentId,
+      rebuildSkillRegistry: true,
+    });
 
     await hooks.emit('after:reload', { runners });
-    logger.info('Reload complete', { reloaded });
-    return { reloaded };
+    logger.info('Reload complete', result);
+    return result;
   }
 
   const configFilePath = configPath ?? getDefaultConfigPath();
+
+  async function refreshMcpRuntime(
+    serverId?: string,
+    trigger: McpHistoryTrigger = 'manual-refresh',
+  ): Promise<{ reloaded: string[]; refreshed: string[] }> {
+    const refreshKey = serverId ?? '*';
+    if (mcpRefreshInFlight.has(refreshKey)) {
+      return { reloaded: [], refreshed: [] };
+    }
+
+    mcpRefreshInFlight.add(refreshKey);
+    await hooks.emit('before:reload', { runners });
+    try {
+      if (!state.mcpRegistry) {
+        state.mcpRegistry = await McpRegistry.create(state.config.mcp?.servers ?? [], {
+          retryPolicy: resolveGatewayMcpReconnectPolicy(state.config),
+          historyRecorder: mcpHistoryRecorder,
+          historyTrigger: trigger,
+        });
+      }
+
+      const refreshed = await state.mcpRegistry.refresh(serverId, trigger);
+      const reloaded = syncMcpToolsIntoRunners();
+      await hooks.emit('after:reload', { runners });
+      logger.info('MCP runtime refresh complete', { refreshed, reloaded });
+      return {
+        reloaded,
+        refreshed,
+      };
+    } finally {
+      mcpRefreshInFlight.delete(refreshKey);
+    }
+  }
+
+  async function runDueMcpAutoReconnects(): Promise<void> {
+    const statuses = state.mcpRegistry?.listServerStatus() ?? [];
+    const now = Date.now();
+    const dueServerIds = statuses
+      .filter(
+        (status) =>
+          status.enabled &&
+          status.status === 'error' &&
+          status.autoRetryEligible !== false &&
+          typeof status.nextRetryAt === 'number' &&
+          status.nextRetryAt <= now &&
+          !mcpRefreshInFlight.has(status.serverId),
+      )
+      .map((status) => status.serverId);
+
+    for (const dueServerId of dueServerIds) {
+      logger.info('Auto-retrying MCP server', { serverId: dueServerId });
+      await refreshMcpRuntime(dueServerId, 'auto-retry').catch((error: unknown) => {
+        logger.warn('Automatic MCP retry failed', {
+          serverId: dueServerId,
+          error: String(error),
+        });
+      });
+    }
+  }
 
   async function saveAndReload(raw: unknown): Promise<{ reloaded: string[] }> {
     const merged = raw;
@@ -618,6 +786,7 @@ export async function startGateway(
     scheduler,
     shutdown: cleanup,
     reload: reloadAgents,
+    refreshMcp: refreshMcpRuntime,
     listSkills: () => globalSkillRegistry.list(),
     sessionStore: new SessionStore(join(dataDir, 'sessions')),
     metaStore: new SessionMetaStore(join(dataDir, 'sessions')),
@@ -625,6 +794,7 @@ export async function startGateway(
     deliverableStore: new DeliverableStore(dataDir),
     inboxBroadcaster,
     channels: sharedChannels,
+    getMcpStatus: () => state.mcpRegistry?.listServerStatus() ?? [],
     runningTasks: new Map(),
   };
 
@@ -1073,6 +1243,12 @@ export async function startGateway(
   });
   await hooks.emit('after:start', { runners });
 
+  if (mcpReconnectPolicy.enabled) {
+    mcpAutoReconnectTimer = setInterval(() => {
+      void runDueMcpAutoReconnects();
+    }, mcpReconnectPolicy.pollIntervalMs);
+  }
+
   // ── Hot-reload watcher (uses the same configFilePath declared above) ──
   state.configWatcher = watchConfig(async (_newConfig, err) => {
     if (err) {
@@ -1092,7 +1268,12 @@ export async function startGateway(
     await hooks.emit('before:stop', { runners });
     rateLimiter.stop();
     state.configWatcher?.stop();
+    if (mcpAutoReconnectTimer) {
+      clearInterval(mcpAutoReconnectTimer);
+      mcpAutoReconnectTimer = null;
+    }
     state.scheduler.stopAll();
+    await state.mcpRegistry?.close().catch(() => undefined);
     await federationNode?.stop().catch(() => undefined);
     // Stop external channels gracefully
     for (const ch of activeChannels) {

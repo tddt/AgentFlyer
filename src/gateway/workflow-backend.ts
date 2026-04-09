@@ -10,6 +10,12 @@ import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createLogger } from '../core/logger.js';
+import {
+  buildMcpServerOperatorAttention,
+  formatMcpAttentionSummary,
+  readMcpServerHistory,
+  summarizeMcpServerHistory,
+} from '../mcp/index.js';
 import { publishDeliverableTargets } from './deliverable-publication.js';
 import {
   type DeliverablePublicationTarget,
@@ -500,6 +506,32 @@ function workflowAdvisoryDiagnostic(message: string): WorkflowWorkflowAdvisoryDi
   };
 }
 
+async function buildWorkflowMcpAdvisory(
+  workflow: WorkflowDef,
+  ctx: RpcContext,
+): Promise<WorkflowWorkflowAdvisoryDiagnostic | null> {
+  const hasAgentStep = workflow.steps.some((step) => (step.type ?? 'agent') === 'agent');
+  if (!hasAgentStep) {
+    return null;
+  }
+
+  const statuses = ctx.getMcpStatus ? ctx.getMcpStatus() : [];
+  if (statuses.length === 0) {
+    return null;
+  }
+
+  const history = await readMcpServerHistory(ctx.dataDir);
+  const attention = buildMcpServerOperatorAttention(statuses, summarizeMcpServerHistory(history));
+  const message = formatMcpAttentionSummary(attention);
+  if (!message) {
+    return null;
+  }
+
+  return workflowAdvisoryDiagnostic(
+    `${message} Workflow agent steps that depend on MCP tools may pause, retry, or fail until the affected servers recover.`,
+  );
+}
+
 function recommendSandboxAgent(
   agents: NonNullable<WorkflowValidationOptions['agents']>,
 ): { id: string; sandboxProfile: string } | null {
@@ -963,6 +995,10 @@ export async function dispatchWorkflowRpc(
       const validationDiagnostics = diagnoseWorkflowValidation(workflow, {
         agents: ctx.getConfig().agents ?? [],
       });
+      const mcpAdvisory = await buildWorkflowMcpAdvisory(workflow, ctx);
+      if (mcpAdvisory) {
+        validationDiagnostics.push(mcpAdvisory);
+      }
       const graphDiagnostics = diagnoseWorkflowGraph(workflow);
       const blockingValidation = validationDiagnostics.find(
         (diagnostic) =>

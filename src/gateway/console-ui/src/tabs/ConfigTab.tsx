@@ -3,6 +3,13 @@ import { createPortal } from 'react-dom';
 import { Button } from '../components/Button.js';
 import { useLocale } from '../context/i18n.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
+import { getMcpDiagnosticHint } from '../mcp-diagnostic-hints.js';
+import {
+  collectMcpErrorCodes,
+  collectMcpErrorPhases,
+  matchMcpServerFilter,
+  summarizeMcpStatus,
+} from '../mcp-status-insights.js';
 import { useToast } from '../hooks/useToast.js';
 import type { SkillInfo, SkillListResult } from '../types.js';
 
@@ -13,6 +20,8 @@ type MeshRole = 'coordinator' | 'worker' | 'specialist' | 'observer';
 type Visibility = 'public' | 'private';
 type SearchProviderKind = 'tavily' | 'bing' | 'serpapi' | 'duckduckgo';
 type ModelProviderKind = 'anthropic' | 'openai' | 'google' | 'ollama' | 'openai-compat';
+type McpTransport = 'stdio' | 'sse';
+type McpApprovalMode = 'inherit' | 'always' | 'never';
 
 const PROVIDER_LABELS: Record<ModelProviderKind, string> = {
   anthropic: 'Anthropic',
@@ -32,6 +41,7 @@ type ConfigSection =
   | 'skills'
   | 'search'
   | 'memory'
+  | 'mcp'
   | 'federation'
   | 'log'
   | 'json';
@@ -180,6 +190,26 @@ const ConfigIco: Record<ConfigSection, ReactNode> = {
       <line x1="17" y1="15" x2="17.01" y2="15" strokeWidth="2.5" />
     </svg>
   ),
+  mcp: (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M12 3v6" />
+      <path d="M9 6h6" />
+      <rect x="4" y="9" width="16" height="8" rx="2" />
+      <path d="M8 17v4" />
+      <path d="M16 17v4" />
+      <path d="M9 13h.01" />
+      <path d="M15 13h.01" />
+    </svg>
+  ),
   federation: (
     <svg
       width="13"
@@ -277,6 +307,107 @@ interface ToolListResult {
   tools?: ToolInfo[];
 }
 
+interface McpServerStatusInfo {
+  serverId: string;
+  transport: McpTransport;
+  enabled: boolean;
+  toolPrefix: string;
+  approval: McpApprovalMode;
+  timeoutMs: number;
+  status: 'connected' | 'error' | 'disabled';
+  connectionDetails?: string;
+  toolCount: number;
+  tools: string[];
+  lastError?: string;
+  lastErrorCode?: string;
+  lastErrorPhase?: string;
+  autoRetryEligible?: boolean;
+  retryCount?: number;
+  nextRetryAt?: number;
+  lastConnectedAt?: number;
+  lastRefreshAt?: number;
+}
+
+interface McpStatusResult {
+  servers?: McpServerStatusInfo[];
+  summaries?: McpHistorySummaryInfo[];
+  attention?: McpAttentionInfo[];
+}
+
+interface McpHistorySummaryInfo {
+  serverId: string;
+  transport: McpTransport;
+  totalEvents: number;
+  connectedEvents: number;
+  errorEvents: number;
+  disabledEvents: number;
+  recentAttempts: number;
+  recentConnectedEvents: number;
+  recentSuccessRate: number;
+  consecutiveErrors: number;
+  autoRetryRecoveryCount: number;
+  manualFixErrorCount: number;
+  lastOutcome?: 'connected' | 'error' | 'disabled';
+  lastTrigger?: 'startup' | 'reload' | 'manual-refresh' | 'auto-retry';
+  lastEventAt?: number;
+  lastRecoveryAt?: number;
+  lastFailureAt?: number;
+  lastErrorCode?: string;
+}
+
+interface McpAttentionInfo {
+  serverId: string;
+  severity: 'warning' | 'critical';
+  state: 'manual-fix' | 'recovering';
+  message: string;
+  lastErrorCode?: string;
+  retryCount?: number;
+  nextRetryAt?: number;
+}
+
+interface McpHistoryEventInfo {
+  serverId: string;
+  transport: McpTransport;
+  trigger: 'startup' | 'reload' | 'manual-refresh' | 'auto-retry';
+  outcome: 'connected' | 'error' | 'disabled';
+  timestamp: number;
+  toolPrefix: string;
+  approval: McpApprovalMode;
+  timeoutMs: number;
+  toolCount: number;
+  connectionDetails?: string;
+  lastError?: string;
+  lastErrorCode?: string;
+  lastErrorPhase?: string;
+  autoRetryEligible?: boolean;
+  retryCount?: number;
+  nextRetryAt?: number;
+}
+
+interface McpHistoryResult {
+  records?: McpHistoryEventInfo[];
+}
+
+interface McpRefreshResult {
+  reloaded?: string[];
+  refreshed?: string[];
+  servers?: McpServerStatusInfo[];
+}
+
+interface McpInspectorState {
+  serverId: string;
+  loading: boolean;
+  error: string | null;
+  records: McpHistoryEventInfo[];
+}
+
+interface McpToolGroup {
+  serverId: string;
+  toolPrefix: string;
+  tools: string[];
+  connected: boolean;
+}
+
 interface GroupedModelDef {
   id: string;
   maxTokens: number;
@@ -346,6 +477,72 @@ type SearchProvider = SearchTavily | SearchBing | SearchSerpApi | SearchDuckDuck
 
 interface SearchConfig {
   providers: SearchProvider[];
+}
+
+interface McpServerConfig {
+  id: string;
+  transport: McpTransport;
+  enabled: boolean;
+  toolPrefix?: string;
+  approval: McpApprovalMode;
+  timeoutMs: number;
+  command?: string;
+  args: string[];
+  url?: string;
+  env: Record<string, string>;
+  allowTools?: string[];
+}
+
+interface McpAutoReconnectConfig {
+  enabled: boolean;
+  pollIntervalMs: number;
+  baseDelayMs: number;
+  maxDelayMs: number;
+}
+
+function formatMcpTimestamp(value?: number): string | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null;
+  }
+
+  return new Date(value).toLocaleString();
+}
+
+function formatMcpHistoryTrigger(trigger: McpHistoryEventInfo['trigger']): string {
+  switch (trigger) {
+    case 'startup':
+      return 'startup';
+    case 'reload':
+      return 'config-reload';
+    case 'manual-refresh':
+      return 'manual-reconnect';
+    case 'auto-retry':
+      return 'auto-retry';
+  }
+}
+
+function formatMcpHistoryOutcome(outcome: McpHistoryEventInfo['outcome']): string {
+  switch (outcome) {
+    case 'connected':
+      return 'connected';
+    case 'error':
+      return 'error';
+    case 'disabled':
+      return 'disabled';
+  }
+}
+
+function formatMcpSuccessRate(rate: number): string {
+  return `${Math.round(rate * 100)}%`;
+}
+
+function formatMcpAttentionState(state: McpAttentionInfo['state']): string {
+  return state === 'manual-fix' ? 'manual-fix' : 'auto-retrying';
+}
+
+interface McpConfig {
+  servers: McpServerConfig[];
+  autoReconnect: McpAutoReconnectConfig;
 }
 
 interface MemoryConfig {
@@ -474,6 +671,7 @@ interface ConfigShape {
   skills: SkillsConfig;
   search: SearchConfig;
   memory: MemoryConfig;
+  mcp: McpConfig;
   sandbox?: SandboxConfig;
   federation: FederationConfig;
   channels: ChannelsConfig;
@@ -513,6 +711,12 @@ interface PeerModalState {
   draft: FederationPeer;
 }
 
+interface McpModalState {
+  mode: 'add' | 'edit';
+  index?: number;
+  draft: McpServerConfig;
+}
+
 function asStringArray(value: string): string[] {
   return value
     .split(',')
@@ -522,6 +726,120 @@ function asStringArray(value: string): string[] {
 
 function toCsv(values: string[] | undefined): string {
   return (values ?? []).join(', ');
+}
+
+function isMcpToolName(name: string): boolean {
+  return name.startsWith('mcp_');
+}
+
+function uniqueSortedStrings(values: Iterable<string>): string[] {
+  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
+}
+
+function updateAgentMcpToolSelection(
+  tools: AgentConfig['tools'],
+  discoveredMcpTools: string[],
+  selectedMcpTools: string[],
+): AgentConfig['tools'] {
+  const mcpCatalog = uniqueSortedStrings(discoveredMcpTools.filter(isMcpToolName));
+  const selected = new Set(selectedMcpTools.filter((name) => mcpCatalog.includes(name)));
+  const nonMcpAllow = (tools.allow ?? []).filter((name) => !isMcpToolName(name));
+  const nonMcpDeny = tools.deny.filter((name) => !isMcpToolName(name));
+  const nextAllow =
+    nonMcpAllow.length === 0 && selected.size === mcpCatalog.length
+      ? []
+      : uniqueSortedStrings([...nonMcpAllow, ...mcpCatalog.filter((name) => selected.has(name))]);
+  const nextDeny = uniqueSortedStrings([
+    ...nonMcpDeny,
+    ...mcpCatalog.filter((name) => !selected.has(name)),
+  ]);
+
+  return {
+    ...tools,
+    allow: nextAllow,
+    deny: nextDeny,
+  };
+}
+
+function getEnabledMcpTools(tools: AgentConfig['tools'], availableMcpTools: string[]): string[] {
+  const allow = tools.allow ?? [];
+  const allowed = allow.length > 0 ? new Set(allow.filter(isMcpToolName)) : null;
+  const denied = new Set(tools.deny.filter(isMcpToolName));
+
+  return availableMcpTools.filter((name) => !denied.has(name) && (!allowed || allowed.has(name)));
+}
+
+function buildMcpToolGroups(
+  statuses: McpServerStatusInfo[],
+  fallbackTools: string[],
+): McpToolGroup[] {
+  const groups = new Map<string, McpToolGroup>();
+  const seenTools = new Set<string>();
+
+  for (const status of statuses) {
+    const tools = uniqueSortedStrings(status.tools.filter(isMcpToolName));
+    groups.set(status.serverId, {
+      serverId: status.serverId,
+      toolPrefix: status.toolPrefix,
+      tools,
+      connected: status.status === 'connected',
+    });
+    for (const tool of tools) {
+      seenTools.add(tool);
+    }
+  }
+
+  const ungroupedTools = uniqueSortedStrings(
+    fallbackTools.filter((tool) => isMcpToolName(tool) && !seenTools.has(tool)),
+  );
+  if (ungroupedTools.length > 0) {
+    groups.set('__ungrouped__', {
+      serverId: 'ungrouped',
+      toolPrefix: 'mcp',
+      tools: ungroupedTools,
+      connected: false,
+    });
+  }
+
+  return [...groups.values()]
+    .filter((group) => group.tools.length > 0)
+    .sort((left, right) => {
+      const connectedDelta = Number(right.connected) - Number(left.connected);
+      if (connectedDelta !== 0) {
+        return connectedDelta;
+      }
+      return left.serverId.localeCompare(right.serverId);
+    });
+}
+
+function formatGroupedMcpToolName(toolName: string, toolPrefix: string): string {
+  const prefix = `${toolPrefix}_`;
+  return toolName.startsWith(prefix) ? toolName.slice(prefix.length) : toolName;
+}
+
+function summarizeEnabledMcpGroups(enabledMcpTools: string[], groups: McpToolGroup[]): string {
+  const enabledSet = new Set(enabledMcpTools);
+  const groupSummaries = groups
+    .map((group) => {
+      const activeTools = group.tools.filter((toolName) => enabledSet.has(toolName));
+      if (activeTools.length === 0) {
+        return null;
+      }
+
+      const visibleTools = activeTools
+        .slice(0, 2)
+        .map((toolName) => formatGroupedMcpToolName(toolName, group.toolPrefix));
+      const hiddenToolCount = activeTools.length - visibleTools.length;
+      const groupLabel = group.serverId === 'ungrouped' ? 'other' : group.serverId;
+
+      return `${groupLabel}: ${visibleTools.join(', ')}${hiddenToolCount > 0 ? ` +${hiddenToolCount}` : ''}`;
+    })
+    .filter((summary): summary is string => summary !== null);
+
+  const visibleGroups = groupSummaries.slice(0, 2);
+  const hiddenGroupCount = groupSummaries.length - visibleGroups.length;
+
+  return `${visibleGroups.join(' · ')}${hiddenGroupCount > 0 ? ` · +${hiddenGroupCount} server${hiddenGroupCount === 1 ? '' : 's'}` : ''}`;
 }
 
 function defaultSearchProvider(kind: SearchProviderKind): SearchProvider {
@@ -563,6 +881,46 @@ function defaultAgent(index: number): AgentConfig {
 
 function defaultPeer(index: number): FederationPeer {
   return { nodeId: `peer-${index + 1}`, host: '127.0.0.1', port: 19789, publicKeyHex: '' };
+}
+
+function defaultMcpServer(index: number): McpServerConfig {
+  return {
+    id: `server-${index + 1}`,
+    transport: 'stdio',
+    enabled: true,
+    toolPrefix: '',
+    approval: 'inherit',
+    timeoutMs: 20_000,
+    command: '',
+    args: [],
+    url: '',
+    env: {},
+    allowTools: [],
+  };
+}
+
+function formatEnvLines(env: Record<string, string> | undefined): string {
+  return Object.entries(env ?? {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}=${value}`)
+    .join('\n');
+}
+
+function parseEnvLines(value: string): Record<string, string> {
+  const next: Record<string, string> = {};
+  for (const rawLine of value.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const splitIndex = line.indexOf('=');
+    if (splitIndex === -1) {
+      next[line] = '';
+      continue;
+    }
+    const key = line.slice(0, splitIndex).trim();
+    if (!key) continue;
+    next[key] = line.slice(splitIndex + 1);
+  }
+  return next;
 }
 
 function normalizeAgentDraft(agent: AgentConfig): AgentConfig {
@@ -616,6 +974,39 @@ function ensureConfigShape(raw: unknown): ConfigShape {
     }
     data.models = migrated;
   }
+  data.mcp = {
+    autoReconnect: {
+      enabled: data.mcp?.autoReconnect?.enabled ?? true,
+      pollIntervalMs: data.mcp?.autoReconnect?.pollIntervalMs ?? 5_000,
+      baseDelayMs: data.mcp?.autoReconnect?.baseDelayMs ?? 15_000,
+      maxDelayMs: Math.max(
+        data.mcp?.autoReconnect?.baseDelayMs ?? 15_000,
+        data.mcp?.autoReconnect?.maxDelayMs ?? 300_000,
+      ),
+    },
+    servers: Array.isArray(data.mcp?.servers)
+      ? data.mcp.servers.map((server) => ({
+          id: server.id,
+          transport: server.transport ?? 'stdio',
+          enabled: server.enabled ?? true,
+          toolPrefix: server.toolPrefix ?? '',
+          approval: server.approval ?? 'inherit',
+          timeoutMs: server.timeoutMs ?? 20_000,
+          command: server.command ?? '',
+          args: Array.isArray(server.args) ? server.args : [],
+          url: server.url ?? '',
+          env:
+            server.env && typeof server.env === 'object'
+              ? Object.fromEntries(
+                  Object.entries(server.env).filter(
+                    (entry): entry is [string, string] => typeof entry[1] === 'string',
+                  ),
+                )
+              : {},
+          allowTools: Array.isArray(server.allowTools) ? server.allowTools : [],
+        }))
+      : [],
+  };
   return data;
 }
 
@@ -872,6 +1263,76 @@ function MultiChoiceRow({
   );
 }
 
+function GroupedMcpChoiceRow({
+  label,
+  help,
+  groups,
+  selected,
+  onChange,
+}: {
+  label: string;
+  help: string;
+  groups: McpToolGroup[];
+  selected: string[];
+  onChange: (values: string[]) => void;
+}) {
+  const selectedSet = new Set(selected);
+
+  return (
+    <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-4 items-start">
+      <FieldLabel label={label} help={help} />
+      <div className="flex flex-col gap-3">
+        {groups.map((group) => (
+          <div
+            key={group.serverId}
+            className="rounded-xl border border-slate-700/60 bg-slate-900/45 px-3 py-3"
+          >
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium text-slate-100">
+                {group.serverId === 'ungrouped' ? 'Other MCP tools' : group.serverId}
+              </span>
+              <span
+                className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                  group.connected
+                    ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200'
+                    : 'border-slate-600/30 bg-slate-800/70 text-slate-300'
+                }`}
+              >
+                {group.connected ? 'connected' : 'cached'}
+              </span>
+              <span className="text-[11px] text-slate-500">{group.tools.length} tools</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 xl:grid-cols-3">
+              {group.tools.map((toolName) => {
+                const checked = selectedSet.has(toolName);
+                return (
+                  <label
+                    key={toolName}
+                    className="inline-flex items-center gap-2 rounded-lg bg-slate-800/60 px-3 py-2 text-sm text-slate-300 ring-1 ring-slate-700/40 transition-colors hover:bg-slate-700/60"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(event) => {
+                        if (event.target.checked) onChange([...selected, toolName]);
+                        else onChange(selected.filter((value) => value !== toolName));
+                      }}
+                      className="accent-indigo-500"
+                    />
+                    <span className="truncate" title={toolName}>
+                      {formatGroupedMcpToolName(toolName, group.toolPrefix)}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // CSV field that only commits to parent on blur — prevents trailing-comma being stripped mid-typing
 function DeferredTextRow({
   label,
@@ -1084,6 +1545,7 @@ interface PanelProps {
   cfg: ConfigShape;
   onChange: (next: ConfigShape) => void;
   modelKeys: string[];
+  mcpToolOptions: string[];
   availableSkills: SkillInfo[];
   sandboxProfileOptions: string[];
   defaultSandboxProfile?: string;
@@ -1097,6 +1559,196 @@ interface PanelProps {
   setSearchModal: (m: SearchModalState | null) => void;
   peerModal: PeerModalState | null;
   setPeerModal: (m: PeerModalState | null) => void;
+  mcpModal: McpModalState | null;
+  setMcpModal: (m: McpModalState | null) => void;
+  mcpStatus: McpServerStatusInfo[];
+  mcpSummaries: McpHistorySummaryInfo[];
+  mcpAttention: McpAttentionInfo[];
+  mcpHistory: McpHistoryEventInfo[];
+  onRefreshMcp: (serverId?: string) => void;
+  onInspectMcp: (serverId: string) => void;
+  mcpRefreshing: boolean;
+  mcpRefreshingTarget: string | null;
+}
+
+function McpHistoryEventCard({ record }: { record: McpHistoryEventInfo }) {
+  const outcomeTone =
+    record.outcome === 'connected'
+      ? 'text-emerald-200 bg-emerald-500/10 border-emerald-500/20'
+      : record.outcome === 'disabled'
+        ? 'text-slate-300 bg-slate-700/40 border-slate-600/30'
+        : 'text-amber-200 bg-amber-500/10 border-amber-500/20';
+  const triggerTone =
+    record.trigger === 'auto-retry'
+      ? 'text-cyan-200 bg-cyan-500/10 border-cyan-500/20'
+      : record.trigger === 'manual-refresh'
+        ? 'text-indigo-200 bg-indigo-500/10 border-indigo-500/20'
+        : 'text-slate-300 bg-slate-700/40 border-slate-600/30';
+  const nextRetryAt = formatMcpTimestamp(record.nextRetryAt);
+
+  return (
+    <div className="rounded-xl border border-white/8 bg-slate-900/60 px-4 py-3">
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="font-medium text-slate-100">{record.serverId}</span>
+        <span className="rounded-full border border-slate-600/30 bg-slate-800/60 px-2 py-0.5 uppercase tracking-wide text-slate-300">
+          {record.transport}
+        </span>
+        <span className={`rounded-full border px-2 py-0.5 uppercase tracking-wide ${triggerTone}`}>
+          {formatMcpHistoryTrigger(record.trigger)}
+        </span>
+        <span className={`rounded-full border px-2 py-0.5 uppercase tracking-wide ${outcomeTone}`}>
+          {formatMcpHistoryOutcome(record.outcome)}
+        </span>
+        <span className="text-slate-500">{formatMcpTimestamp(record.timestamp)}</span>
+      </div>
+      <div className="mt-2 text-[11px] text-slate-500 leading-relaxed">
+        prefix={record.toolPrefix} · approval={record.approval} · timeout={record.timeoutMs}ms · tools={record.toolCount}
+        {typeof record.retryCount === 'number' ? ` · retries=${record.retryCount}` : ''}
+        {nextRetryAt ? ` · next retry ${nextRetryAt}` : ''}
+      </div>
+      {record.connectionDetails && record.outcome === 'connected' && (
+        <div className="mt-1.5 text-[11px] text-cyan-200/80 break-all">{record.connectionDetails}</div>
+      )}
+      {record.lastError && (
+        <div className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200 leading-relaxed">
+          {(record.lastErrorCode || record.lastErrorPhase || record.autoRetryEligible === false) && (
+            <div className="mb-1 flex flex-wrap gap-1.5">
+              {record.lastErrorPhase && (
+                <span className="rounded-full border border-amber-500/20 bg-amber-950/40 px-1.5 py-0.5 uppercase tracking-wide text-[10px] text-amber-100/90">
+                  phase={record.lastErrorPhase}
+                </span>
+              )}
+              {record.lastErrorCode && (
+                <span className="rounded-full border border-amber-500/20 bg-amber-950/40 px-1.5 py-0.5 uppercase tracking-wide text-[10px] text-amber-100/90">
+                  code={record.lastErrorCode}
+                </span>
+              )}
+              {record.autoRetryEligible === false && (
+                <span className="rounded-full border border-rose-500/20 bg-rose-950/40 px-1.5 py-0.5 uppercase tracking-wide text-[10px] text-rose-100/90">
+                  manual-fix
+                </span>
+              )}
+            </div>
+          )}
+          {record.lastError}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function McpHistoryInspectorModal({
+  server,
+  runtimeStatus,
+  summary,
+  attention,
+  inspector,
+  onClose,
+  onRefresh,
+}: {
+  server?: McpServerConfig;
+  runtimeStatus?: McpServerStatusInfo;
+  summary?: McpHistorySummaryInfo;
+  attention?: McpAttentionInfo;
+  inspector: McpInspectorState;
+  onClose: () => void;
+  onRefresh: () => void;
+}) {
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[220] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div className="w-full max-w-5xl mx-4 max-h-[88vh] overflow-auto rounded-2xl bg-slate-900 ring-1 ring-slate-700 p-5 flex flex-col gap-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h3 className="text-base font-semibold text-slate-100">MCP Server Drilldown · {inspector.serverId}</h3>
+            <p className="text-xs text-slate-400 mt-1">
+              {server?.transport === 'stdio'
+                ? `command=${server.command || '(unset)'}`
+                : `url=${server?.url || '(unset)'}`}
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" variant="ghost" onClick={onRefresh}>
+              Refresh History
+            </Button>
+            <Button size="sm" variant="ghost" onClick={onClose}>
+              Close
+            </Button>
+          </div>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+          <div className="rounded-xl border border-white/10 bg-slate-900/60 px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wide text-slate-500">Runtime</div>
+            <div className="mt-1 text-lg font-semibold text-slate-100">{runtimeStatus?.status ?? 'unknown'}</div>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-slate-900/60 px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wide text-slate-500">Recent Success</div>
+            <div className="mt-1 text-lg font-semibold text-slate-100">
+              {summary ? formatMcpSuccessRate(summary.recentSuccessRate) : '—'}
+            </div>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-slate-900/60 px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wide text-slate-500">Attempts</div>
+            <div className="mt-1 text-lg font-semibold text-slate-100">{summary?.recentAttempts ?? 0}</div>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-slate-900/60 px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wide text-slate-500">Consecutive Errors</div>
+            <div className="mt-1 text-lg font-semibold text-slate-100">{summary?.consecutiveErrors ?? 0}</div>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-slate-900/60 px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wide text-slate-500">Auto Recoveries</div>
+            <div className="mt-1 text-lg font-semibold text-slate-100">{summary?.autoRetryRecoveryCount ?? 0}</div>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-slate-900/60 px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wide text-slate-500">Manual Fix Events</div>
+            <div className="mt-1 text-lg font-semibold text-slate-100">{summary?.manualFixErrorCount ?? 0}</div>
+          </div>
+        </div>
+
+        {(summary?.lastFailureAt || summary?.lastRecoveryAt || attention) && (
+          <div className="rounded-xl border border-white/8 bg-slate-900/60 px-4 py-3 text-sm text-slate-300 leading-relaxed">
+            {summary?.lastFailureAt && <div>Last failure: {formatMcpTimestamp(summary.lastFailureAt)}</div>}
+            {summary?.lastRecoveryAt && <div>Last recovery: {formatMcpTimestamp(summary.lastRecoveryAt)}</div>}
+            {attention && (
+              <div className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-100">
+                <div className="font-medium">{formatMcpAttentionState(attention.state)}</div>
+                <div className="mt-1">{attention.message}</div>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="flex flex-col gap-2">
+          <div className="text-sm font-medium text-slate-200">Recent Events</div>
+          {inspector.loading ? (
+            <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900/40 px-4 py-5 text-sm text-slate-400">
+              Loading server history…
+            </div>
+          ) : inspector.error ? (
+            <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-5 text-sm text-rose-200">
+              {inspector.error}
+            </div>
+          ) : inspector.records.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900/40 px-4 py-5 text-sm text-slate-400">
+              No MCP runtime events recorded yet for this server.
+            </div>
+          ) : (
+            inspector.records.map((record, index) => (
+              <McpHistoryEventCard key={`${record.serverId}-${record.timestamp}-${index}`} record={record} />
+            ))
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
 }
 
 function GatewayPanel({ cfg, onChange }: Pick<PanelProps, 'cfg' | 'onChange'>) {
@@ -1504,13 +2156,11 @@ function ChannelsPanel({ cfg, onChange }: Pick<PanelProps, 'cfg' | 'onChange'>) 
 function ModelsPanel({
   cfg,
   onChange,
-  groupModal,
   setGroupModal,
-  modelInGroupModal,
   setModelInGroupModal,
 }: Pick<
   PanelProps,
-  'cfg' | 'onChange' | 'groupModal' | 'setGroupModal' | 'modelInGroupModal' | 'setModelInGroupModal'
+  'cfg' | 'onChange' | 'setGroupModal' | 'setModelInGroupModal'
 >) {
   function openAddGroup() {
     setGroupModal({ mode: 'add', groupName: '', draft: { provider: 'openai-compat' } });
@@ -1567,7 +2217,8 @@ function ModelsPanel({
       <div className="flex flex-col gap-3">
         {groups.map(([groupName, group]) => {
           const modelEntries = Object.entries(group.models ?? {});
-          const hasApiKey = !!group.apiKey?.trim();
+          const apiKey = group.apiKey?.trim() ?? '';
+          const hasApiKey = apiKey.length > 0;
           const hasBaseUrl = !!group.apiBaseUrl?.trim();
           return (
             <div
@@ -1589,8 +2240,8 @@ function ModelsPanel({
                 </span>
                 {hasApiKey && (
                   <span className="text-xs text-slate-500 font-mono shrink-0">
-                    {group.apiKey?.slice(0, 6)}
-                    {'\u2022'.repeat(Math.min(8, Math.max(0, group.apiKey?.length - 6)))}
+                    {apiKey.slice(0, 6)}
+                    {'\u2022'.repeat(Math.min(8, Math.max(0, apiKey.length - 6)))}
                   </span>
                 )}
                 {hasBaseUrl && (
@@ -1688,23 +2339,10 @@ function ModelsPanel({
 function AgentsPanel({
   cfg,
   onChange,
-  modelKeys,
-  availableSkills,
-  sandboxProfileOptions,
-  defaultSandboxProfile,
-  agentModal,
+  mcpToolOptions,
+  mcpStatus,
   setAgentModal,
-}: Pick<
-  PanelProps,
-  | 'cfg'
-  | 'onChange'
-  | 'modelKeys'
-  | 'availableSkills'
-  | 'sandboxProfileOptions'
-  | 'defaultSandboxProfile'
-  | 'agentModal'
-  | 'setAgentModal'
->) {
+}: Pick<PanelProps, 'cfg' | 'onChange' | 'mcpToolOptions' | 'mcpStatus' | 'setAgentModal'>) {
   return (
     <PanelSection
       title="Agent Nodes"
@@ -1723,7 +2361,20 @@ function AgentsPanel({
         <p className="text-sm text-slate-500 text-center py-4">No agents configured.</p>
       )}
       <div className="flex flex-col gap-2">
-        {cfg.agents.map((agent, idx) => (
+        {cfg.agents.map((agent, idx) => {
+          const availableAgentMcpTools = uniqueSortedStrings([
+            ...mcpToolOptions,
+            ...(agent.tools.allow ?? []).filter(isMcpToolName),
+            ...agent.tools.deny.filter(isMcpToolName),
+          ]);
+          const enabledAgentMcpTools = getEnabledMcpTools(agent.tools, availableAgentMcpTools);
+          const availableAgentMcpGroups = buildMcpToolGroups(mcpStatus, availableAgentMcpTools);
+          const enabledAgentMcpSummary = summarizeEnabledMcpGroups(
+            enabledAgentMcpTools,
+            availableAgentMcpGroups,
+          );
+
+          return (
           <ItemCard key={`${agent.id}-${idx}`}>
             <div className="flex-1 min-w-0">
               <div className="text-sm font-medium text-slate-200">
@@ -1734,7 +2385,16 @@ function AgentsPanel({
                 model={agent.model || '(default)'} · role={agent.mesh.role} · accepts:{' '}
                 <ListSummary values={agent.mesh.accepts} />
                 {agent.tools.sandboxProfile ? ` · sandbox=${agent.tools.sandboxProfile}` : ''}
+                {availableAgentMcpTools.length > 0
+                  ? ` · mcp=${enabledAgentMcpTools.length}/${availableAgentMcpTools.length}`
+                  : ''}
               </div>
+              {enabledAgentMcpTools.length > 0 && (
+                <div className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+                  MCP: {enabledAgentMcpTools.slice(0, 3).join(', ')}
+                  {enabledAgentMcpTools.length > 3 ? ` +${enabledAgentMcpTools.length - 3}` : ''}
+                </div>
+              )}
               {(agent.soulFile || agent.agentsFile) && (
                 <div className="text-xs text-slate-500 mt-0.5">
                   {agent.soulFile && (
@@ -1764,13 +2424,15 @@ function AgentsPanel({
                       mesh: { ...agent.mesh },
                       tools: {
                         ...agent.tools,
+                        allow: [...(agent.tools.allow ?? [])],
+                        deny: [...agent.tools.deny],
+                        approval: [...agent.tools.approval],
                         maxRounds: agent.tools.maxRounds ?? 60,
                         sandboxProfile: agent.tools.sandboxProfile ?? '',
                       },
                       persona: { ...agent.persona },
                     },
-                  })
-                }
+                          MCP: {enabledAgentMcpSummary}
               >
                 Edit
               </Button>
@@ -1783,7 +2445,8 @@ function AgentsPanel({
               </Button>
             </div>
           </ItemCard>
-        ))}
+          );
+        })}
       </div>
     </PanelSection>
   );
@@ -2086,9 +2749,8 @@ function SkillsPanel({
 function SearchPanel({
   cfg,
   onChange,
-  searchModal,
   setSearchModal,
-}: Pick<PanelProps, 'cfg' | 'onChange' | 'searchModal' | 'setSearchModal'>) {
+}: Pick<PanelProps, 'cfg' | 'onChange' | 'setSearchModal'>) {
   return (
     <PanelSection
       title="Search Providers"
@@ -2212,12 +2874,540 @@ function MemoryPanel({ cfg, onChange }: Pick<PanelProps, 'cfg' | 'onChange'>) {
   );
 }
 
+function McpPanel({
+  cfg,
+  onChange,
+  setMcpModal,
+  mcpStatus,
+  mcpSummaries,
+  mcpAttention,
+  mcpHistory,
+  onRefreshMcp,
+  onInspectMcp,
+  mcpRefreshing,
+  mcpRefreshingTarget,
+}: Pick<
+  PanelProps,
+  | 'cfg'
+  | 'onChange'
+  | 'setMcpModal'
+  | 'mcpStatus'
+  | 'mcpSummaries'
+  | 'mcpAttention'
+  | 'mcpHistory'
+  | 'onRefreshMcp'
+  | 'onInspectMcp'
+  | 'mcpRefreshing'
+  | 'mcpRefreshingTarget'
+>) {
+  const servers = cfg.mcp.servers ?? [];
+  const statusByServerId = new Map(mcpStatus.map((status) => [status.serverId, status]));
+  const summaryByServerId = useMemo(
+    () => new Map(mcpSummaries.map((summary) => [summary.serverId, summary])),
+    [mcpSummaries],
+  );
+  const attentionByServerId = useMemo(
+    () => new Map(mcpAttention.map((entry) => [entry.serverId, entry])),
+    [mcpAttention],
+  );
+  const [statusFilter, setStatusFilter] = useState<'all' | 'connected' | 'error' | 'disabled' | 'unconfigured'>('all');
+  const [transportFilter, setTransportFilter] = useState<'all' | 'stdio' | 'sse'>('all');
+  const [errorCodeFilter, setErrorCodeFilter] = useState('all');
+  const [errorPhaseFilter, setErrorPhaseFilter] = useState('all');
+  const statusSummary = useMemo(
+    () => summarizeMcpStatus(servers, mcpStatus),
+    [servers, mcpStatus],
+  );
+  const errorCodeOptions = useMemo(() => collectMcpErrorCodes(mcpStatus), [mcpStatus]);
+  const errorPhaseOptions = useMemo(() => collectMcpErrorPhases(mcpStatus), [mcpStatus]);
+  const filteredServers = useMemo(
+    () =>
+      servers.filter((server) =>
+        matchMcpServerFilter({
+          config: server,
+          runtimeStatus: statusByServerId.get(server.id),
+          statusFilter,
+          transportFilter,
+          errorCodeFilter,
+          errorPhaseFilter,
+        }),
+      ),
+    [servers, statusByServerId, statusFilter, transportFilter, errorCodeFilter, errorPhaseFilter],
+  );
+  const hasActiveFilters =
+    statusFilter !== 'all' ||
+    transportFilter !== 'all' ||
+    errorCodeFilter !== 'all' ||
+    errorPhaseFilter !== 'all';
+  const visibleServerIds = new Set(filteredServers.map((server) => server.id));
+  const filteredHistory = useMemo(
+    () =>
+      mcpHistory.filter((record) =>
+        hasActiveFilters
+          ? visibleServerIds.has(record.serverId)
+          : statusByServerId.has(record.serverId),
+      ),
+    [mcpHistory, hasActiveFilters, visibleServerIds, statusByServerId],
+  );
+  const manualFixCount = mcpAttention.filter((entry) => entry.state === 'manual-fix').length;
+  const recoveringCount = mcpAttention.filter((entry) => entry.state === 'recovering').length;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <PanelSection
+        title="Auto Reconnect"
+        description="Tune MCP automatic recovery behavior instead of relying on a fixed backend policy."
+      >
+        <ToggleRow
+          label="Enabled"
+          help="Automatically retry recoverable MCP server failures in the background. Manual-fix errors are never retried automatically."
+          checked={cfg.mcp.autoReconnect.enabled}
+          onChange={(enabled) =>
+            onChange({
+              ...cfg,
+              mcp: { ...cfg.mcp, autoReconnect: { ...cfg.mcp.autoReconnect, enabled } },
+            })
+          }
+        />
+        <NumberRow
+          label="Poll interval (ms)"
+          help="How often the gateway scans MCP runtime status for due reconnect attempts."
+          value={cfg.mcp.autoReconnect.pollIntervalMs}
+          min={1000}
+          onChange={(pollIntervalMs) =>
+            onChange({
+              ...cfg,
+              mcp: {
+                ...cfg.mcp,
+                autoReconnect: { ...cfg.mcp.autoReconnect, pollIntervalMs },
+              },
+            })
+          }
+        />
+        <NumberRow
+          label="Base retry delay (ms)"
+          help="Initial backoff delay for recoverable MCP connection failures."
+          value={cfg.mcp.autoReconnect.baseDelayMs}
+          min={1000}
+          onChange={(baseDelayMs) =>
+            onChange({
+              ...cfg,
+              mcp: {
+                ...cfg.mcp,
+                autoReconnect: {
+                  ...cfg.mcp.autoReconnect,
+                  baseDelayMs,
+                  maxDelayMs: Math.max(baseDelayMs, cfg.mcp.autoReconnect.maxDelayMs),
+                },
+              },
+            })
+          }
+        />
+        <NumberRow
+          label="Max retry delay (ms)"
+          help="Upper bound for exponential backoff during automatic MCP reconnects."
+          value={cfg.mcp.autoReconnect.maxDelayMs}
+          min={cfg.mcp.autoReconnect.baseDelayMs}
+          onChange={(maxDelayMs) =>
+            onChange({
+              ...cfg,
+              mcp: {
+                ...cfg.mcp,
+                autoReconnect: {
+                  ...cfg.mcp.autoReconnect,
+                  maxDelayMs: Math.max(cfg.mcp.autoReconnect.baseDelayMs, maxDelayMs),
+                },
+              },
+            })
+          }
+        />
+      </PanelSection>
+
+      <PanelSection
+        title="Runtime Summary"
+        description="Quick health overview for configured MCP servers, grouped before you drill into one server card."
+      >
+        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-8">
+          <div className="rounded-xl border border-white/10 bg-slate-900/60 px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wide text-slate-500">Configured</div>
+            <div className="mt-1 text-2xl font-semibold text-slate-100">{statusSummary.configured}</div>
+          </div>
+          <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wide text-emerald-300/80">Connected</div>
+            <div className="mt-1 text-2xl font-semibold text-emerald-200">{statusSummary.connected}</div>
+          </div>
+          <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wide text-amber-300/80">Errors</div>
+            <div className="mt-1 text-2xl font-semibold text-amber-200">{statusSummary.errored}</div>
+          </div>
+          <div className="rounded-xl border border-slate-600/30 bg-slate-800/40 px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wide text-slate-400">Disabled</div>
+            <div className="mt-1 text-2xl font-semibold text-slate-200">{statusSummary.disabled}</div>
+          </div>
+          <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wide text-cyan-300/80">stdio</div>
+            <div className="mt-1 text-2xl font-semibold text-cyan-200">{statusSummary.stdio}</div>
+          </div>
+          <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/5 px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wide text-indigo-300/80">sse</div>
+            <div className="mt-1 text-2xl font-semibold text-indigo-200">{statusSummary.sse}</div>
+          </div>
+          <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wide text-rose-300/80">Manual Fix</div>
+            <div className="mt-1 text-2xl font-semibold text-rose-200">{manualFixCount}</div>
+          </div>
+          <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wide text-cyan-300/80">Retrying</div>
+            <div className="mt-1 text-2xl font-semibold text-cyan-200">{recoveringCount}</div>
+          </div>
+        </div>
+      </PanelSection>
+
+      <PanelSection
+        title="Operator Attention"
+        description="Current MCP issues that can impact unattended workflow or scheduler execution."
+      >
+        {mcpAttention.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900/40 px-4 py-5 text-sm text-slate-400">
+            No MCP operator attention items right now.
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {mcpAttention.map((entry) => (
+              <div
+                key={entry.serverId}
+                className="rounded-xl border border-white/8 bg-slate-900/60 px-4 py-3"
+              >
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="font-medium text-slate-100">{entry.serverId}</span>
+                  <span
+                    className={`rounded-full border px-2 py-0.5 uppercase tracking-wide ${
+                      entry.severity === 'critical'
+                        ? 'text-rose-100 border-rose-500/20 bg-rose-500/10'
+                        : 'text-cyan-100 border-cyan-500/20 bg-cyan-500/10'
+                    }`}
+                  >
+                    {formatMcpAttentionState(entry.state)}
+                  </span>
+                </div>
+                <div className="mt-2 text-sm text-slate-200 leading-relaxed">{entry.message}</div>
+                {(entry.lastErrorCode || typeof entry.retryCount === 'number' || entry.nextRetryAt) && (
+                  <div className="mt-2 text-[11px] text-slate-500 leading-relaxed">
+                    {entry.lastErrorCode ? `code=${entry.lastErrorCode}` : ''}
+                    {typeof entry.retryCount === 'number' ? ` · retries=${entry.retryCount}` : ''}
+                    {entry.nextRetryAt ? ` · next retry ${formatMcpTimestamp(entry.nextRetryAt)}` : ''}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </PanelSection>
+
+      <PanelSection
+        title="MCP Servers"
+        description="Register external MCP servers and expose their tools through AgentFlyer ToolRegistry. This panel manages config only; health probing stays in a later slice."
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap gap-2">
+            <select
+              value={statusFilter}
+              onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}
+              className="rounded-lg border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+            >
+              <option value="all">status: all</option>
+              <option value="connected">status: connected</option>
+              <option value="error">status: error</option>
+              <option value="disabled">status: disabled</option>
+              <option value="unconfigured">status: no runtime</option>
+            </select>
+            <select
+              value={transportFilter}
+              onChange={(event) => setTransportFilter(event.target.value as typeof transportFilter)}
+              className="rounded-lg border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+            >
+              <option value="all">transport: all</option>
+              <option value="stdio">transport: stdio</option>
+              <option value="sse">transport: sse</option>
+            </select>
+            <select
+              value={errorCodeFilter}
+              onChange={(event) => setErrorCodeFilter(event.target.value)}
+              className="rounded-lg border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+            >
+              <option value="all">error code: all</option>
+              {errorCodeOptions.map((code) => (
+                <option key={code} value={code}>
+                  {code}
+                </option>
+              ))}
+            </select>
+            <select
+              value={errorPhaseFilter}
+              onChange={(event) => setErrorPhaseFilter(event.target.value)}
+              className="rounded-lg border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+            >
+              <option value="all">error phase: all</option>
+              {errorPhaseOptions.map((phase) => (
+                <option key={phase} value={phase}>
+                  {phase}
+                </option>
+              ))}
+            </select>
+            {hasActiveFilters && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setStatusFilter('all');
+                  setTransportFilter('all');
+                  setErrorCodeFilter('all');
+                  setErrorPhaseFilter('all');
+                }}
+              >
+                Clear Filters
+              </Button>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => onRefreshMcp()}
+              disabled={mcpRefreshing}
+            >
+              {mcpRefreshing ? 'Refreshing…' : 'Refresh Runtime'}
+            </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setMcpModal({ mode: 'add', draft: defaultMcpServer(servers.length) })}
+          >
+            + Add MCP Server
+          </Button>
+          </div>
+        </div>
+
+        {servers.length === 0 ? (
+          <p className="text-sm text-slate-500">
+            No MCP servers configured. Add a server here instead of editing raw JSON.
+          </p>
+        ) : filteredServers.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900/40 px-4 py-5 text-sm text-slate-400">
+            No MCP servers match the current filters. Clear one or more filters to inspect the full runtime surface.
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {filteredServers.map((server) => {
+              const index = servers.findIndex((candidate) => candidate.id === server.id);
+              const runtimeStatus = statusByServerId.get(server.id);
+              const historySummary = summaryByServerId.get(server.id);
+              const serverAttention = attentionByServerId.get(server.id);
+              const diagnosticHint = getMcpDiagnosticHint(runtimeStatus?.lastErrorCode);
+              const serverRefreshing = mcpRefreshing && mcpRefreshingTarget === server.id;
+              const nextRetryAt = formatMcpTimestamp(runtimeStatus?.nextRetryAt);
+              const lastConnectedAt = formatMcpTimestamp(runtimeStatus?.lastConnectedAt);
+              const lastRefreshAt = formatMcpTimestamp(runtimeStatus?.lastRefreshAt);
+              const statusTone =
+                runtimeStatus?.status === 'connected'
+                  ? 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20'
+                  : runtimeStatus?.status === 'disabled'
+                    ? 'text-slate-300 bg-slate-700/40 border-slate-600/30'
+                    : 'text-amber-300 bg-amber-500/10 border-amber-500/20';
+
+              return (
+              <ItemCard key={`${server.id}-${index}`}>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-slate-200 flex items-center gap-2">
+                    <span>{server.id}</span>
+                    <span className="text-[10px] uppercase tracking-wide text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 rounded-full px-2 py-0.5">
+                      {server.transport}
+                    </span>
+                    {!server.enabled && (
+                      <span className="text-[10px] uppercase tracking-wide text-slate-400 bg-slate-700/40 rounded-full px-2 py-0.5">
+                        disabled
+                      </span>
+                    )}
+                    {runtimeStatus && (
+                      <span className={`text-[10px] uppercase tracking-wide border rounded-full px-2 py-0.5 ${statusTone}`}>
+                        {runtimeStatus.status}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+                    {server.transport === 'stdio'
+                      ? `command=${server.command || '(unset)'}${server.args.length > 0 ? ` ${server.args.join(' ')}` : ''}`
+                      : `url=${server.url || '(unset)'}`}
+                  </div>
+                  <div className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+                    approval={server.approval} · prefix={server.toolPrefix?.trim() || `mcp_${server.id}`} · timeout={server.timeoutMs}ms
+                    {server.allowTools && server.allowTools.length > 0
+                      ? ` · allowTools=${server.allowTools.join(', ')}`
+                      : ' · allowTools=all'}
+                  </div>
+                  {runtimeStatus && (
+                    <div className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+                      tools={runtimeStatus.toolCount}
+                      {runtimeStatus.tools.length > 0
+                        ? ` · ${runtimeStatus.tools.slice(0, 4).join(', ')}${runtimeStatus.tools.length > 4 ? ' ...' : ''}`
+                        : ''}
+                    </div>
+                  )}
+                  {historySummary && (
+                    <div className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
+                      recent success {formatMcpSuccessRate(historySummary.recentSuccessRate)} across {historySummary.recentAttempts} attempt{historySummary.recentAttempts === 1 ? '' : 's'}
+                      {' · '}consecutive errors {historySummary.consecutiveErrors}
+                      {' · '}auto recoveries {historySummary.autoRetryRecoveryCount}
+                    </div>
+                  )}
+                  {runtimeStatus?.connectionDetails && (
+                    <div className="text-[11px] text-cyan-200/80 mt-1.5 leading-relaxed break-all">
+                      {runtimeStatus.connectionDetails}
+                    </div>
+                  )}
+                  {runtimeStatus && (lastConnectedAt || lastRefreshAt || nextRetryAt) && (
+                    <div className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
+                      {lastConnectedAt ? `last connected ${lastConnectedAt}` : 'never connected'}
+                      {lastRefreshAt ? ` · last refresh ${lastRefreshAt}` : ''}
+                      {nextRetryAt ? ` · next retry ${nextRetryAt}` : ''}
+                    </div>
+                  )}
+                  {runtimeStatus?.lastError && (
+                    <div className="mt-1.5 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200 leading-relaxed">
+                      {(runtimeStatus.lastErrorCode || runtimeStatus.lastErrorPhase) && (
+                        <div className="mb-1 flex flex-wrap gap-1.5">
+                          {runtimeStatus.lastErrorPhase && (
+                            <span className="text-[10px] uppercase tracking-wide text-amber-200/90 bg-amber-950/40 border border-amber-500/20 rounded-full px-1.5 py-0.5">
+                              phase={runtimeStatus.lastErrorPhase}
+                            </span>
+                          )}
+                          {runtimeStatus.lastErrorCode && (
+                            <span className="text-[10px] uppercase tracking-wide text-amber-200/90 bg-amber-950/40 border border-amber-500/20 rounded-full px-1.5 py-0.5">
+                              code={runtimeStatus.lastErrorCode}
+                            </span>
+                          )}
+                          {typeof runtimeStatus.retryCount === 'number' && runtimeStatus.retryCount > 0 && (
+                            <span className="text-[10px] uppercase tracking-wide text-slate-300 bg-slate-950/60 border border-slate-500/20 rounded-full px-1.5 py-0.5">
+                              retries={runtimeStatus.retryCount}
+                            </span>
+                          )}
+                          {runtimeStatus.autoRetryEligible === false && (
+                            <span className="text-[10px] uppercase tracking-wide text-rose-200/90 bg-rose-950/40 border border-rose-500/20 rounded-full px-1.5 py-0.5">
+                              manual-fix
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {runtimeStatus.lastError}
+                      {diagnosticHint && (
+                        <div className="mt-2 rounded-md border border-amber-400/15 bg-slate-950/20 px-2.5 py-2">
+                          <div className="font-medium text-amber-100">{diagnosticHint.title}</div>
+                          <div className="mt-1 text-amber-100/75">{diagnosticHint.description}</div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {serverAttention && (
+                    <div className="mt-1.5 rounded-lg border border-amber-500/15 bg-slate-950/30 px-3 py-2 text-[11px] text-amber-100/90 leading-relaxed">
+                      {serverAttention.message}
+                    </div>
+                  )}
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => onRefreshMcp(server.id)}
+                    disabled={mcpRefreshing || server.enabled === false}
+                  >
+                    {serverRefreshing ? 'Reconnecting…' : 'Reconnect'}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => onInspectMcp(server.id)}>
+                    Inspect History
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      setMcpModal({
+                        mode: 'edit',
+                        index,
+                        draft: {
+                          ...server,
+                          args: [...server.args],
+                          env: { ...server.env },
+                          allowTools: [...(server.allowTools ?? [])],
+                        },
+                      })
+                    }
+                  >
+                    Edit
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    onClick={() =>
+                      onChange({
+                        ...cfg,
+                        mcp: {
+                          ...cfg.mcp,
+                          servers: servers.filter((_, candidateIndex) => candidateIndex !== index),
+                        },
+                      })
+                    }
+                  >
+                    Remove
+                  </Button>
+                </div>
+              </ItemCard>
+              );
+            })}
+          </div>
+        )}
+      </PanelSection>
+
+      <PanelSection
+        title="Recent Runtime Events"
+        description="Newest-first MCP recovery timeline. Use it to confirm whether a server failed once, kept auto-retrying, or recovered after manual intervention."
+      >
+        {filteredHistory.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900/40 px-4 py-5 text-sm text-slate-400">
+            No MCP runtime events recorded yet for the current server scope.
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {filteredHistory.slice(0, 20).map((record, index) => {
+              return (
+                <McpHistoryEventCard
+                  key={`${record.serverId}-${record.timestamp}-${index}`}
+                  record={record}
+                />
+              );
+            })}
+          </div>
+        )}
+      </PanelSection>
+
+      <PanelSection
+        title="Operator Notes"
+        description="MCP now supports runtime health, reconnect, structured diagnostics, and a recent event timeline. Use these notes to keep the operator path predictable."
+      >
+        <div className="text-sm text-slate-400 leading-relaxed space-y-2">
+          <p>Automatic reconnect only retries recoverable failures. manual-fix states mean the server config or transport contract needs operator intervention.</p>
+          <p>Recent Runtime Events shows the last transition per retry or reconnect attempt, so you can tell whether a recovery came from startup, config reload, manual reconnect, or auto retry.</p>
+          <p>toolPrefix defaults to mcp_serverId. Keep prefixes stable to avoid tool-name churn across agent prompts and approval rules.</p>
+          <p>allowTools is optional. Leave it empty to expose the full server tool catalog; set it when you need a narrower operator-approved surface.</p>
+        </div>
+      </PanelSection>
+    </div>
+  );
+}
+
 function FederationPanel({
   cfg,
   onChange,
-  peerModal,
   setPeerModal,
-}: Pick<PanelProps, 'cfg' | 'onChange' | 'peerModal' | 'setPeerModal'>) {
+}: Pick<PanelProps, 'cfg' | 'onChange' | 'setPeerModal'>) {
   return (
     <div className="flex flex-col gap-4">
       <PanelSection
@@ -2383,6 +3573,7 @@ export function ConfigTab() {
     { id: 'skills', label: t('config.sections.skills') },
     { id: 'search', label: t('config.sections.search') },
     { id: 'memory', label: t('config.sections.memory') },
+    { id: 'mcp', label: t('config.sections.mcp') },
     { id: 'federation', label: t('config.sections.federation') },
     { id: 'log', label: t('config.sections.log') },
     { id: 'json', label: t('config.sections.json') },
@@ -2399,13 +3590,28 @@ export function ConfigTab() {
   const [agentModal, setAgentModal] = useState<AgentModalState | null>(null);
   const [searchModal, setSearchModal] = useState<SearchModalState | null>(null);
   const [peerModal, setPeerModal] = useState<PeerModalState | null>(null);
+  const [mcpModal, setMcpModal] = useState<McpModalState | null>(null);
+  const [mcpInspector, setMcpInspector] = useState<McpInspectorState | null>(null);
+  const [mcpRefreshing, setMcpRefreshing] = useState(false);
+  const [mcpRefreshingTarget, setMcpRefreshingTarget] = useState<string | null>(null);
 
   const { data, loading, error, refetch } = useQuery<unknown>(() => rpc<unknown>('config.get'), []);
   const { data: skillListData } = useQuery<SkillListResult>(
     () => rpc<SkillListResult>('skill.list'),
     [],
   );
-  const { data: toolListData } = useQuery<ToolListResult>(() => rpc<ToolListResult>('tool.list'), []);
+  const { data: toolListData, refetch: refetchToolList } = useQuery<ToolListResult>(
+    () => rpc<ToolListResult>('tool.list'),
+    [],
+  );
+  const { data: mcpStatusData, refetch: refetchMcpStatus } = useQuery<McpStatusResult>(
+    () => rpc<McpStatusResult>('mcp.status'),
+    [],
+  );
+  const { data: mcpHistoryData, refetch: refetchMcpHistory } = useQuery<McpHistoryResult>(
+    () => rpc<McpHistoryResult>('mcp.history', { limit: 50 }),
+    [],
+  );
 
   useEffect(() => {
     if (data !== null && data !== undefined) {
@@ -2416,12 +3622,12 @@ export function ConfigTab() {
   }, [data]);
 
   const availableSkills: SkillInfo[] = useMemo(() => skillListData?.skills ?? [], [skillListData]);
+  const toolCatalog = useMemo(() => toolListData?.tools ?? [], [toolListData]);
   const toolOptions = useMemo(() => {
-    const catalog = toolListData?.tools ?? [];
-    if (catalog.length === 0) {
+    if (toolCatalog.length === 0) {
       return [...new Set(FALLBACK_TOOL_OPTIONS)];
     }
-    return catalog
+    return toolCatalog
       .slice()
       .sort((left, right) => {
         const categoryCompare = left.category.localeCompare(right.category);
@@ -2429,7 +3635,15 @@ export function ConfigTab() {
         return left.name.localeCompare(right.name);
       })
       .map((tool) => tool.name);
-  }, [toolListData]);
+  }, [toolCatalog]);
+  const mcpToolOptions = useMemo(
+    () =>
+      uniqueSortedStrings([
+        ...toolCatalog.filter((tool) => tool.category === 'mcp').map((tool) => tool.name),
+        ...(mcpStatusData?.servers ?? []).flatMap((server) => server.tools.filter(isMcpToolName)),
+      ]),
+    [mcpStatusData, toolCatalog],
+  );
   const modelKeys = useMemo(() => {
     if (!cfg) return [];
     return Object.entries(cfg.models).flatMap(([g, grp]) =>
@@ -2440,6 +3654,22 @@ export function ConfigTab() {
     if (!cfg?.sandbox?.profiles) return [];
     return Object.keys(cfg.sandbox.profiles).sort((left, right) => left.localeCompare(right));
   }, [cfg]);
+  const agentMcpToolOptions = useMemo(() => {
+    if (!agentModal) return mcpToolOptions;
+    return uniqueSortedStrings([
+      ...mcpToolOptions,
+      ...(agentModal.draft.tools.allow ?? []).filter(isMcpToolName),
+      ...agentModal.draft.tools.deny.filter(isMcpToolName),
+    ]);
+  }, [agentModal, mcpToolOptions]);
+  const selectedAgentMcpTools = useMemo(() => {
+    if (!agentModal) return [];
+    return getEnabledMcpTools(agentModal.draft.tools, agentMcpToolOptions);
+  }, [agentModal, agentMcpToolOptions]);
+  const agentMcpToolGroups = useMemo(
+    () => buildMcpToolGroups(mcpStatusData?.servers ?? [], agentMcpToolOptions),
+    [agentMcpToolOptions, mcpStatusData],
+  );
   const defaultSandboxProfile = cfg?.sandbox?.defaultProfile;
 
   function handleCfgChange(next: ConfigShape) {
@@ -2466,12 +3696,61 @@ export function ConfigTab() {
     try {
       await rpc('config.save', cfg);
       setDirty(false);
+      refetchMcpStatus();
+      refetchMcpHistory();
+      refetchToolList();
       toast('Config saved', 'success');
     } catch (e) {
       toast(`Save failed: ${String(e)}`, 'error');
     } finally {
       setSaving(false);
     }
+  }
+
+  function openMcpInspector(serverId: string): void {
+    setMcpInspector({ serverId, loading: true, error: null, records: [] });
+    void rpc<McpHistoryResult>('mcp.history', { serverId, limit: 100 })
+      .then((result) => {
+        setMcpInspector({
+          serverId,
+          loading: false,
+          error: null,
+          records: result.records ?? [],
+        });
+      })
+      .catch((error) => {
+        setMcpInspector({
+          serverId,
+          loading: false,
+          error: `Failed to load MCP history: ${String(error)}`,
+          records: [],
+        });
+      });
+  }
+
+  function handleRefreshMcp(serverId?: string): void {
+    setMcpRefreshing(true);
+    setMcpRefreshingTarget(serverId ?? null);
+    void rpc<McpRefreshResult>('mcp.refresh', serverId ? { serverId } : undefined)
+      .then((result) => {
+        refetchMcpStatus();
+        refetchMcpHistory();
+        refetchToolList();
+        if (mcpInspector?.serverId && (!serverId || serverId === mcpInspector.serverId)) {
+          openMcpInspector(mcpInspector.serverId);
+        }
+        const refreshedLabel = result.refreshed?.length
+          ? result.refreshed.join(', ')
+          : serverId ?? 'all servers';
+        toast(`MCP runtime refreshed: ${refreshedLabel}`, 'success');
+      })
+      .catch((e) => {
+        toast(`MCP refresh failed: ${String(e)}`, 'error');
+      })
+      .finally(() => {
+        setMcpRefreshing(false);
+        setMcpRefreshingTarget(null);
+      });
   }
 
   function handleReset() {
@@ -2500,6 +3779,7 @@ export function ConfigTab() {
     onChange: handleCfgChange,
     modelKeys,
     availableSkills,
+    mcpToolOptions,
     sandboxProfileOptions,
     defaultSandboxProfile,
     groupModal,
@@ -2512,6 +3792,16 @@ export function ConfigTab() {
     setSearchModal,
     peerModal,
     setPeerModal,
+    mcpModal,
+    setMcpModal,
+    mcpStatus: mcpStatusData?.servers ?? [],
+    mcpSummaries: mcpStatusData?.summaries ?? [],
+    mcpAttention: mcpStatusData?.attention ?? [],
+    mcpHistory: mcpHistoryData?.records ?? [],
+    onRefreshMcp: handleRefreshMcp,
+    onInspectMcp: openMcpInspector,
+    mcpRefreshing,
+    mcpRefreshingTarget,
   };
 
   return (
@@ -2592,7 +3882,7 @@ export function ConfigTab() {
             {activeSection === 'models' && <ModelsPanel {...panelProps} />}
             {activeSection === 'agents' && <AgentsPanel {...panelProps} />}
             {activeSection === 'defaults' && (
-              <DefaultsPanel cfg={cfg} onChange={handleCfgChange} modelKeys={modelKeys} />
+              <DefaultsPanel cfg={cfg} onChange={handleCfgChange} />
             )}
             {activeSection === 'context' && <ContextPanel cfg={cfg} onChange={handleCfgChange} />}
             {activeSection === 'skills' && (
@@ -2600,6 +3890,7 @@ export function ConfigTab() {
             )}
             {activeSection === 'search' && <SearchPanel {...panelProps} />}
             {activeSection === 'memory' && <MemoryPanel cfg={cfg} onChange={handleCfgChange} />}
+            {activeSection === 'mcp' && <McpPanel {...panelProps} />}
             {activeSection === 'federation' && <FederationPanel {...panelProps} />}
             {activeSection === 'log' && <LogPanel cfg={cfg} onChange={handleCfgChange} />}
             {activeSection === 'json' && (
@@ -2893,6 +4184,37 @@ export function ConfigTab() {
               })
             }
           />
+          {agentMcpToolOptions.length > 0 ? (
+            <GroupedMcpChoiceRow
+              label="Available MCP tools"
+              help="勾选这个 Agent 可以使用的 MCP 工具。这里会自动同步对应的 allow 和 deny 规则。"
+              groups={agentMcpToolGroups}
+              selected={selectedAgentMcpTools}
+              onChange={(selectedMcpTools) =>
+                setAgentModal({
+                  ...agentModal,
+                  draft: {
+                    ...agentModal.draft,
+                    tools: updateAgentMcpToolSelection(
+                      agentModal.draft.tools,
+                      agentMcpToolOptions,
+                      selectedMcpTools,
+                    ),
+                  },
+                })
+              }
+            />
+          ) : (
+            <FieldRow>
+              <FieldLabel
+                label="Available MCP tools"
+                help="先在 MCP 面板连通并刷新运行时，这里才会出现可勾选的 MCP 工具。"
+              />
+              <div className="rounded-lg border border-dashed border-slate-700 bg-slate-900/40 px-3 py-2 text-sm text-slate-500">
+                No MCP tools discovered yet.
+              </div>
+            </FieldRow>
+          )}
           <TagInputRow
             label="Tools allow"
             help="Optional tool allowlist — checked preset or custom name. Empty = all tools allowed."
@@ -3092,6 +4414,12 @@ export function ConfigTab() {
             setSearchModal(null);
           }}
         >
+          {(() => {
+            const setSearchDraft = (draft: SearchProvider) =>
+              setSearchModal({ ...searchModal, draft });
+
+            return (
+              <>
           <SelectRow
             label="Provider"
             help="Choose provider type."
@@ -3107,10 +4435,7 @@ export function ConfigTab() {
             value={searchModal.draft.maxResults}
             min={1}
             onChange={(maxResults) =>
-              setSearchModal({
-                ...searchModal,
-                draft: { ...searchModal.draft, maxResults } as SearchProvider,
-              })
+              setSearchDraft({ ...searchModal.draft, maxResults })
             }
           />
           {searchModal.draft.provider === 'tavily' && (
@@ -3120,7 +4445,7 @@ export function ConfigTab() {
                 help="Tavily API key."
                 value={searchModal.draft.apiKey}
                 onChange={(apiKey) =>
-                  setSearchModal({ ...searchModal, draft: { ...searchModal.draft, apiKey } })
+                  setSearchDraft({ ...(searchModal.draft as SearchTavily), apiKey })
                 }
               />
               <SelectRow
@@ -3129,7 +4454,7 @@ export function ConfigTab() {
                 value={searchModal.draft.searchDepth}
                 options={['basic', 'advanced']}
                 onChange={(searchDepth) =>
-                  setSearchModal({ ...searchModal, draft: { ...searchModal.draft, searchDepth } })
+                  setSearchDraft({ ...(searchModal.draft as SearchTavily), searchDepth })
                 }
               />
             </>
@@ -3141,7 +4466,7 @@ export function ConfigTab() {
                 help="Bing Search API key."
                 value={searchModal.draft.apiKey}
                 onChange={(apiKey) =>
-                  setSearchModal({ ...searchModal, draft: { ...searchModal.draft, apiKey } })
+                  setSearchDraft({ ...(searchModal.draft as SearchBing), apiKey })
                 }
               />
               <TextRow
@@ -3149,7 +4474,7 @@ export function ConfigTab() {
                 help="Bing market code, e.g. zh-CN."
                 value={searchModal.draft.market}
                 onChange={(market) =>
-                  setSearchModal({ ...searchModal, draft: { ...searchModal.draft, market } })
+                  setSearchDraft({ ...(searchModal.draft as SearchBing), market })
                 }
               />
             </>
@@ -3161,7 +4486,7 @@ export function ConfigTab() {
                 help="SerpApi API key."
                 value={searchModal.draft.apiKey}
                 onChange={(apiKey) =>
-                  setSearchModal({ ...searchModal, draft: { ...searchModal.draft, apiKey } })
+                  setSearchDraft({ ...(searchModal.draft as SearchSerpApi), apiKey })
                 }
               />
               <TextRow
@@ -3169,7 +4494,7 @@ export function ConfigTab() {
                 help="Search engine name for SerpApi."
                 value={searchModal.draft.engine}
                 onChange={(engine) =>
-                  setSearchModal({ ...searchModal, draft: { ...searchModal.draft, engine } })
+                  setSearchDraft({ ...(searchModal.draft as SearchSerpApi), engine })
                 }
               />
               <TextRow
@@ -3177,7 +4502,7 @@ export function ConfigTab() {
                 help="Language hint for SerpApi."
                 value={searchModal.draft.hl}
                 onChange={(hl) =>
-                  setSearchModal({ ...searchModal, draft: { ...searchModal.draft, hl } })
+                  setSearchDraft({ ...(searchModal.draft as SearchSerpApi), hl })
                 }
               />
               <TextRow
@@ -3185,7 +4510,7 @@ export function ConfigTab() {
                 help="Geo hint for SerpApi."
                 value={searchModal.draft.gl}
                 onChange={(gl) =>
-                  setSearchModal({ ...searchModal, draft: { ...searchModal.draft, gl } })
+                  setSearchDraft({ ...(searchModal.draft as SearchSerpApi), gl })
                 }
               />
             </>
@@ -3196,11 +4521,170 @@ export function ConfigTab() {
               help="DuckDuckGo region code, e.g. cn-zh."
               value={searchModal.draft.region}
               onChange={(region) =>
-                setSearchModal({ ...searchModal, draft: { ...searchModal.draft, region } })
+                setSearchDraft({ ...(searchModal.draft as SearchDuckDuckGo), region })
               }
             />
           )}
+              </>
+            );
+          })()}
         </FormModal>
+      )}
+
+      {cfg && mcpModal && (
+        <FormModal
+          title={mcpModal.mode === 'add' ? 'Add MCP Server' : 'Edit MCP Server'}
+          description="Configure one MCP server. The runtime currently supports stdio execution and keeps SSE declarations for forward compatibility."
+          onClose={() => setMcpModal(null)}
+          onSubmit={() => {
+            const servers = [...cfg.mcp.servers];
+            const draft = {
+              ...mcpModal.draft,
+              id: mcpModal.draft.id.trim(),
+              toolPrefix: mcpModal.draft.toolPrefix?.trim() ?? '',
+              command: mcpModal.draft.command?.trim() ?? '',
+              url: mcpModal.draft.url?.trim() ?? '',
+              args: (mcpModal.draft.args ?? []).map((arg) => arg.trim()).filter(Boolean),
+              allowTools: (mcpModal.draft.allowTools ?? []).map((name) => name.trim()).filter(Boolean),
+              env: Object.fromEntries(
+                Object.entries(mcpModal.draft.env ?? {}).filter((entry) => entry[0].trim()),
+              ),
+            } satisfies McpServerConfig;
+            if (!draft.id) {
+              return;
+            }
+            if (mcpModal.mode === 'add') servers.push(draft);
+            else if (mcpModal.index !== undefined) servers[mcpModal.index] = draft;
+            handleCfgChange({ ...cfg, mcp: { ...cfg.mcp, servers } });
+            setMcpModal(null);
+          }}
+        >
+          <TextRow
+            label="Server ID"
+            help="Stable identifier used in tool prefixing and future health/status surfaces."
+            value={mcpModal.draft.id}
+            onChange={(id) => setMcpModal({ ...mcpModal, draft: { ...mcpModal.draft, id } })}
+          />
+          <ToggleRow
+            label="Enabled"
+            help="Disabled servers stay in config but are not connected during gateway startup."
+            checked={mcpModal.draft.enabled}
+            onChange={(enabled) =>
+              setMcpModal({ ...mcpModal, draft: { ...mcpModal.draft, enabled } })
+            }
+          />
+          <SelectRow
+            label="Transport"
+            help="stdio is implemented now. SSE can be declared for later compatibility but will not yet connect."
+            value={mcpModal.draft.transport}
+            options={['stdio', 'sse']}
+            onChange={(transport) =>
+              setMcpModal({
+                ...mcpModal,
+                draft: {
+                  ...mcpModal.draft,
+                  transport,
+                  command: transport === 'stdio' ? mcpModal.draft.command ?? '' : '',
+                  url: transport === 'sse' ? mcpModal.draft.url ?? '' : '',
+                },
+              })
+            }
+          />
+          <TextRow
+            label="Tool prefix"
+            help="Optional tool name prefix. Leave blank to use mcp_serverId."
+            value={mcpModal.draft.toolPrefix ?? ''}
+            onChange={(toolPrefix) =>
+              setMcpModal({ ...mcpModal, draft: { ...mcpModal.draft, toolPrefix } })
+            }
+          />
+          <SelectRow
+            label="Approval"
+            help="inherit keeps agent-level approval behavior. always/never reserve space for later stricter MCP-specific policy."
+            value={mcpModal.draft.approval}
+            options={['inherit', 'always', 'never']}
+            onChange={(approval) =>
+              setMcpModal({ ...mcpModal, draft: { ...mcpModal.draft, approval } })
+            }
+          />
+          <NumberRow
+            label="Timeout (ms)"
+            help="Upper bound for one MCP request."
+            value={mcpModal.draft.timeoutMs}
+            min={1000}
+            onChange={(timeoutMs) =>
+              setMcpModal({ ...mcpModal, draft: { ...mcpModal.draft, timeoutMs } })
+            }
+          />
+          {mcpModal.draft.transport === 'stdio' ? (
+            <>
+              <TextRow
+                label="Command"
+                help="Executable used to start the MCP server process."
+                value={mcpModal.draft.command ?? ''}
+                onChange={(command) =>
+                  setMcpModal({ ...mcpModal, draft: { ...mcpModal.draft, command } })
+                }
+              />
+              <DeferredTextRow
+                label="Args (CSV)"
+                help="Command arguments, comma-separated."
+                value={toCsv(mcpModal.draft.args)}
+                onChange={(raw) =>
+                  setMcpModal({ ...mcpModal, draft: { ...mcpModal.draft, args: asStringArray(raw) } })
+                }
+              />
+            </>
+          ) : (
+            <TextRow
+              label="SSE URL"
+              help="Server-sent events endpoint for the MCP server."
+              value={mcpModal.draft.url ?? ''}
+              onChange={(url) => setMcpModal({ ...mcpModal, draft: { ...mcpModal.draft, url } })}
+            />
+          )}
+          <DeferredTextRow
+            label="Allow tools (CSV)"
+            help="Optional allowlist of MCP tool names. Leave blank to expose all tools from this server."
+            value={toCsv(mcpModal.draft.allowTools)}
+            onChange={(raw) =>
+              setMcpModal({
+                ...mcpModal,
+                draft: { ...mcpModal.draft, allowTools: asStringArray(raw) },
+              })
+            }
+          />
+          <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-4 items-start">
+            <FieldLabel
+              label="Env"
+              help="One KEY=value per line. Only used for stdio transport process launch."
+            />
+            <textarea
+              value={formatEnvLines(mcpModal.draft.env)}
+              onChange={(e) =>
+                setMcpModal({
+                  ...mcpModal,
+                  draft: { ...mcpModal.draft, env: parseEnvLines(e.target.value) },
+                })
+              }
+              rows={6}
+              spellCheck={false}
+              className="w-full font-mono text-sm bg-slate-900/80 ring-1 ring-slate-700 focus:ring-indigo-500/60 focus:outline-none text-slate-200 rounded-xl px-4 py-3 resize-y transition-shadow"
+            />
+          </div>
+        </FormModal>
+      )}
+
+      {cfg && mcpInspector && (
+        <McpHistoryInspectorModal
+          server={cfg.mcp.servers.find((server) => server.id === mcpInspector.serverId)}
+          runtimeStatus={mcpStatusData?.servers?.find((server) => server.serverId === mcpInspector.serverId)}
+          summary={mcpStatusData?.summaries?.find((summary) => summary.serverId === mcpInspector.serverId)}
+          attention={mcpStatusData?.attention?.find((entry) => entry.serverId === mcpInspector.serverId)}
+          inspector={mcpInspector}
+          onClose={() => setMcpInspector(null)}
+          onRefresh={() => openMcpInspector(mcpInspector.serverId)}
+        />
       )}
 
       {cfg && peerModal && (

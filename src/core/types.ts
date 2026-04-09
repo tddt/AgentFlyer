@@ -171,6 +171,8 @@ export interface ToolDefinition {
   inputSchema: Record<string, unknown>;
 }
 
+export type ToolApprovalMode = 'inherit' | 'always' | 'never';
+
 export interface ToolCallResult {
   isError: boolean;
   content: string;

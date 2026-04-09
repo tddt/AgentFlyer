@@ -24,6 +24,41 @@ function formatAgentOptionLabel(agent: AgentInfo): string {
   return agent.sandboxProfile ? `${baseLabel} [sandbox:${agent.sandboxProfile}]` : baseLabel;
 }
 
+function getPreferredAgent(agentList: AgentInfo[]): AgentInfo | null {
+  return (
+    agentList.find((agent) => agent.sandboxProfile === 'readonly-output') ??
+    agentList.find((agent) => !!agent.sandboxProfile) ??
+    null
+  );
+}
+
+function getWorkflowAgentHint(step: WorkflowStep, agentList: AgentInfo[]): string | null {
+  const agentId = step.agentId?.trim();
+  if (!agentId) {
+    const preferred = getPreferredAgent(agentList);
+    return preferred
+      ? `建议优先选择 ${formatAgentOptionLabel(preferred)} 作为受限执行目标。`
+      : null;
+  }
+
+  const selected = agentList.find((agent) => agent.agentId === agentId);
+  if (!selected) {
+    return null;
+  }
+  if (selected.sandboxProfile === 'readonly-output') {
+    return '当前已选择 readonly-output，只读执行路径优先。';
+  }
+  if (selected.sandboxProfile) {
+    return `当前已绑定 sandbox:${selected.sandboxProfile}。`;
+  }
+
+  const preferred = getPreferredAgent(agentList);
+  if (preferred && preferred.agentId !== selected.agentId) {
+    return `当前 agent 未绑定 sandboxProfile，建议切换到 ${formatAgentOptionLabel(preferred)}。`;
+  }
+  return '当前 agent 未绑定 sandboxProfile，建议在自动化执行前绑定 readonly-output 或其他受限 profile。';
+}
+
 // ── WorkflowGuide ─────────────────────────────────────────────────────────────
 
 function WorkflowGuide({ onClose }: { onClose: () => void }) {
@@ -703,6 +738,11 @@ function StepRow({
   onSelect: () => void;
 }) {
   const type: StepType = step.type ?? 'agent';
+  const selectedAgent = step.agentId
+    ? agents.find((agent) => agent.agentId === step.agentId)
+    : undefined;
+  const preferredAgent = getPreferredAgent(agents);
+  const workflowAgentHint = type === 'agent' ? getWorkflowAgentHint(step, agents) : null;
 
   return (
     <div
@@ -792,18 +832,42 @@ function StepRow({
 
       {/* Agent selector */}
       {type === 'agent' && (
-        <select
-          className={inputCls}
-          value={step.agentId ?? ''}
-          onChange={(e) => onChange({ ...step, agentId: e.target.value })}
-        >
-          <option value="">— 选择 Agent —</option>
-          {agents.map((a) => (
-            <option key={a.agentId} value={a.agentId}>
-              {formatAgentOptionLabel(a)}
-            </option>
-          ))}
-        </select>
+        <div className="flex flex-col gap-2">
+          <select
+            className={inputCls}
+            value={step.agentId ?? ''}
+            onChange={(e) => onChange({ ...step, agentId: e.target.value })}
+          >
+            <option value="">— 选择 Agent —</option>
+            {agents.map((a) => (
+              <option key={a.agentId} value={a.agentId}>
+                {formatAgentOptionLabel(a)}
+              </option>
+            ))}
+          </select>
+          <div className="flex flex-wrap gap-2 items-center">
+            {selectedAgent?.sandboxProfile === 'readonly-output' && (
+              <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-200">
+                Readonly
+              </span>
+            )}
+            {selectedAgent?.sandboxProfile && selectedAgent.sandboxProfile !== 'readonly-output' && (
+              <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-[11px] text-cyan-200">
+                sandbox:{selectedAgent.sandboxProfile}
+              </span>
+            )}
+            {preferredAgent && selectedAgent?.agentId === preferredAgent.agentId && (
+              <span className="rounded-full border border-indigo-500/30 bg-indigo-500/10 px-2 py-1 text-[11px] text-indigo-200">
+                Preferred
+              </span>
+            )}
+          </div>
+          {workflowAgentHint && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200 leading-relaxed">
+              {workflowAgentHint}
+            </div>
+          )}
+        </div>
       )}
 
       {/* Message template (agent / http body) */}

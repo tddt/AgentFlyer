@@ -1,5 +1,5 @@
 import { createLogger } from '../../core/logger.js';
-import type { ToolCallResult, ToolDefinition } from '../../core/types.js';
+import type { ToolApprovalMode, ToolCallResult, ToolDefinition } from '../../core/types.js';
 
 const logger = createLogger('tools:registry');
 
@@ -10,6 +10,8 @@ export interface RegisteredTool {
   handler: ToolHandler;
   /** Category for grouping (e.g. 'builtin', 'skill', 'mesh'). */
   category: string;
+  /** Optional tool-local approval override layered on top of agent policy. */
+  approvalMode?: ToolApprovalMode;
 }
 
 export class ToolRegistry {
@@ -22,6 +24,15 @@ export class ToolRegistry {
 
   registerMany(tools: RegisteredTool[]): void {
     for (const t of tools) this.register(t);
+  }
+
+  replaceCategory(category: string, tools: RegisteredTool[]): void {
+    for (const [name, existing] of this.tools.entries()) {
+      if (existing.category === category) {
+        this.tools.delete(name);
+      }
+    }
+    this.registerMany(tools);
   }
 
   has(name: string): boolean {
