@@ -60,7 +60,11 @@ export function minimumWorkflowSuperNodeParticipants(type: WorkflowSuperNodeType
   return requiresWorkflowSuperNodeParticipants(type) ? 1 : 0;
 }
 
-function describeSuperNodeRole(type: WorkflowSuperNodeType, rolePrompt: string, index: number): string {
+function describeSuperNodeRole(
+  type: WorkflowSuperNodeType,
+  rolePrompt: string,
+  index: number,
+): string {
   switch (type) {
     case 'multi_source':
       return `信息采集维度 ${index + 1}: ${rolePrompt}`;

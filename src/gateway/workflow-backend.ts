@@ -16,10 +16,6 @@ import {
   readMcpServerHistory,
   summarizeMcpServerHistory,
 } from '../mcp/index.js';
-import {
-  isWorkflowSuperNodeType,
-  minimumWorkflowSuperNodeParticipants,
-} from './workflow-super-nodes.js';
 import { publishDeliverableTargets } from './deliverable-publication.js';
 import {
   type DeliverablePublicationTarget,
@@ -28,6 +24,10 @@ import {
 } from './deliverables.js';
 import type { RpcContext } from './rpc.js';
 import { WorkflowKernelService } from './workflow-kernel.js';
+import {
+  isWorkflowSuperNodeType,
+  minimumWorkflowSuperNodeParticipants,
+} from './workflow-super-nodes.js';
 
 const logger = createLogger('gateway:workflow');
 
@@ -991,7 +991,7 @@ async function getWorkflowKernelService(ctx: RpcContext): Promise<WorkflowKernel
     const service = new WorkflowKernelService({
       dataDir: ctx.dataDir,
       runners: ctx.runners,
-      workflowAgentStepTimeoutMs: config.gateway.workflow?.agentStepTimeoutMs,
+      workflowAgentStepTimeoutMs: config.gateway?.workflow?.agentStepTimeoutMs,
       callbacks: {
         async onRunComplete(workflow, run) {
           const finalRun = cloneWorkflowRun(run);

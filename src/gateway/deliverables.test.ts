@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  buildWorkflowDeliverable,
-  type ArtifactRef,
-} from './deliverables.js';
+import { type ArtifactRef, buildWorkflowDeliverable } from './deliverables.js';
 import type { WorkflowDef, WorkflowRunRecord } from './workflow-backend.js';
 
 function createWorkflow(overrides?: Partial<WorkflowDef>): WorkflowDef {

@@ -638,8 +638,9 @@ export async function startGateway(
       if (skillCount > 0) {
         logger.info('Skills loaded for agent', {
           agentId: agentCfg.id,
-          skills: filterSkillsForAgent(globalSkillRegistry.list(), agentCfg.skills ?? [])
-            .map((skill) => skill.id),
+          skills: filterSkillsForAgent(globalSkillRegistry.list(), agentCfg.skills ?? []).map(
+            (skill) => skill.id,
+          ),
         });
       }
       runners.set(agentCfg.id, runner);

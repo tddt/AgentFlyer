@@ -359,7 +359,9 @@ describe('WorkflowKernelService archived completion', () => {
     const completed = await service.waitForCompletion(started.runId);
 
     expect(completed.status).toBe('error');
-    expect(completed.stepResults[0]?.error).toContain("Agent 'agent-main' turn timed out after 20ms");
+    expect(completed.stepResults[0]?.error).toContain(
+      "Agent 'agent-main' turn timed out after 20ms",
+    );
   });
 
   it('serializes concurrent workflow turns for the same agent instead of failing busy', async () => {

@@ -1069,18 +1069,21 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
           });
           void ctx.agentQueues
             .for(agentId)
-            .enqueue(async () => {
-              const queued = agentKernel.getRun(reserved.runId);
-              if (!queued || queued.processStatus !== 'waiting' || queued.phase !== 'pending') {
-                return;
-              }
-              await agentKernel.startTurn({
-                runId: reserved.runId,
-                agentId,
-                userMessage: message,
-                threadKey: thread,
-              });
-            }, { taskKey: reserved.runId })
+            .enqueue(
+              async () => {
+                const queued = agentKernel.getRun(reserved.runId);
+                if (!queued || queued.processStatus !== 'waiting' || queued.phase !== 'pending') {
+                  return;
+                }
+                await agentKernel.startTurn({
+                  runId: reserved.runId,
+                  agentId,
+                  userMessage: message,
+                  threadKey: thread,
+                });
+              },
+              { taskKey: reserved.runId },
+            )
             .catch((error) => {
               logger.error('Queued agent.run failed to start', {
                 agentId,

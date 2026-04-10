@@ -6,15 +6,6 @@ import type {
 } from '../core/kernel/types.js';
 import type { WorkflowDef, WorkflowRunRecord, WorkflowStepResult } from './workflow-backend.js';
 import {
-  buildWorkflowSuperNodeCoordinatorPrompt,
-  buildWorkflowSuperNodeParticipantPrompt,
-  isWorkflowSuperNodeType,
-  minimumWorkflowSuperNodeParticipants,
-  normalizeWorkflowSuperNodePrompts,
-  type WorkflowSuperNodeParticipantResult,
-  type WorkflowSuperNodeType,
-} from './workflow-super-nodes.js';
-import {
   applyFormatInstruction,
   buildWorkflowStepIndexMap,
   deserializeStepVars,
@@ -28,6 +19,15 @@ import {
   serializeStepVars,
   snapshotVars,
 } from './workflow-runtime-shared.js';
+import {
+  type WorkflowSuperNodeParticipantResult,
+  type WorkflowSuperNodeType,
+  buildWorkflowSuperNodeCoordinatorPrompt,
+  buildWorkflowSuperNodeParticipantPrompt,
+  isWorkflowSuperNodeType,
+  minimumWorkflowSuperNodeParticipants,
+  normalizeWorkflowSuperNodePrompts,
+} from './workflow-super-nodes.js';
 
 export interface WorkflowProcessInput {
   runId: string;
@@ -221,7 +221,8 @@ export class WorkflowProcessRuntime
       };
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error);
-      const superNodeTrace = error instanceof WorkflowSuperNodeExecutionError ? error.trace : undefined;
+      const superNodeTrace =
+        error instanceof WorkflowSuperNodeExecutionError ? error.trace : undefined;
       if (state.currentAttempt < maxRetries) {
         return {
           signal: 'RETRYABLE_ERROR',
@@ -396,7 +397,9 @@ export class WorkflowProcessRuntime
       throw new Error(`Workflow super node step handler is not configured for '${type}'`);
     }
 
-    const participantAgentIds = (step.participantAgentIds ?? []).map((agentId) => agentId.trim()).filter(Boolean);
+    const participantAgentIds = (step.participantAgentIds ?? [])
+      .map((agentId) => agentId.trim())
+      .filter(Boolean);
     const minimumParticipants = minimumWorkflowSuperNodeParticipants(type);
     if (participantAgentIds.length < minimumParticipants) {
       throw new Error(
@@ -421,7 +424,11 @@ export class WorkflowProcessRuntime
               total: participantAgentIds.length,
               domainRules: step.domainRules,
             }),
-            threadKey: workflowThreadKey(state.run.runId, currentStepIndex, `participant-${index + 1}`),
+            threadKey: workflowThreadKey(
+              state.run.runId,
+              currentStepIndex,
+              `participant-${index + 1}`,
+            ),
           });
 
           return {
@@ -436,7 +443,6 @@ export class WorkflowProcessRuntime
             error: error instanceof Error ? error.message : String(error),
           };
         }
-
       }),
     );
 

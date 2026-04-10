@@ -236,7 +236,7 @@ export class AgentKernelService {
     const threadKey = input.threadKey?.trim()
       ? input.threadKey
       : runner
-        ? ((runner.currentSessionKey as unknown as string).split(':').slice(2).join(':') || 'default')
+        ? (runner.currentSessionKey as unknown as string).split(':').slice(2).join(':') || 'default'
         : 'default';
     const now = Date.now();
     this.queuedRuns.set(runId, {

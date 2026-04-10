@@ -3,12 +3,12 @@ import type * as net from 'node:net';
 import type { WebSocket } from 'ws';
 import { WebSocketServer } from 'ws';
 import { createLogger } from '../core/logger.js';
+import type { AgentQueueRegistry } from './agent-queue.js';
 import type { InboxBroadcaster } from './inbox-broadcaster.js';
 import type { IntentRouter } from './intent-router.js';
 import type { LogBroadcaster } from './log-buffer.js';
 import { routeRequest } from './router.js';
 import type { RouterOptions } from './router.js';
-import type { AgentQueueRegistry } from './agent-queue.js';
 
 const logger = createLogger('gateway:server');
 

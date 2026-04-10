@@ -234,7 +234,8 @@ describe('WorkflowProcessRuntime', () => {
   });
 
   it('executes multi_source super nodes by fanning out participant agents before coordinator synthesis', async () => {
-    const calls: Array<{ agentId: string; stepId: string; message: string; threadKey: string }> = [];
+    const calls: Array<{ agentId: string; stepId: string; message: string; threadKey: string }> =
+      [];
     const workflow = createWorkflow({
       steps: [
         {

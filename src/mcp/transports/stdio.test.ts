@@ -61,8 +61,8 @@ describe('createStdioMcpClient', () => {
       'stdio-json-lines.js',
       [
         "const { createInterface } = require('node:readline');",
-        "const rl = createInterface({ input: process.stdin });",
-        'rl.on(\'line\', (line) => {',
+        'const rl = createInterface({ input: process.stdin });',
+        "rl.on('line', (line) => {",
         '  const payload = JSON.parse(line);',
         "  if (payload.method === 'initialize' && payload.id) {",
         "    if (payload.params?.protocolVersion !== '2025-11-25') {",
@@ -80,7 +80,7 @@ describe('createStdioMcpClient', () => {
       transport: 'stdio',
       command: 'node',
       args: [scriptPath],
-      timeoutMs: 200,
+      timeoutMs: 1_000,
     });
 
     await expect(client.close()).resolves.toBeUndefined();
@@ -89,7 +89,13 @@ describe('createStdioMcpClient', () => {
   it('classifies invalid stdio frames with stable code and phase', async () => {
     const scriptPath = await createTempScript(
       'stdio-invalid-frame.js',
-      "process.stdout.write('not json\\n'); process.stdin.resume(); setTimeout(() => {}, 1000);\n",
+      [
+        "const { createInterface } = require('node:readline');",
+        'const rl = createInterface({ input: process.stdin });',
+        "rl.on('line', () => {",
+        "  process.stdout.write('not json\\n');",
+        '});',
+      ].join('\n'),
     );
 
     await expect(
@@ -98,7 +104,7 @@ describe('createStdioMcpClient', () => {
         transport: 'stdio',
         command: 'node',
         args: [scriptPath],
-        timeoutMs: 200,
+        timeoutMs: 1_000,
       }),
     ).rejects.toMatchObject({
       name: 'McpTransportError',

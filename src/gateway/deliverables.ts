@@ -282,9 +282,7 @@ function readDeliverableStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value
-    .map((item) => (typeof item === 'string' ? item.trim() : ''))
-    .filter(Boolean);
+  return value.map((item) => (typeof item === 'string' ? item.trim() : '')).filter(Boolean);
 }
 
 function joinSummaryParts(parts: string[]): string {
@@ -346,8 +344,12 @@ function buildStructuredSuperNodeDeliverableSummary(
       if (readDeliverableStringArray(data.coreData).length === 0) missingFields.push('核心数据');
       if (readDeliverableStringArray(data.signals).length === 0) missingFields.push('趋势信号');
       if (readDeliverableStringArray(data.anomalies).length === 0) missingFields.push('异常点');
-      if (readDeliverableStringArray(data.recommendedActions).length === 0) missingFields.push('建议动作');
-      summaryParts = [title, synthesis ?? formatListPreview('核心数据', data.coreData, 1) ?? '待补充'];
+      if (readDeliverableStringArray(data.recommendedActions).length === 0)
+        missingFields.push('建议动作');
+      summaryParts = [
+        title,
+        synthesis ?? formatListPreview('核心数据', data.coreData, 1) ?? '待补充',
+      ];
       previewParts = compactSummaryParts([
         title,
         synthesis ? `综合判断: ${synthesis}` : '',
@@ -366,8 +368,12 @@ function buildStructuredSuperNodeDeliverableSummary(
       if (readDeliverableStringArray(data.coreClaims).length === 0) missingFields.push('核心观点');
       if (readDeliverableStringArray(data.disagreements).length === 0) missingFields.push('分歧点');
       if (readDeliverableStringArray(data.consensus).length === 0) missingFields.push('共识结论');
-      if (readDeliverableStringArray(data.evidenceGaps).length === 0) missingFields.push('待补证据');
-      summaryParts = [title, moderatorSummary ?? formatListPreview('共识结论', data.consensus, 1) ?? '待补充'];
+      if (readDeliverableStringArray(data.evidenceGaps).length === 0)
+        missingFields.push('待补证据');
+      summaryParts = [
+        title,
+        moderatorSummary ?? formatListPreview('共识结论', data.consensus, 1) ?? '待补充',
+      ];
       previewParts = compactSummaryParts([
         title,
         moderatorSummary ? `主持总结: ${moderatorSummary}` : '',
@@ -389,9 +395,15 @@ function buildStructuredSuperNodeDeliverableSummary(
       if (!priority) missingFields.push('优先级');
       if (!confidence) missingFields.push('置信度');
       if (!rationale) missingFields.push('决策依据');
-      if (readDeliverableStringArray(data.executionSteps).length === 0) missingFields.push('执行步骤');
-      if (readDeliverableStringArray(data.dependencies).length === 0) missingFields.push('关键依赖');
-      summaryParts = [title, direction ? `方向:${direction}` : '方向待补充', priority ? `优先级:${priority}` : ''];
+      if (readDeliverableStringArray(data.executionSteps).length === 0)
+        missingFields.push('执行步骤');
+      if (readDeliverableStringArray(data.dependencies).length === 0)
+        missingFields.push('关键依赖');
+      summaryParts = [
+        title,
+        direction ? `方向:${direction}` : '方向待补充',
+        priority ? `优先级:${priority}` : '',
+      ];
       previewParts = compactSummaryParts([
         title,
         direction ? `方向: ${direction}` : '',
@@ -413,7 +425,11 @@ function buildStructuredSuperNodeDeliverableSummary(
       if (readDeliverableStringArray(data.majorRisks).length === 0) missingFields.push('主要风险');
       if (readDeliverableStringArray(data.mitigations).length === 0) missingFields.push('整改建议');
       if (readDeliverableStringArray(data.vetoItems).length === 0) missingFields.push('否决项');
-      summaryParts = [title, riskLevel ? `风险等级:${riskLevel}` : '风险等级待补充', proceedRecommendation ? `建议:${proceedRecommendation}` : ''];
+      summaryParts = [
+        title,
+        riskLevel ? `风险等级:${riskLevel}` : '风险等级待补充',
+        proceedRecommendation ? `建议:${proceedRecommendation}` : '',
+      ];
       previewParts = compactSummaryParts([
         title,
         riskLevel ? `风险等级: ${riskLevel}` : '',
@@ -434,8 +450,13 @@ function buildStructuredSuperNodeDeliverableSummary(
       if (!owner) missingFields.push('责任归属');
       if (!decisionMemo) missingFields.push('决策备忘');
       if (readDeliverableStringArray(data.milestones).length === 0) missingFields.push('落地节点');
-      if (readDeliverableStringArray(data.watchItems).length === 0) missingFields.push('继续观察项');
-      summaryParts = [title, verdict ? `拍板:${verdict}` : '拍板待补充', owner ? `责任:${owner}` : ''];
+      if (readDeliverableStringArray(data.watchItems).length === 0)
+        missingFields.push('继续观察项');
+      summaryParts = [
+        title,
+        verdict ? `拍板:${verdict}` : '拍板待补充',
+        owner ? `责任:${owner}` : '',
+      ];
       previewParts = compactSummaryParts([
         title,
         verdict ? `拍板结果: ${verdict}` : '',

@@ -884,7 +884,13 @@ describe('AgentKernelService', () => {
       },
       ctx,
     );
-    expect((listResponse.result as { agents: Array<{ agentId: string; activity: { pendingCount: number } }> }).agents).toContainEqual(
+    expect(
+      (
+        listResponse.result as {
+          agents: Array<{ agentId: string; activity: { pendingCount: number } }>;
+        }
+      ).agents,
+    ).toContainEqual(
       expect.objectContaining({
         agentId: 'agent-main',
         activity: expect.objectContaining({

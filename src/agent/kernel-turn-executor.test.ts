@@ -62,7 +62,11 @@ class HangingProvider implements LLMProvider {
   }
 }
 
-function createRunner(dataDir: string, agentId = 'agent-main', provider?: LLMProvider): AgentRunner {
+function createRunner(
+  dataDir: string,
+  agentId = 'agent-main',
+  provider?: LLMProvider,
+): AgentRunner {
   return new AgentRunner(
     {
       id: agentId,
@@ -186,7 +190,6 @@ describe('executeAgentTurnViaKernel', () => {
     await expect(
       executeAgentTurnViaKernel({
         runners: new Map([['agent-main', runner]]),
-        dataDir,
         timeoutMs: 20,
         input: {
           agentId: 'agent-main',

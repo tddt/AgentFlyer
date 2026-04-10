@@ -35,11 +35,11 @@ export class AgentQueue {
           resolve(undefined as T);
         },
         run: async (): Promise<void> => {
-        try {
+          try {
             resolve(await fn());
-        } catch (err) {
-          reject(err);
-        }
+          } catch (err) {
+            reject(err);
+          }
         },
       };
 
@@ -104,7 +104,7 @@ export interface AgentQueueSnapshot {
   busy: boolean;
 }
 
-interface QueuedTask<T> {
+interface QueuedTask<_T> {
   taskKey?: string;
   cancel: () => void;
   run: () => Promise<void>;
@@ -136,11 +136,13 @@ export class AgentQueueRegistry {
 
   /** Return current queue status for an agent. */
   status(agentId: string): AgentQueueSnapshot {
-    return this._queues.get(agentId)?.snapshot ?? {
-      hasActiveTask: false,
-      pendingCount: 0,
-      busy: false,
-    };
+    return (
+      this._queues.get(agentId)?.snapshot ?? {
+        hasActiveTask: false,
+        pendingCount: 0,
+        busy: false,
+      }
+    );
   }
 
   cancelPending(agentId: string, taskKey: string): boolean {

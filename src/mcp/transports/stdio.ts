@@ -47,7 +47,6 @@ type JsonRpcSuccess = { jsonrpc: '2.0'; id: number; result: unknown };
 type JsonRpcFailure = { jsonrpc: '2.0'; id: number; error: { code: number; message: string } };
 type JsonRpcResponse = JsonRpcSuccess | JsonRpcFailure;
 
-
 function toStdioFrameError(error: unknown): McpTransportError {
   if (error instanceof McpTransportError) {
     return error;
@@ -156,6 +155,7 @@ class StdioMcpClient implements McpClient {
   private nextRequestId = 1;
   private stdoutBuffer: Buffer = Buffer.alloc(0);
   private closed = false;
+  private fatalStreamError: Error | null = null;
 
   constructor(private readonly server: McpServerConfigLike) {
     if (!server.command) {
@@ -200,7 +200,8 @@ class StdioMcpClient implements McpClient {
           this.handleResponse(frame);
         }
       } catch (error) {
-        this.rejectAll(toStdioFrameError(error));
+        this.fatalStreamError = toStdioFrameError(error);
+        this.rejectAll(this.fatalStreamError);
       }
     });
 
@@ -280,6 +281,10 @@ class StdioMcpClient implements McpClient {
   }
 
   private async request(method: string, params: unknown): Promise<unknown> {
+    if (this.fatalStreamError) {
+      throw this.fatalStreamError;
+    }
+
     const requestId = this.nextRequestId++;
     const timeoutMs = this.server.timeoutMs ?? 20_000;
 

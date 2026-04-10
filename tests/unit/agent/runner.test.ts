@@ -331,7 +331,7 @@ describe('AgentRunner', () => {
     await runner.runTurn('persist meta error code');
     const meta = await metaStore.get(runner.currentSessionKey);
 
-    expect(meta?.status).toBe('error');
+    expect(meta?.status).toBe('suspended');
     expect(meta?.errorCode).toBe('rate_limit');
     expect(meta?.error).toContain('速率限制');
   });
@@ -373,12 +373,18 @@ describe('AgentRunner', () => {
       }
     }
 
-    const runner = new AgentRunner(createAgentConfig(), {
-      provider: new EndlessToolProvider(),
-      toolRegistry,
-      sessionStore: new SessionStore(dir),
-      metaStore: new SessionMetaStore(dir),
-    });
+    const runner = new AgentRunner(
+      {
+        ...createAgentConfig(),
+        tools: { ...createAgentConfig().tools, maxRounds: 20 },
+      },
+      {
+        provider: new EndlessToolProvider(),
+        toolRegistry,
+        sessionStore: new SessionStore(dir),
+        metaStore: new SessionMetaStore(dir),
+      },
+    );
 
     const result = await runner.runTurn('keep going');
 

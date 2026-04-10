@@ -115,8 +115,13 @@ export class AgentKernel {
       return { kind: 'idle' };
     }
 
+    const liveCandidate = this.getSnapshot(candidate.pid);
+    if (!liveCandidate) {
+      return { kind: 'idle' };
+    }
+
     const runtime = this.getRuntime(candidate.processType);
-    const running = this.updateSnapshot(candidate.pid, {
+    const running = this.updateSnapshot(liveCandidate.pid, {
       status: 'running',
       updatedAt: now,
     });
@@ -133,6 +138,10 @@ export class AgentKernel {
         metadata: running.metadata,
       });
 
+      if (!this.getSnapshot(running.pid)) {
+        return { kind: 'idle' };
+      }
+
       const nextSnapshot = this.applyStepResult(running, runtime, result, now);
       await this.checkpointStore.save(nextSnapshot);
       this.snapshots.set(nextSnapshot.pid, nextSnapshot);
@@ -143,6 +152,10 @@ export class AgentKernel {
         status: nextSnapshot.status,
       };
     } catch (error) {
+      if (!this.getSnapshot(running.pid)) {
+        return { kind: 'idle' };
+      }
+
       const fatal = toFatalError(error);
       const errored = this.updateSnapshot(candidate.pid, {
         status: 'error',

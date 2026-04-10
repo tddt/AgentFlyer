@@ -60,12 +60,9 @@ describe('AgentQueue hooks', () => {
       return 'first';
     });
 
-    const secondTask = queue.enqueue(
-      async () => 'second',
-      {
-        taskKey: 'queued-run-2',
-      },
-    );
+    const secondTask = queue.enqueue(async () => 'second', {
+      taskKey: 'queued-run-2',
+    });
 
     expect(queue.snapshot).toMatchObject({
       hasActiveTask: true,
