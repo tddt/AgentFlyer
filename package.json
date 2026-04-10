@@ -1,6 +1,6 @@
 {
   "name": "agentflyer",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "description": "Decentralized, cross-platform, multi-host federated AI Agent framework",
   "type": "module",
   "license": "MIT",
@@ -36,7 +36,7 @@
   "bin": {
     "agentflyer": "./dist/cli/main.js"
   },
-  "exports": {                 
+  "exports": {
     "./agent/process-runtime": "./dist/agent/process-runtime.js",
     "./memory": "./dist/memory/index.js",
     "./skills": "./dist/skills/index.js",
