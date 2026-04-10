@@ -5,6 +5,14 @@
 [![Node >= 22](https://img.shields.io/badge/Node-%3E%3D%2022-2563eb)](https://nodejs.org)
 [![MIT License](https://img.shields.io/badge/License-MIT-111827)](LICENSE)
 
+<div align="center">
+
+### Run agents like a system, not like a script.
+
+**Agent mesh · Workflow runtime · Deliverables · MCP · Sandbox · Multi-channel control plane**
+
+</div>
+
 Distributed AgentOS for multi-agent orchestration, workflows, memory, deliverables, and multi-channel AI runtimes.
 
 [中文说明](README_CN.md)
@@ -31,6 +39,17 @@ AgentFlyer is designed around five product-level ideas:
 - More practical than a research demo with no operator surface.
 
 If you want a repo that feels like the early shape of an actual Agent Operating System, this is the bet.
+
+## At A Glance
+
+| Layer | What you get |
+|---|---|
+| Collaboration | Mesh-native agents that can discover, delegate, and coordinate |
+| Orchestration | Workflow engine, scheduler, super nodes, execution history |
+| State | Sessions, hybrid memory, deliverables, artifacts |
+| Safety | Tool approval policy, sandbox profiles, controlled execution |
+| Operations | Console UI, CLI, routing, stats, multi-channel entry points |
+| Expansion | MCP tools today, federation-ready architecture for tomorrow |
 
 ## Core Capabilities
 
@@ -122,6 +141,20 @@ Channels -> Gateway -> Agent Runtime -> Skills / Memory / Tools / Scheduler
                       +-> Workflow and deliverables
                       +-> Sandbox and MCP
                       +-> Federation-ready peer layer
+```
+
+### Mermaid View
+
+```mermaid
+flowchart LR
+  U[Users / Bots / Apps] --> C[Channels]
+  C --> G[Gateway]
+  G --> A[Agent Runtime]
+  A --> M[Mesh Collaboration]
+  A --> W[Workflow + Deliverables]
+  A --> T[Tools + Sandbox + MCP]
+  A --> R[Memory + Skills + Scheduler]
+  A --> F[Federation-ready Peer Layer]
 ```
 
 The project is structured as a layered system, not a monolithic chat app:
@@ -224,6 +257,13 @@ pnpm test
 - Connect external tools through MCP without turning your runtime into a pile of one-off integrations.
 - Execute restricted commands through sandbox profiles instead of giving every agent raw host access.
 - Prepare for cross-host collaboration where different machines contribute agents, memory, or compute.
+
+## Why Developers Star Projects Like This
+
+- It points at a bigger category than “AI chat app”.
+- It already has real runtime surfaces: UI, CLI, workflows, sessions, routing, channels.
+- It is opinionated enough to feel like a product, but open enough to extend.
+- It makes the repo easy to understand in one glance: agents, memory, workflows, tools, delivery.
 
 ## Project Status
 

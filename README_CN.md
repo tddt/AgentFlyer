@@ -5,6 +5,14 @@
 [![Node >= 22](https://img.shields.io/badge/Node-%3E%3D%2022-2563eb)](https://nodejs.org)
 [![MIT License](https://img.shields.io/badge/License-MIT-111827)](LICENSE)
 
+<div align="center">
+
+### 让 Agent 像系统一样运行，而不是像脚本一样堆叠。
+
+**Agent Mesh · Workflow Runtime · Deliverables · MCP · Sandbox · Multi-channel Control Plane**
+
+</div>
+
 去中心化 AgentOS，用来运行多 Agent、多通道、可持续扩展的 AI 运行时系统。
 
 [English version](README.md)
@@ -31,6 +39,17 @@ AgentFlyer 的产品取向很明确：
 - 它更像一个正在成形的 Agent Operating System。
 
 如果 GitHub 上真正稀缺的是“系统级 Agent 项目”，那么 AgentFlyer 就在这个位置上。
+
+## 一眼看懂
+
+| 层 | 你能得到什么 |
+|---|---|
+| 协作 | Mesh 原生 agent，可发现、委托、协同 |
+| 编排 | Workflow、Scheduler、Super Nodes、执行历史 |
+| 状态 | Sessions、Hybrid Memory、Deliverables、Artifacts |
+| 安全 | 工具审批策略、Sandbox Profile、受控执行 |
+| 运维 | Console UI、CLI、路由、统计、多通道入口 |
+| 扩展 | 今天可接 MCP，未来可继续向 Federation 演进 |
 
 ## 核心能力
 
@@ -122,6 +141,20 @@ Channels -> Gateway -> Agent Runtime -> Skills / Memory / Tools / Scheduler
                       +-> Workflow and deliverables
                       +-> Sandbox and MCP
                       +-> Federation-ready peer layer
+```
+
+### Mermaid 视图
+
+```mermaid
+flowchart LR
+  U[Users / Bots / Apps] --> C[Channels]
+  C --> G[Gateway]
+  G --> A[Agent Runtime]
+  A --> M[Mesh Collaboration]
+  A --> W[Workflow + Deliverables]
+  A --> T[Tools + Sandbox + MCP]
+  A --> R[Memory + Skills + Scheduler]
+  A --> F[Federation-ready Peer Layer]
 ```
 
 它是一个分层系统，而不是单体聊天应用：
@@ -224,6 +257,13 @@ pnpm test
 - 通过 MCP 接入外部工具，而不是不断堆积一次性的自定义集成。
 - 用 sandbox profile 执行受限命令，而不是默认把宿主机权限完全暴露给 agent。
 - 为跨主机协作做准备，让不同机器上的 agent、记忆和算力逐步联动起来。
+
+## 为什么开发者会愿意 Star 这种项目
+
+- 它瞄准的是比“AI 聊天应用”更大的类别。
+- 它已经有真实的系统表面：UI、CLI、Workflow、Sessions、Routing、Channels。
+- 它足够像产品，不是只有 demo；同时又保留了很强的扩展空间。
+- 它把 agent、memory、workflow、tools、delivery 放进了一张很容易理解的系统图里。
 
 ## 项目状态
 
