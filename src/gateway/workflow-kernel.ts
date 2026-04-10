@@ -8,6 +8,7 @@ import {
 } from '../core/kernel/index.js';
 import { createLogger } from '../core/logger.js';
 import { asProcessId } from '../core/types.js';
+import { AgentQueueRegistry } from './agent-queue.js';
 import type { WorkflowDef, WorkflowRunRecord, WorkflowStepResult } from './workflow-backend.js';
 import {
   type WorkflowProcessInput,
@@ -16,6 +17,7 @@ import {
 } from './workflow-process-runtime.js';
 
 const logger = createLogger('gateway:workflow-kernel');
+const DEFAULT_WORKFLOW_AGENT_STEP_TIMEOUT_MS = 300_000;
 
 export interface WorkflowKernelCallbacks {
   onRunComplete(workflow: WorkflowDef, run: WorkflowRunRecord): Promise<void>;
@@ -26,6 +28,7 @@ export interface WorkflowKernelServiceOptions {
   dataDir: string;
   runners: Map<string, AgentRunner>;
   callbacks: WorkflowKernelCallbacks;
+  workflowAgentStepTimeoutMs?: number;
 }
 
 function cloneStepResults(stepResults: WorkflowStepResult[]): WorkflowStepResult[] {
@@ -52,8 +55,11 @@ export class WorkflowKernelService {
   private readonly kernel: AgentKernel;
   private readonly runtime: WorkflowProcessRuntime;
   private readonly callbacks: WorkflowKernelCallbacks;
+  private readonly liveRunners: Map<string, AgentRunner>;
+  private readonly workflowAgentQueues = new AgentQueueRegistry();
   private readonly cancelRequested = new Set<string>();
   private readonly forcedRunStates = new Map<string, WorkflowRunRecord>();
+  private readonly runnerSnapshots = new Map<string, Map<string, AgentRunner>>();
   private readonly finalizing = new Set<string>();
   private readonly completionWaiters = new Map<string, Array<(run: WorkflowRunRecord) => void>>();
   private initPromise: Promise<void> | null = null;
@@ -63,6 +69,10 @@ export class WorkflowKernelService {
 
   constructor(options: WorkflowKernelServiceOptions) {
     this.callbacks = options.callbacks;
+    this.liveRunners = options.runners;
+    const workflowAgentStepTimeoutMs =
+      options.workflowAgentStepTimeoutMs ?? DEFAULT_WORKFLOW_AGENT_STEP_TIMEOUT_MS;
+    const service = this;
     this.kernel = new AgentKernel({
       checkpointStore: new ScopedCheckpointStore(
         new JsonFileCheckpointStore(options.dataDir),
@@ -71,20 +81,25 @@ export class WorkflowKernelService {
     });
     this.runtime = new WorkflowProcessRuntime({
       async runAgentStep(request) {
-        const runner = options.runners.get(request.agentId);
+        const runners = service.runnerSnapshots.get(request.runId) ?? service.liveRunners;
+        const runner = runners.get(request.agentId);
         if (!runner) {
           throw new Error(`Agent not found: ${request.agentId}`);
         }
-        const result = await executeAgentTurnViaKernel({
-          runners: new Map([[request.agentId, runner]]),
-          dataDir: options.dataDir,
-          input: {
-            agentId: request.agentId,
-            userMessage: request.message,
-            threadKey: request.threadKey,
-          },
-        });
-        return result.text || '';
+        const execute = async (): Promise<string> => {
+          const result = await executeAgentTurnViaKernel({
+            runners: new Map([[request.agentId, runner]]),
+            dataDir: options.dataDir,
+            timeoutMs: workflowAgentStepTimeoutMs,
+            input: {
+              agentId: request.agentId,
+              userMessage: request.message,
+              threadKey: request.threadKey,
+            },
+          });
+          return result.text || '';
+        };
+        return await service.workflowAgentQueues.for(request.agentId).enqueue(execute);
       },
     });
     this.kernel.registerProcessRuntime(this.runtime);
@@ -108,6 +123,7 @@ export class WorkflowKernelService {
   async startWorkflow(workflow: WorkflowDef, input: string): Promise<WorkflowRunRecord> {
     await this.initialize();
     const runId = ulid();
+    this.runnerSnapshots.set(runId, new Map(this.liveRunners));
     const snapshot = await this.kernel.createProcess<WorkflowProcessInput>({
       processType: this.runtime.type,
       processId: asProcessId(runId),
@@ -286,6 +302,7 @@ export class WorkflowKernelService {
       await this.kernel.deleteProcess(snapshot.pid);
       this.cancelRequested.delete(runId);
       this.forcedRunStates.delete(runId);
+      this.runnerSnapshots.delete(runId);
       this.resolveCompletion(run);
     } finally {
       this.finalizing.delete(runId);

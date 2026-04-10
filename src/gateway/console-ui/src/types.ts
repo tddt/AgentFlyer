@@ -12,6 +12,38 @@ export interface AgentInfo {
   name?: string;
   mentionAliases?: string[];
   sandboxProfile?: string;
+  activity?: AgentActivityInfo;
+}
+
+export interface AgentRunInfo {
+  runId: string;
+  threadKey: string;
+  processStatus: string;
+  phase: string;
+  createdAt: number;
+  updatedAt: number;
+  sessionKey?: string;
+  error?: {
+    code?: string;
+    message?: string;
+  };
+}
+
+export interface AgentQueuedRunInfo {
+  runId: string;
+  threadKey: string;
+  processStatus: string;
+  phase: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AgentActivityInfo {
+  state: 'idle' | 'running' | 'suspended';
+  busy: boolean;
+  pendingCount: number;
+  activeRun?: AgentRunInfo;
+  queuedRuns: AgentQueuedRunInfo[];
 }
 
 export interface AgentConfig {
@@ -144,6 +176,8 @@ export interface LogEntry {
 
 export type ChatChunk =
   | { type: 'text_delta'; text: string }
+  | { type: 'queued'; position: number }
+  | { type: 'started'; queueDepth?: number }
   | { type: 'thinking'; text: string }
   | { type: 'thinking_delta'; text: string }
   | { type: 'tool_use_delta'; id: string; name: string; inputJson: string }

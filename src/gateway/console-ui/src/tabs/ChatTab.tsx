@@ -10,6 +10,7 @@ import { rpc, useQuery } from '../hooks/useRpc.js';
 import { createConsoleThreadKey } from '../thread-keys.js';
 import type { ChatRecoveryContext } from '../types.js';
 import type {
+  AgentActivityInfo,
   AgentInfo,
   AgentListResult,
   ChatChunk,
@@ -19,6 +20,26 @@ import type {
   SessionMessagesResult,
   SessionMetaInfo,
 } from '../types.js';
+
+function chatAgentStateLabel(
+  activity: AgentActivityInfo | undefined,
+  t: (key: string, vars?: Record<string, string | number>) => string,
+): { text: string; variant: 'green' | 'yellow' | 'gray' } {
+  if (!activity || activity.state === 'idle') {
+    return { text: t('agents.idleBadge'), variant: 'gray' };
+  }
+  if (activity.state === 'suspended') {
+    return { text: t('agents.suspendedBadge'), variant: 'yellow' };
+  }
+  if (activity.pendingCount > 0) {
+    return { text: t('agents.runningQueuedBadge', { n: activity.pendingCount }), variant: 'green' };
+  }
+  return { text: t('agents.runningBadge'), variant: 'green' };
+}
+
+function firstQueuedThread(activity: AgentActivityInfo | undefined): string | null {
+  return activity?.queuedRuns[0]?.threadKey ?? null;
+}
 
 interface ToolCall {
   id: string;
@@ -1129,6 +1150,7 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
+  const [pendingStatus, setPendingStatus] = useState<string | null>(null);
   const [confirmRecoverySend, setConfirmRecoverySend] = useState(false);
   const [currentThread, setCurrentThread] = useState(`console:${agent.agentId}`);
   const [visibleRecoveryContext, setVisibleRecoveryContext] = useState<ChatRecoveryContext | null>(null);
@@ -1386,6 +1408,7 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
     const text = messageText.trim();
     if (!text || busy) return;
     setInput('');
+    setPendingStatus(null);
     setMessages((prev) => [...prev, { role: 'user', content: text }]);
     setBusy(true);
 
@@ -1431,7 +1454,18 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
             continue;
           }
 
+          if (chunk.type === 'queued') {
+            setPendingStatus(t('chat.queue.waiting', { position: String(chunk.position) }));
+            continue;
+          }
+
+          if (chunk.type === 'started') {
+            setPendingStatus(null);
+            continue;
+          }
+
           if (chunk.type === 'text_delta') {
+            setPendingStatus(null);
             replyContent += chunk.text;
             setMessages((prev) => {
               const next = [...prev];
@@ -1442,6 +1476,7 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
               return next;
             });
           } else if (chunk.type === 'thinking' || chunk.type === 'thinking_delta') {
+            setPendingStatus(null);
             thinkingContent += chunk.text;
             setMessages((prev) => {
               const next = [...prev];
@@ -1477,6 +1512,7 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
               return next;
             });
           } else if (chunk.type === 'tool_use_start') {
+            setPendingStatus(null);
             pendingTools.set(chunk.id, { id: chunk.id, name: chunk.name, input: '' });
             setMessages((prev) => {
               const next = [...prev];
@@ -1494,12 +1530,14 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
               return next;
             });
           } else if (chunk.type === 'tool_use_delta') {
+            setPendingStatus(null);
             const tool = pendingTools.get(chunk.id);
             if (tool) {
               tool.input += chunk.inputJson;
               pendingTools.set(chunk.id, tool);
             }
           } else if (chunk.type === 'tool_result') {
+            setPendingStatus(null);
             setMessages((prev) => {
               const next = [...prev];
               const last = next[next.length - 1];
@@ -1511,6 +1549,7 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
               return next;
             });
           } else if (chunk.type === 'done') {
+            setPendingStatus(null);
             setMessages((prev) => {
               const next = [...prev];
               const last = next[next.length - 1];
@@ -1556,6 +1595,7 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
         return next;
       });
     } catch (e) {
+      setPendingStatus(null);
       setMessages((prev) => {
         const next = [...prev];
         if (next[next.length - 1]?.streaming) next.pop();
@@ -1565,6 +1605,7 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
         ];
       });
     } finally {
+      setPendingStatus(null);
       setBusy(false);
     }
   };
@@ -1861,6 +1902,11 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
       </div>
 
       <div className="pt-3 shrink-0 border-t border-white/6 mt-3">
+        {pendingStatus ? (
+          <div className="mb-2 rounded-2xl border border-cyan-400/14 bg-cyan-950/12 px-3 py-2 text-xs text-cyan-100/85">
+            {pendingStatus}
+          </div>
+        ) : null}
         <div className="relative flex items-end gap-2 bg-slate-800/60 ring-1 ring-slate-700/50 rounded-[1.25rem] p-3 shadow-[0_12px_30px_rgba(15,23,42,0.25)]">
           <textarea
             ref={inputRef}
@@ -2154,6 +2200,8 @@ export function ChatTab({
           {agents.length === 0 ? <p className="text-xs text-slate-500 pt-2">{t('chat.noAgents')}</p> : null}
           {agents.map((a) => {
             const active = a.agentId === effectiveActiveId;
+            const stateBadge = chatAgentStateLabel(a.activity, t);
+            const queuedThread = firstQueuedThread(a.activity);
             return (
               <button
                 key={a.agentId}
@@ -2167,6 +2215,19 @@ export function ChatTab({
                 <div className="text-xs font-semibold truncate">{a.name ?? a.agentId}</div>
                 <div className="mt-1 text-[10px] font-mono text-slate-500 truncate group-hover:text-slate-400">
                   {a.agentId}
+                </div>
+                <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+                  <Badge variant={stateBadge.variant}>{stateBadge.text}</Badge>
+                  {a.activity?.activeRun?.threadKey ? (
+                    <span className="text-[10px] text-slate-500 truncate max-w-full">
+                      #{a.activity.activeRun.threadKey}
+                    </span>
+                  ) : null}
+                  {queuedThread ? (
+                    <span className="text-[10px] text-amber-300/80 truncate max-w-full">
+                      {t('chat.queuedRunLabel', { thread: queuedThread })}
+                    </span>
+                  ) : null}
                 </div>
                 {a.mentionAliases?.length ? (
                   <div className="mt-2 flex flex-wrap gap-1">

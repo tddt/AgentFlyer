@@ -40,6 +40,8 @@ import {
 } from '../scheduler/task-history.js';
 import { scanSkillsDir } from '../skills/registry.js';
 import { getAgentKernelService } from './agent-kernel.js';
+import type { AgentActiveRunSummary, AgentQueuedRunSummary } from './agent-kernel.js';
+import type { AgentQueueRegistry, AgentQueueSnapshot } from './agent-queue.js';
 import type { ContentStore } from './content-store.js';
 import {
   publishDeliverableTargets,
@@ -68,6 +70,50 @@ const logger = createLogger('gateway:rpc');
 // Package root: src/gateway/rpc.ts → ../../  (or dist/gateway/rpc.js → ../../)
 const _pkgRoot = join(dirname(fileURLToPath(import.meta.url)), '../..');
 type OutputChannel = 'logs' | 'cli' | 'web';
+
+interface AgentActivityStatus {
+  state: 'idle' | 'running' | 'suspended';
+  busy: boolean;
+  pendingCount: number;
+  activeRun?: AgentActiveRunSummary;
+  queuedRuns: AgentQueuedRunSummary[];
+}
+
+function buildAgentActivityStatus(
+  queue: AgentQueueSnapshot,
+  activeRun: AgentActiveRunSummary | null,
+  queuedRuns: AgentQueuedRunSummary[],
+): AgentActivityStatus {
+  const state =
+    activeRun?.processStatus === 'suspended' || activeRun?.phase === 'suspended'
+      ? 'suspended'
+      : activeRun || queue.hasActiveTask
+        ? 'running'
+        : 'idle';
+  return {
+    state,
+    busy: queue.busy || !!activeRun || queuedRuns.length > 0,
+    pendingCount: Math.max(queue.pendingCount, queuedRuns.length),
+    activeRun: activeRun ?? undefined,
+    queuedRuns,
+  };
+}
+
+async function getAgentActivityStatus(
+  ctx: RpcContext,
+  agentId: string,
+): Promise<AgentActivityStatus> {
+  const agentKernel = await getAgentKernelService(ctx);
+  return buildAgentActivityStatus(
+    ctx.agentQueues?.status(agentId) ?? {
+      hasActiveTask: false,
+      pendingCount: 0,
+      busy: false,
+    },
+    agentKernel.getLatestLiveRunForAgent(agentId),
+    agentKernel.getQueuedRunsForAgent(agentId),
+  );
+}
 
 function repairDeliverableArtifactRefs(
   deliverable: DeliverableRecord,
@@ -273,6 +319,7 @@ export type RpcMethod =
   | 'agent.list'
   | 'agent.run'
   | 'agent.chat'
+  | 'agent.cancel'
   | 'agent.runStatus'
   | 'agent.resume'
   | 'agent.reload'
@@ -328,6 +375,7 @@ export interface RpcResponse {
 
 export interface RpcContext {
   runners: Map<string, AgentRunner>;
+  agentQueues?: AgentQueueRegistry;
   gatewayVersion: string;
   startedAt: number;
   dataDir: string;
@@ -851,16 +899,27 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
 
       case 'agent.list': {
         const cfgAgents = ctx.getConfig().agents ?? [];
+        const agentKernel = await getAgentKernelService(ctx);
         return {
           id,
           result: {
             agents: Array.from(ctx.runners.keys()).map((agentId) => {
               const cfg = cfgAgents.find((a) => a.id === agentId);
+              const activity = buildAgentActivityStatus(
+                ctx.agentQueues?.status(agentId) ?? {
+                  hasActiveTask: false,
+                  pendingCount: 0,
+                  busy: false,
+                },
+                agentKernel.getLatestLiveRunForAgent(agentId),
+                agentKernel.getQueuedRunsForAgent(agentId),
+              );
               return {
                 agentId,
                 name: cfg?.name ?? agentId,
                 mentionAliases: cfg?.mentionAliases ?? [],
                 sandboxProfile: cfg?.tools?.sandboxProfile,
+                activity,
                 model:
                   cfg?.model ?? (ctx.getConfig().defaults as Record<string, unknown>)?.model ?? '',
                 role: (cfg as unknown as Record<string, unknown>)?.role ?? 'worker',
@@ -974,11 +1033,15 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         }
         try {
           const agentKernel = await getAgentKernelService(ctx);
-          const result = await agentKernel.executeTurn({
-            agentId,
-            userMessage: message,
-            threadKey: thread,
-          });
+          const execute = async () =>
+            await agentKernel.executeTurn({
+              agentId,
+              userMessage: message,
+              threadKey: thread,
+            });
+          const result = ctx.agentQueues
+            ? await ctx.agentQueues.for(agentId).enqueue(execute)
+            : await execute();
           return { id, result: { reply: result.text.trim() } };
         } catch (err) {
           return buildErrorResponse(id, -32603, `Agent error: ${String(err)}`);
@@ -998,12 +1061,66 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
           return buildErrorResponse(id, 404, `Agent not found: ${agentId}`);
         }
         const agentKernel = await getAgentKernelService(ctx);
+        if (ctx.agentQueues) {
+          const reserved = await agentKernel.reserveQueuedTurn({
+            agentId,
+            userMessage: message,
+            threadKey: thread,
+          });
+          void ctx.agentQueues
+            .for(agentId)
+            .enqueue(async () => {
+              const queued = agentKernel.getRun(reserved.runId);
+              if (!queued || queued.processStatus !== 'waiting' || queued.phase !== 'pending') {
+                return;
+              }
+              await agentKernel.startTurn({
+                runId: reserved.runId,
+                agentId,
+                userMessage: message,
+                threadKey: thread,
+              });
+            }, { taskKey: reserved.runId })
+            .catch((error) => {
+              logger.error('Queued agent.run failed to start', {
+                agentId,
+                runId: reserved.runId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            });
+          return { id, result: { ...reserved, queued: true } };
+        }
         const started = await agentKernel.startTurn({
           agentId,
           userMessage: message,
           threadKey: thread,
         });
         return { id, result: started };
+      }
+
+      case 'agent.cancel': {
+        const { runId } = (params ?? {}) as { runId?: string };
+        if (!runId) {
+          return buildErrorResponse(id, -32602, 'runId is required');
+        }
+        const agentKernel = await getAgentKernelService(ctx);
+        const current = agentKernel.getRun(runId);
+        if (!current) {
+          return buildErrorResponse(id, 404, `Run not found: ${runId}`);
+        }
+        if (current.processStatus === 'waiting' && current.phase === 'pending') {
+          ctx.agentQueues?.cancelPending(current.agentId, runId);
+          const cancelled = await agentKernel.cancelQueuedTurn(runId);
+          return { id, result: { cancelled: Boolean(cancelled), runId } };
+        }
+        return {
+          id,
+          result: {
+            cancelled: false,
+            runId,
+            reason: 'Only queued runs can be cancelled currently.',
+          },
+        };
       }
 
       case 'agent.runStatus': {
@@ -1057,7 +1174,13 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         if (!agentId || !ctx.runners.has(agentId)) {
           return buildErrorResponse(id, 404, `Agent not found: ${agentId}`);
         }
-        return { id, result: { agentId, status: 'idle' } };
+        return {
+          id,
+          result: {
+            agentId,
+            activity: await getAgentActivityStatus(ctx, agentId),
+          },
+        };
       }
 
       case 'channel.list': {

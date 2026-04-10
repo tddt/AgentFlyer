@@ -36,12 +36,14 @@ function getPreferredAgent(agentList: AgentInfo[]): AgentInfo | null {
   );
 }
 
-function getWorkflowAgentHint(step: WorkflowStep, agentList: AgentInfo[]): string | null {
+function getWorkflowAgentHint(step: WorkflowStep, agentList: AgentInfo[], locale: Locale = 'zh'): string | null {
   const agentId = step.agentId?.trim();
   if (!agentId) {
     const preferred = getPreferredAgent(agentList);
     return preferred
-      ? `建议优先选择 ${formatAgentOptionLabel(preferred)} 作为受限执行目标。`
+      ? locale === 'zh'
+        ? `建议优先选择 ${formatAgentOptionLabel(preferred)} 作为受限执行目标。`
+        : `Prefer ${formatAgentOptionLabel(preferred)} as the constrained execution target.`
       : null;
   }
 
@@ -50,17 +52,25 @@ function getWorkflowAgentHint(step: WorkflowStep, agentList: AgentInfo[]): strin
     return null;
   }
   if (selected.sandboxProfile === 'readonly-output') {
-    return '当前已选择 readonly-output，只读执行路径优先。';
+    return locale === 'zh'
+      ? '当前已选择 readonly-output，只读执行路径优先。'
+      : 'readonly-output is selected, so the read-only execution path is preferred.';
   }
   if (selected.sandboxProfile) {
-    return `当前已绑定 sandbox:${selected.sandboxProfile}。`;
+    return locale === 'zh'
+      ? `当前已绑定 sandbox:${selected.sandboxProfile}。`
+      : `sandbox:${selected.sandboxProfile} is currently bound.`;
   }
 
   const preferred = getPreferredAgent(agentList);
   if (preferred && preferred.agentId !== selected.agentId) {
-    return `当前 agent 未绑定 sandboxProfile，建议切换到 ${formatAgentOptionLabel(preferred)}。`;
+    return locale === 'zh'
+      ? `当前 agent 未绑定 sandboxProfile，建议切换到 ${formatAgentOptionLabel(preferred)}。`
+      : `The current agent has no sandboxProfile. Consider switching to ${formatAgentOptionLabel(preferred)}.`;
   }
-  return '当前 agent 未绑定 sandboxProfile，建议在自动化执行前绑定 readonly-output 或其他受限 profile。';
+  return locale === 'zh'
+    ? '当前 agent 未绑定 sandboxProfile，建议在自动化执行前绑定 readonly-output 或其他受限 profile。'
+    : 'The current agent has no sandboxProfile. Bind readonly-output or another constrained profile before automated execution.';
 }
 
 function agentSearchText(agent: AgentInfo): string {
@@ -1225,54 +1235,54 @@ function toMultilineItems(values: string[] | undefined): string {
   return (values ?? []).join('\n');
 }
 
-function superStepMessageLabel(type: StepType): string {
+function superStepMessageLabel(type: StepType, locale: Locale = 'zh'): string {
   switch (type) {
     case 'multi_source':
-      return '采集任务说明';
+      return locale === 'zh' ? '采集任务说明' : 'Collection Task';
     case 'debate':
-      return '辩题 / 对抗议题';
+      return locale === 'zh' ? '辩题 / 对抗议题' : 'Debate Topic';
     case 'decision':
-      return '决策任务说明';
+      return locale === 'zh' ? '决策任务说明' : 'Decision Task';
     case 'risk_review':
-      return '待审方案 / 审核任务';
+      return locale === 'zh' ? '待审方案 / 审核任务' : 'Review Target';
     case 'adjudication':
-      return '待裁定事项';
+      return locale === 'zh' ? '待裁定事项' : 'Adjudication Target';
     case 'http':
-      return '请求体模板 (bodyTemplate)';
+      return locale === 'zh' ? '请求体模板 (bodyTemplate)' : 'Request Body Template (bodyTemplate)';
     default:
-      return '消息模板';
+      return locale === 'zh' ? '消息模板' : 'Message Template';
   }
 }
 
-function superStepPromptLabel(type: StepType): string {
+function superStepPromptLabel(type: StepType, locale: Locale = 'zh'): string {
   switch (type) {
     case 'multi_source':
-      return '采集维度（每行一个）';
+      return locale === 'zh' ? '采集维度（每行一个）' : 'Collection Dimensions (one per line)';
     case 'debate':
-      return '对立立场（每行一个）';
+      return locale === 'zh' ? '对立立场（每行一个）' : 'Opposing Stances (one per line)';
     case 'decision':
-      return '补充视角（每行一个，可选）';
+      return locale === 'zh' ? '补充视角（每行一个，可选）' : 'Additional Perspectives (one per line, optional)';
     case 'risk_review':
-      return '审核视角（每行一个）';
+      return locale === 'zh' ? '审核视角（每行一个）' : 'Review Perspectives (one per line)';
     case 'adjudication':
-      return '参考视角（每行一个，可选）';
+      return locale === 'zh' ? '参考视角（每行一个，可选）' : 'Reference Perspectives (one per line, optional)';
     default:
-      return '视角提示';
+      return locale === 'zh' ? '视角提示' : 'Prompt Hints';
   }
 }
 
-function superStepParticipantHint(type: StepType): string {
+function superStepParticipantHint(type: StepType, locale: Locale = 'zh'): string {
   switch (type) {
     case 'multi_source':
-      return '并行采集 agent，至少选择 1 个。';
+      return locale === 'zh' ? '并行采集 agent，至少选择 1 个。' : 'Parallel collection agents. Select at least 1.';
     case 'debate':
-      return '对立辩论 agent，至少选择 2 个。';
+      return locale === 'zh' ? '对立辩论 agent，至少选择 2 个。' : 'Opposing debate agents. Select at least 2.';
     case 'decision':
-      return '可选的并行补充分析 agent。';
+      return locale === 'zh' ? '可选的并行补充分析 agent。' : 'Optional parallel supporting analysis agents.';
     case 'risk_review':
-      return '并行风险审核 agent，至少选择 1 个。';
+      return locale === 'zh' ? '并行风险审核 agent，至少选择 1 个。' : 'Parallel risk review agents. Select at least 1.';
     case 'adjudication':
-      return '可选的并行参考分析 agent。';
+      return locale === 'zh' ? '可选的并行参考分析 agent。' : 'Optional parallel reference analysis agents.';
     default:
       return '';
   }
@@ -2283,7 +2293,7 @@ function StepRow({
     ? agents.find((agent) => agent.agentId === step.agentId)
     : undefined;
   const preferredAgent = getPreferredAgent(agents);
-  const workflowAgentHint = type === 'agent' || isSuperNode ? getWorkflowAgentHint(step, agents) : null;
+  const workflowAgentHint = type === 'agent' || isSuperNode ? getWorkflowAgentHint(step, agents, locale) : null;
   const stepHelp = getStepTypeHelp(type, locale);
   const readinessPills = buildStepReadinessPills(step, locale);
   const experiencePresets = isSuperNode ? buildSuperStepExperiencePresets(type) : [];
@@ -2474,14 +2484,14 @@ function StepRow({
       {(type === 'agent' || isSuperNode) && (
         <div className="flex flex-col gap-2">
           <label className="text-[11px] text-slate-500">
-            {isSuperNode ? '协调 / 汇总代理' : '执行 Agent'}
+            {isSuperNode ? (locale === 'zh' ? '协调 / 汇总代理' : 'Coordinator / Synthesizer') : locale === 'zh' ? '执行 Agent' : 'Execution Agent'}
           </label>
           <select
             className={inputCls}
             value={step.agentId ?? ''}
             onChange={(e) => onChange({ ...step, agentId: e.target.value })}
           >
-            <option value="">— 选择 Agent —</option>
+            <option value="">{locale === 'zh' ? '— 选择 Agent —' : '— Select Agent —'}</option>
             {agents.map((a) => (
               <option key={a.agentId} value={a.agentId}>
                 {formatAgentOptionLabel(a)}
@@ -2501,7 +2511,7 @@ function StepRow({
             )}
             {preferredAgent && selectedAgent?.agentId === preferredAgent.agentId && (
               <span className="rounded-full border border-indigo-500/30 bg-indigo-500/10 px-2 py-1 text-[11px] text-indigo-200">
-                Preferred
+                {locale === 'zh' ? '首选' : 'Preferred'}
               </span>
             )}
           </div>
@@ -2520,10 +2530,12 @@ function StepRow({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex flex-col gap-1">
                   <span className="text-[11px] uppercase tracking-wider text-emerald-300 font-medium">
-                    智能推荐 Agent
+                    {locale === 'zh' ? '智能推荐 Agent' : 'Suggested Agents'}
                   </span>
                   <span className="text-[11px] text-slate-400">
-                    根据 agent 名称、别名和 sandboxProfile 做轻量推荐，可一键填入。
+                    {locale === 'zh'
+                      ? '根据 agent 名称、别名和 sandboxProfile 做轻量推荐，可一键填入。'
+                      : 'Lightweight suggestions based on agent names, aliases, and sandboxProfile, with one-click fill.'}
                   </span>
                 </div>
                 <button
@@ -2540,12 +2552,12 @@ function StepRow({
                     })
                   }
                 >
-                  一键填入推荐
+                  {locale === 'zh' ? '一键填入推荐' : 'Apply Suggestions'}
                 </button>
               </div>
               <div className="flex flex-col gap-2">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[11px] text-slate-500">推荐协调者</span>
+                  <span className="text-[11px] text-slate-500">{locale === 'zh' ? '推荐协调者' : 'Suggested Coordinator'}</span>
                   {recommendedAgents.coordinator ? (
                     <>
                       <span className="rounded-full bg-slate-900/70 px-2 py-1 text-[11px] text-slate-200 ring-1 ring-slate-700/60">
@@ -2564,15 +2576,15 @@ function StepRow({
                         className="rounded-md bg-slate-900/70 px-2 py-1 text-[11px] text-emerald-300 ring-1 ring-emerald-500/25 hover:bg-slate-900"
                         onClick={() => onChange({ ...step, agentId: recommendedAgents.coordinator?.agent.agentId ?? '' })}
                       >
-                        使用
+                        {locale === 'zh' ? '使用' : 'Use'}
                       </button>
                     </>
                   ) : (
-                    <span className="text-[11px] text-slate-500">暂无推荐</span>
+                    <span className="text-[11px] text-slate-500">{locale === 'zh' ? '暂无推荐' : 'No suggestions'}</span>
                   )}
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[11px] text-slate-500">推荐参与者</span>
+                  <span className="text-[11px] text-slate-500">{locale === 'zh' ? '推荐参与者' : 'Suggested Participants'}</span>
                   {recommendedAgents.participants.length > 0 ? (
                     <>
                       {recommendedAgents.participants.map((item) => (
@@ -2598,11 +2610,11 @@ function StepRow({
                           })
                         }
                       >
-                        使用
+                        {locale === 'zh' ? '使用' : 'Use'}
                       </button>
                     </>
                   ) : (
-                    <span className="text-[11px] text-slate-500">暂无推荐</span>
+                    <span className="text-[11px] text-slate-500">{locale === 'zh' ? '暂无推荐' : 'No suggestions'}</span>
                   )}
                 </div>
               </div>
@@ -2613,10 +2625,12 @@ function StepRow({
             <div className="rounded-lg bg-cyan-950/25 ring-1 ring-cyan-900/45 px-3 py-3 flex flex-col gap-2">
               <div className="flex flex-col gap-1">
                 <span className="text-[11px] uppercase tracking-wider text-cyan-300 font-medium">
-                  推荐配置
+                  {locale === 'zh' ? '推荐配置' : 'Suggested Presets'}
                 </span>
                 <span className="text-[11px] text-slate-400">
-                  一键填入更贴近业务场景的任务说明、视角与行业规则。
+                  {locale === 'zh'
+                    ? '一键填入更贴近业务场景的任务说明、视角与行业规则。'
+                    : 'Fill business-ready tasks, perspectives, and rules with one click.'}
                 </span>
               </div>
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-2">
@@ -2650,12 +2664,12 @@ function StepRow({
           )}
 
           <div className="flex flex-col gap-1">
-            <label className="text-[11px] text-slate-500">参与 Agent</label>
-            <div className="text-[11px] text-slate-600">{superStepParticipantHint(type)}</div>
+            <label className="text-[11px] text-slate-500">{locale === 'zh' ? '参与 Agent' : 'Participant Agents'}</label>
+            <div className="text-[11px] text-slate-600">{superStepParticipantHint(type, locale)}</div>
           </div>
           <div className="grid grid-cols-2 gap-2">
             {agents.length === 0 && (
-              <div className="text-xs text-slate-500">当前没有可选 Agent。</div>
+              <div className="text-xs text-slate-500">{locale === 'zh' ? '当前没有可选 Agent。' : 'No agents are available.'}</div>
             )}
             {agents.map((agent) => {
               const checked = (step.participantAgentIds ?? []).includes(agent.agentId);
@@ -2686,18 +2700,18 @@ function StepRow({
                     className="accent-indigo-500"
                   />
                   <span>{formatAgentOptionLabel(agent)}</span>
-                  {disabled && <span className="text-[10px] text-slate-500">协调者</span>}
+                  {disabled && <span className="text-[10px] text-slate-500">{locale === 'zh' ? '协调者' : 'Coordinator'}</span>}
                 </label>
               );
             })}
           </div>
 
           <div className="flex flex-col gap-1">
-            <label className="text-[11px] text-slate-500">{superStepPromptLabel(type)}</label>
+            <label className="text-[11px] text-slate-500">{superStepPromptLabel(type, locale)}</label>
             <textarea
               rows={3}
               className={`${inputCls} resize-none font-mono text-xs`}
-              placeholder="每行一个并行视角 / 立场 / 维度"
+              placeholder={locale === 'zh' ? '每行一个并行视角 / 立场 / 维度' : 'One parallel perspective / stance / dimension per line'}
               value={toMultilineItems(step.superNodePrompts)}
               onChange={(e) => {
                 const nextPrompts = parseMultilineItems(e.target.value);
@@ -2710,11 +2724,11 @@ function StepRow({
           </div>
 
           <div className="flex flex-col gap-1">
-            <label className="text-[11px] text-slate-500">行业规则 / 约束</label>
+            <label className="text-[11px] text-slate-500">{locale === 'zh' ? '行业规则 / 约束' : 'Domain Rules / Constraints'}</label>
             <textarea
               rows={3}
               className={`${inputCls} resize-none font-mono text-xs`}
-              placeholder="例如：合规边界、行业黑名单、预算约束、审批要求"
+              placeholder={locale === 'zh' ? '例如：合规边界、行业黑名单、预算约束、审批要求' : 'Example: compliance boundaries, blacklists, budget limits, approval rules'}
               value={step.domainRules ?? ''}
               onChange={(e) => onChange({ ...step, domainRules: e.target.value || undefined })}
             />
@@ -2734,7 +2748,9 @@ function StepRow({
                       Structured JSON Template
                     </span>
                     <span className="text-[11px] text-slate-400">
-                      一键套用 {superStepStructuredPresetLabel(type)} 的 JSON 输出约束，并生成可提取字段。
+                      {locale === 'zh'
+                        ? `一键套用 ${superStepStructuredPresetLabel(type)} 的 JSON 输出约束，并生成可提取字段。`
+                        : `Apply the ${superStepStructuredPresetLabel(type)} JSON output constraints and generate extractable fields in one step.`}
                     </span>
                   </div>
                   <button
@@ -2750,15 +2766,13 @@ function StepRow({
                       })
                     }
                   >
-                    套用结构化模板
+                    {locale === 'zh' ? '套用结构化模板' : 'Apply Structured Template'}
                   </button>
                 </div>
                 <div className="text-[11px] text-slate-500">
-                  将自动设置为 JSON + 前置强约束，并写入命名输出变量，后续步骤可直接用
-                  {' '}
-                  vars.stepId.field
-                  {' '}
-                  引用。
+                  {locale === 'zh'
+                    ? '将自动设置为 JSON + 前置强约束，并写入命名输出变量，后续步骤可直接用 vars.stepId.field 引用。'
+                    : 'This sets JSON + prepend constraints automatically and writes named output variables so later steps can reference vars.stepId.field directly.'}
                 </div>
               </div>
             );

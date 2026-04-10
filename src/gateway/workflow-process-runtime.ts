@@ -49,6 +49,7 @@ export interface WorkflowProcessState {
 }
 
 export interface WorkflowAgentStepRequest {
+  runId: string;
   stepId: string;
   agentId: string;
   message: string;
@@ -260,7 +261,10 @@ export class WorkflowProcessRuntime
         state,
         {
           stepResults,
-          prevOutputs: [...prevOutputs, ''],
+          prevOutputs: [
+            ...prevOutputs,
+            this.buildContinuationOutput(step.id, messageText, superNodeTrace),
+          ],
           stepVars: serializeStepVars(stepVars),
         },
         context.now,
@@ -315,6 +319,7 @@ export class WorkflowProcessRuntime
         return {
           output: (
             await this.handlers.runAgentStep({
+              runId: state.run.runId,
               stepId: step.id,
               agentId,
               message: applyFormatInstruction(step, message),
@@ -405,6 +410,7 @@ export class WorkflowProcessRuntime
         const rolePrompt = rolePrompts[index] ?? `补充视角 ${index + 1}`;
         try {
           const output = await this.handlers.runAgentStep?.({
+            runId: state.run.runId,
             stepId: `${step.id}:participant:${index + 1}`,
             agentId,
             message: buildWorkflowSuperNodeParticipantPrompt({
@@ -459,6 +465,7 @@ export class WorkflowProcessRuntime
       return {
         output: (
           await this.handlers.runAgentStep({
+            runId: state.run.runId,
             stepId: step.id,
             agentId: coordinatorAgentId,
             message: applyFormatInstruction(step, coordinatorPrompt),
@@ -563,6 +570,27 @@ export class WorkflowProcessRuntime
       ...(superNodeTrace ? { superNodeTrace } : {}),
       ...(Object.keys(varsSnapshot).length > 0 ? { varsSnapshot } : {}),
     };
+  }
+
+  private buildContinuationOutput(
+    stepId: string,
+    error: string,
+    superNodeTrace?: WorkflowStepResult['superNodeTrace'],
+  ): string {
+    try {
+      return JSON.stringify(
+        {
+          status: 'error',
+          stepId,
+          error,
+          ...(superNodeTrace ? { superNodeTrace } : {}),
+        },
+        null,
+        2,
+      );
+    } catch {
+      return `Workflow step '${stepId}' failed: ${error}`;
+    }
   }
 
   private advanceState(

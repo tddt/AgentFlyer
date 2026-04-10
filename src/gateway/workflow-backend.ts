@@ -987,9 +987,11 @@ async function getWorkflowKernelService(ctx: RpcContext): Promise<WorkflowKernel
     return existing;
   }
   const created = (async () => {
+    const config = ctx.getConfig();
     const service = new WorkflowKernelService({
       dataDir: ctx.dataDir,
       runners: ctx.runners,
+      workflowAgentStepTimeoutMs: config.gateway.workflow?.agentStepTimeoutMs,
       callbacks: {
         async onRunComplete(workflow, run) {
           const finalRun = cloneWorkflowRun(run);

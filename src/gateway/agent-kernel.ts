@@ -76,6 +76,7 @@ class AgentKernelRunRecordStore {
 }
 
 export interface AgentKernelTurnInput {
+  runId?: string;
   agentId: string;
   userMessage: string;
   threadKey?: string;
@@ -95,6 +96,26 @@ export interface AgentKernelRunRecord {
   error?: AgentTurnProcessState['error'];
 }
 
+export interface AgentActiveRunSummary {
+  runId: string;
+  threadKey: string;
+  processStatus: ProcessStatus;
+  phase: AgentTurnProcessState['phase'];
+  createdAt: number;
+  updatedAt: number;
+  sessionKey?: string;
+  error?: AgentTurnProcessState['error'];
+}
+
+export interface AgentQueuedRunSummary {
+  runId: string;
+  threadKey: string;
+  processStatus: ProcessStatus;
+  phase: AgentTurnProcessState['phase'];
+  createdAt: number;
+  updatedAt: number;
+}
+
 type CompletionOutcome = { ok: true; result: TurnResult } | { ok: false; message: string };
 
 export interface AgentKernelServiceOptions {
@@ -106,6 +127,7 @@ export class AgentKernelService {
   private readonly kernel: AgentKernel;
   private readonly runtime: AgentTurnProcessRuntime;
   private readonly runRecordStore: AgentKernelRunRecordStore;
+  private readonly runners: Map<string, AgentRunner>;
   private initPromise: Promise<void> | null = null;
   private pumpPromise: Promise<void> | null = null;
   private pumpTimer: ReturnType<typeof setTimeout> | null = null;
@@ -117,9 +139,11 @@ export class AgentKernelService {
     Array<{ resolve: (result: TurnResult) => void; reject: (error: Error) => void }>
   >();
   private readonly finalizing = new Set<string>();
+  private readonly queuedRuns = new Map<string, AgentKernelRunRecord>();
   private readonly runRecords = new Map<string, AgentKernelRunRecord>();
 
   constructor(options: AgentKernelServiceOptions) {
+    this.runners = options.runners;
     this.runRecordStore = new AgentKernelRunRecordStore(options.dataDir);
     const loadedRecords = this.runRecordStore.load();
     let prunedLegacyLiveRecord = false;
@@ -167,22 +191,63 @@ export class AgentKernelService {
 
   async startTurn(input: AgentKernelTurnInput): Promise<{ runId: string }> {
     await this.initialize();
-    const runId = ulid();
-    await this.kernel.createProcess<AgentTurnProcessInput>({
-      processType: this.runtime.type,
-      processId: asProcessId(runId),
-      metadata: {
-        agentId: input.agentId,
-      },
-      input: {
-        runId,
-        agentId: input.agentId,
-        userMessage: input.userMessage,
-        threadKey: input.threadKey,
-        options: input.options,
-      },
-    });
+    const runId = input.runId ?? ulid();
+    const queuedRecord = this.queuedRuns.get(runId);
+    this.queuedRuns.delete(runId);
+    try {
+      await this.kernel.createProcess<AgentTurnProcessInput>({
+        processType: this.runtime.type,
+        processId: asProcessId(runId),
+        metadata: {
+          agentId: input.agentId,
+        },
+        input: {
+          runId,
+          agentId: input.agentId,
+          userMessage: input.userMessage,
+          threadKey: input.threadKey,
+          options: input.options,
+        },
+      });
+    } catch (error) {
+      if (queuedRecord) {
+        this.rememberRunRecord({
+          ...queuedRecord,
+          processStatus: 'error',
+          phase: 'error',
+          updatedAt: Date.now(),
+          error: {
+            code: 'AGENT_TURN_ERROR',
+            message: error instanceof Error ? error.message : String(error),
+            retryable: false,
+          },
+        });
+      }
+      throw error;
+    }
     this.schedulePump(0);
+    return { runId };
+  }
+
+  async reserveQueuedTurn(input: AgentKernelTurnInput): Promise<{ runId: string }> {
+    await this.initialize();
+    const runId = input.runId ?? ulid();
+    const runner = this.runners.get(input.agentId);
+    const threadKey = input.threadKey?.trim()
+      ? input.threadKey
+      : runner
+        ? ((runner.currentSessionKey as unknown as string).split(':').slice(2).join(':') || 'default')
+        : 'default';
+    const now = Date.now();
+    this.queuedRuns.set(runId, {
+      runId,
+      agentId: input.agentId,
+      threadKey,
+      processStatus: 'waiting',
+      phase: 'pending',
+      createdAt: now,
+      updatedAt: now,
+    });
     return { runId };
   }
 
@@ -208,7 +273,70 @@ export class AgentKernelService {
     if (snapshot) {
       return this.snapshotToRunRecord(snapshot);
     }
+    const queued = this.queuedRuns.get(runId);
+    if (queued) {
+      return queued;
+    }
     return this.runRecords.get(runId) ?? null;
+  }
+
+  getLatestLiveRunForAgent(agentId: string): AgentActiveRunSummary | null {
+    const matches = this.kernel
+      .listSnapshots()
+      .filter((snapshot) => snapshot.processType === this.runtime.type)
+      .map((snapshot) => this.snapshotToRunRecord(snapshot))
+      .filter((record) => record.agentId === agentId)
+      .sort((left, right) => right.updatedAt - left.updatedAt);
+    const current = matches[0];
+    if (!current) {
+      return null;
+    }
+    return {
+      runId: current.runId,
+      threadKey: current.threadKey,
+      processStatus: current.processStatus,
+      phase: current.phase,
+      createdAt: current.createdAt,
+      updatedAt: current.updatedAt,
+      sessionKey: current.sessionKey,
+      error: current.error,
+    };
+  }
+
+  getQueuedRunsForAgent(agentId: string): AgentQueuedRunSummary[] {
+    return Array.from(this.queuedRuns.values())
+      .filter((record) => record.agentId === agentId)
+      .sort((left, right) => left.createdAt - right.createdAt)
+      .map((record) => ({
+        runId: record.runId,
+        threadKey: record.threadKey,
+        processStatus: record.processStatus,
+        phase: record.phase,
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+      }));
+  }
+
+  async cancelQueuedTurn(runId: string): Promise<AgentKernelRunRecord | null> {
+    await this.initialize();
+    const queued = this.queuedRuns.get(runId);
+    if (!queued) {
+      return null;
+    }
+    this.queuedRuns.delete(runId);
+    const cancelledRecord: AgentKernelRunRecord = {
+      ...queued,
+      processStatus: 'error',
+      phase: 'error',
+      updatedAt: Date.now(),
+      error: {
+        code: 'AGENT_TURN_CANCELLED',
+        message: 'Queued run was cancelled before kernel start.',
+        retryable: false,
+      },
+    };
+    this.rememberRunRecord(cancelledRecord);
+    return cancelledRecord;
   }
 
   async resumeTurn(runId: string): Promise<AgentKernelRunRecord | null> {

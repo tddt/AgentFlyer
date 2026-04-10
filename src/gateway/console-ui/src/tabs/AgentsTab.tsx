@@ -7,6 +7,7 @@ import { useToast } from '../hooks/useToast.js';
 import { formatProblemCode, isSuspendedProblemCode, problemCodeBadgeVariant } from '../problem-code-display.js';
 import { getRecoveryHint } from '../recovery-hints.js';
 import type {
+  AgentActivityInfo,
   AgentConfig,
   AgentInfo,
   AgentListResult,
@@ -16,6 +17,44 @@ import type {
   SessionListResult,
   StatsResult,
 } from '../types.js';
+
+function agentStateBadgeVariant(activity?: AgentActivityInfo): 'green' | 'yellow' | 'gray' {
+  if (activity?.state === 'suspended') {
+    return 'yellow';
+  }
+  if (activity?.state === 'running') {
+    return 'green';
+  }
+  return 'gray';
+}
+
+function agentStateLabel(
+  activity: AgentActivityInfo | undefined,
+  t: (key: string, vars?: Record<string, string | number>) => string,
+): string {
+  if (!activity || activity.state === 'idle') {
+    return t('agents.idleBadge');
+  }
+  if (activity.state === 'suspended') {
+    return t('agents.suspendedBadge');
+  }
+  if (activity.pendingCount > 0) {
+    return t('agents.runningQueuedBadge', { n: activity.pendingCount });
+  }
+  return t('agents.runningBadge');
+}
+
+function formatQueuedThreadList(activity: AgentActivityInfo | undefined): string {
+  const threadKeys = activity?.queuedRuns.map((run) => run.threadKey).filter(Boolean) ?? [];
+  return threadKeys.slice(0, 2).join(', ');
+}
+
+function formatQueuedRunLabel(
+  threadKey: string | undefined,
+  t: (key: string, vars?: Record<string, string | number>) => string,
+): string {
+  return threadKey ? t('agents.threadBadge', { thread: threadKey }) : t('agents.queuedRunFallback');
+}
 
 interface EditForm {
   name: string;
@@ -359,10 +398,35 @@ export function AgentsTab({
     [toast, refetchSessions, refetchStats, t],
   );
 
+  const handleCancelQueued = useCallback(
+    async (agentId: string, runId: string, threadKey?: string) => {
+      try {
+        const result = await rpc<{ cancelled: boolean; reason?: string }>('agent.cancel', { runId });
+        if (!result.cancelled) {
+          toast(result.reason ?? t('agents.cancelQueuedUnavailable'), 'error');
+          refetch();
+          return;
+        }
+        toast(
+          t('agents.cancelQueuedSuccess', {
+            agentId,
+            thread: threadKey ?? t('agents.queuedRunFallback'),
+          }),
+          'success',
+        );
+        refetch();
+      } catch (e) {
+        toast(e instanceof Error ? e.message : t('agents.cancelQueuedUnavailable'), 'error');
+      }
+    },
+    [toast, refetch, t],
+  );
+
   if (loading && !agentsResult) return <div className="text-slate-400 text-sm p-8">{t('common.loading')}</div>;
   if (error) return <div className="text-red-400 text-sm p-8">{t('common.error')}{error}</div>;
 
   const list: AgentInfo[] = Array.isArray(agentsResult?.agents) ? agentsResult.agents : [];
+  const activeCount = list.filter((agent) => (agent.activity?.state ?? 'idle') !== 'idle').length;
 
   // Group by workspace
   const groups: Record<string, AgentInfo[]> = {};
@@ -393,7 +457,7 @@ export function AgentsTab({
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-lg font-semibold text-slate-100">{t('agents.title')}</h1>
-          <p className="text-xs text-slate-500 mt-0.5">{t('agents.running', { n: list.length })}</p>
+          <p className="text-xs text-slate-500 mt-0.5">{t('agents.running', { n: activeCount })}</p>
         </div>
         <Button
           size="sm"
@@ -424,6 +488,8 @@ export function AgentsTab({
               const isSelected = selected === a.agentId;
               const sessCount = sessionCounts[a.agentId] ?? 0;
               const errorStats = errorStatsByAgent.get(a.agentId);
+              const activity = a.activity;
+              const queuedThreadList = formatQueuedThreadList(activity);
               const hasRecentProblems = (errorStats?.recentErrorSessions ?? 0) > 0;
               const topProblemCode = errorStats?.topErrorCode;
               const topProblemVariant = topProblemCode ? problemCodeBadgeVariant(topProblemCode) : 'red';
@@ -450,7 +516,9 @@ export function AgentsTab({
                         </span>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
-                        <Badge variant="green">{t('agents.runningBadge')}</Badge>
+                        <Badge variant={agentStateBadgeVariant(activity)}>
+                          {agentStateLabel(activity, t)}
+                        </Badge>
                         {hasRecentProblems ? (
                           <Badge variant={topProblemVariant}>
                             {t('agents.recentErrorsBadge').replace(
@@ -466,10 +534,49 @@ export function AgentsTab({
                       {cfg?.model && <Badge variant="blue">{cfg.model}</Badge>}
                       {cfg?.persona && <Badge variant="purple">{t('agents.personaBadge')}</Badge>}
                       {sessCount > 0 && <Badge variant="gray">{t('agents.sessionsBadge', { n: sessCount })}</Badge>}
+                      {activity?.activeRun?.threadKey ? (
+                        <Badge variant="gray">{t('agents.threadBadge', { thread: activity.activeRun.threadKey })}</Badge>
+                      ) : null}
+                      {(activity?.queuedRuns.length ?? 0) > 0 ? (
+                        <Badge variant="yellow">{t('agents.queuedRunsBadge', { n: activity?.queuedRuns.length ?? 0 })}</Badge>
+                      ) : null}
                       {errorStats ? (
                         <Badge variant={topProblemVariant}>{formatProblemCode(errorStats.topErrorCode, t)}</Badge>
                       ) : null}
                     </div>
+
+                    {queuedThreadList ? (
+                      <div className="rounded-lg bg-amber-950/15 ring-1 ring-amber-500/10 px-3 py-2 text-[11px] text-amber-100/85">
+                        <div>{t('agents.queuedThreadsLabel', { threads: queuedThreadList })}</div>
+                        {(activity?.queuedRuns.length ?? 0) > 0 ? (
+                          <div className="mt-2 flex flex-col gap-2">
+                            {activity?.queuedRuns.map((run) => (
+                              <div
+                                key={run.runId}
+                                className="flex items-center justify-between gap-2 rounded-md bg-black/10 px-2.5 py-1.5"
+                              >
+                                <div className="min-w-0 text-[10px] text-amber-100/80">
+                                  <div className="truncate font-medium">
+                                    {formatQueuedRunLabel(run.threadKey, t)}
+                                  </div>
+                                  <div className="truncate font-mono text-amber-200/55">{run.runId}</div>
+                                </div>
+                                <Button
+                                  size="sm"
+                                  variant="danger"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void handleCancelQueued(a.agentId, run.runId, run.threadKey);
+                                  }}
+                                >
+                                  {t('agents.cancelQueued')}
+                                </Button>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
 
                     {errorStats ? (
                       <div

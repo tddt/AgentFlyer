@@ -540,6 +540,37 @@ export async function startGateway(
     return synchronized;
   }
 
+  async function createConfiguredRunner(
+    agentCfg: AgentConfig,
+    nextConfig: Config,
+  ): Promise<{ runner: AgentRunner; skillCount: number }> {
+    const explicitSkills = filterSkillsForAgent(globalSkillRegistry.list(), agentCfg.skills ?? []);
+    const workspaceSkills = [];
+    if (agentCfg.workspace) {
+      const explicitIds = new Set(explicitSkills.map((skill) => skill.id));
+      for (const skill of scanSkillsDir(
+        join(agentCfg.workspace, 'skills'),
+        nextConfig.skills.summaryLength ?? 60,
+      )) {
+        if (!explicitIds.has(skill.id)) {
+          workspaceSkills.push({ ...skill, source: 'workspace' as const });
+        }
+      }
+    }
+
+    const agentSkills = [...explicitSkills, ...workspaceSkills];
+    const agentSkillsText = buildSkillsDirectory(agentSkills, nextConfig.skills.compact ?? true);
+    const agentSkillRegistry = new (await import('../skills/registry.js')).SkillRegistry();
+    for (const skill of agentSkills) {
+      agentSkillRegistry.register(skill);
+    }
+
+    return {
+      runner: buildRunner(agentCfg, state, agentSkillsText, agentSkillRegistry),
+      skillCount: agentSkills.length,
+    };
+  }
+
   async function rebuildConfiguredAgents(params: {
     nextConfig: Config;
     agentId?: string;
@@ -567,51 +598,33 @@ export async function startGateway(
       if (!nextAgent) throw new Error(`Agent "${agentId}" not found in config`);
       toReload = [nextAgent];
     } else {
-      if (syncAgentSet) {
-        const oldIds = new Set(runners.keys());
-        const newIds = new Set(nextConfig.agents.map((a) => a.id));
-        for (const id of oldIds) {
-          if (!newIds.has(id)) {
-            runners.delete(id);
-            logger.info('Agent removed on reload', { agentId: id });
-          }
-        }
-      }
       toReload = nextConfig.agents;
     }
 
     const reloaded: string[] = [];
+    const rebuiltRunners = new Map<string, AgentRunner>();
     for (const agentCfg of toReload) {
       try {
-        const explicitSkills = filterSkillsForAgent(
-          globalSkillRegistry.list(),
-          agentCfg.skills ?? [],
-        );
-        const workspaceSkills = [];
-        if (agentCfg.workspace) {
-          const explicitIds = new Set(explicitSkills.map((s) => s.id));
-          for (const s of scanSkillsDir(
-            join(agentCfg.workspace, 'skills'),
-            nextConfig.skills.summaryLength ?? 60,
-          )) {
-            if (!explicitIds.has(s.id)) {
-              workspaceSkills.push({ ...s, source: 'workspace' as const });
-            }
-          }
-        }
-
-        const agentSkills = [...explicitSkills, ...workspaceSkills];
-        const agentSkillsText = buildSkillsDirectory(
-          agentSkills,
-          nextConfig.skills.compact ?? true,
-        );
-        const agentSkillRegistry = new (await import('../skills/registry.js')).SkillRegistry();
-        for (const s of agentSkills) agentSkillRegistry.register(s);
-        runners.set(agentCfg.id, buildRunner(agentCfg, state, agentSkillsText, agentSkillRegistry));
+        const { runner, skillCount } = await createConfiguredRunner(agentCfg, nextConfig);
+        rebuiltRunners.set(agentCfg.id, runner);
         reloaded.push(agentCfg.id);
-        logger.info('Agent reloaded', { agentId: agentCfg.id, skills: agentSkills.length });
+        logger.info('Agent reloaded', { agentId: agentCfg.id, skills: skillCount });
       } catch (err) {
         logger.error('Failed to reload runner', { agentId: agentCfg.id, error: String(err) });
+      }
+    }
+
+    for (const [nextAgentId, runner] of rebuiltRunners) {
+      runners.set(nextAgentId, runner);
+    }
+
+    if (syncAgentSet && !agentId) {
+      const nextAgentIds = new Set(nextConfig.agents.map((agent) => agent.id));
+      for (const existingAgentId of [...runners.keys()]) {
+        if (!nextAgentIds.has(existingAgentId)) {
+          runners.delete(existingAgentId);
+          logger.info('Agent removed on reload', { agentId: existingAgentId });
+        }
       }
     }
 
@@ -621,38 +634,15 @@ export async function startGateway(
   // Build a runner for each agent
   for (const agentCfg of config.agents) {
     try {
-      // 1. Skills explicitly selected from the global pool
-      const explicitSkills = filterSkillsForAgent(
-        globalSkillRegistry.list(),
-        agentCfg.skills ?? [],
-      );
-
-      // 2. Auto-merge per-agent workspace skills (<workspace>/skills/)
-      // RATIONALE: agents can drop SKILL.md files in their own workspace without
-      // touching the global config — they are always included automatically.
-      const workspaceSkills = [];
-      if (agentCfg.workspace) {
-        const explicitIds = new Set(explicitSkills.map((s) => s.id));
-        for (const s of scanSkillsDir(
-          join(agentCfg.workspace, 'skills'),
-          config.skills.summaryLength ?? 60,
-        )) {
-          if (!explicitIds.has(s.id)) workspaceSkills.push({ ...s, source: 'workspace' as const });
-        }
-      }
-
-      const agentSkills = [...explicitSkills, ...workspaceSkills];
-      const agentSkillsText = buildSkillsDirectory(agentSkills, config.skills.compact ?? true);
-      if (agentSkills.length > 0) {
+      const { runner, skillCount } = await createConfiguredRunner(agentCfg, config);
+      if (skillCount > 0) {
         logger.info('Skills loaded for agent', {
           agentId: agentCfg.id,
-          skills: agentSkills.map((s) => s.id),
+          skills: filterSkillsForAgent(globalSkillRegistry.list(), agentCfg.skills ?? [])
+            .map((skill) => skill.id),
         });
       }
-      // Build a per-agent registry so skill_read / skill_list are scoped to this agent's skills
-      const agentSkillRegistry = new (await import('../skills/registry.js')).SkillRegistry();
-      for (const s of agentSkills) agentSkillRegistry.register(s);
-      runners.set(agentCfg.id, buildRunner(agentCfg, state, agentSkillsText, agentSkillRegistry));
+      runners.set(agentCfg.id, runner);
       const rawModelForLog = agentCfg.model ?? config.defaults.model;
       const modelKeyForLog =
         rawModelForLog && typeof rawModelForLog === 'object'
@@ -778,6 +768,7 @@ export async function startGateway(
 
   const rpcContext: RpcContext = {
     runners,
+    agentQueues: undefined,
     gatewayVersion: GATEWAY_VERSION,
     startedAt: state.startedAt,
     dataDir,
@@ -814,6 +805,7 @@ export async function startGateway(
   // RATIONALE: A single queue registry ensures concurrent messages for the same
   // agent are processed in FIFO order — prevents setThread()+turn() race conditions.
   const agentQueues = new AgentQueueRegistry();
+  rpcContext.agentQueues = agentQueues;
 
   // RATIONALE: one rate limiter shared across all channels so a sender cannot
   // circumvent limits by alternating between Telegram and Discord (same identity
@@ -1224,6 +1216,7 @@ export async function startGateway(
     bind: config.gateway.bind,
     authToken,
     rpcContext,
+    agentQueues,
     logBroadcaster,
     inboxBroadcaster,
     webhookHandlers: webhookHandlers.size > 0 ? webhookHandlers : undefined,

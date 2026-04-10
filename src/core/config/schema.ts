@@ -9,10 +9,16 @@ const AuthSchema = z.object({
   token: z.string().optional(),
 });
 
+const WorkflowGatewaySchema = z.object({
+  /** Timeout budget for one delegated workflow agent step. */
+  agentStepTimeoutMs: z.number().int().positive().default(300_000),
+});
+
 const GatewaySchema = z.object({
   bind: BindModeSchema.default('loopback'),
   port: z.number().int().min(1024).max(65535).default(19789),
   auth: AuthSchema.default({}),
+  workflow: WorkflowGatewaySchema.default({}),
 });
 
 // ─── Model registry ───────────────────────────────────────────────────────────

@@ -8,6 +8,7 @@ import type { IntentRouter } from './intent-router.js';
 import type { LogBroadcaster } from './log-buffer.js';
 import { routeRequest } from './router.js';
 import type { RouterOptions } from './router.js';
+import type { AgentQueueRegistry } from './agent-queue.js';
 
 const logger = createLogger('gateway:server');
 
@@ -17,6 +18,7 @@ export interface GatewayServerOptions {
   bind: 'loopback' | 'local' | 'tailscale';
   authToken: string;
   rpcContext: RouterOptions['rpcContext'];
+  agentQueues?: AgentQueueRegistry;
   logBroadcaster: LogBroadcaster;
   inboxBroadcaster?: InboxBroadcaster;
   /** Webhook endpoint handlers for webhook-based channels (Feishu, QQ, etc.). */
@@ -47,6 +49,7 @@ export function createGatewayServer(opts: GatewayServerOptions): GatewayServer {
   const routerOpts: RouterOptions = {
     authToken: opts.authToken,
     rpcContext: opts.rpcContext,
+    agentQueues: opts.agentQueues,
     logBroadcaster: opts.logBroadcaster,
     inboxBroadcaster: opts.inboxBroadcaster,
     port: opts.port,

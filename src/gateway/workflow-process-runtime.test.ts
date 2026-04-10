@@ -358,6 +358,71 @@ describe('WorkflowProcessRuntime', () => {
     });
   });
 
+  it('carries structured failure context into the next step for non-fatal super node errors', async () => {
+    const workflow = createWorkflow({
+      steps: [
+        {
+          id: 'collect',
+          type: 'multi_source',
+          agentId: 'coordinator-agent',
+          participantAgentIds: ['source-a', 'source-b'],
+          superNodePrompts: ['市场动向', '用户反馈'],
+          messageTemplate: '{{input}}',
+          condition: 'any',
+        },
+        {
+          id: 'after-error',
+          type: 'transform',
+          messageTemplate: '',
+          transformCode:
+            '`continued:${prev_output.includes("participantResults")}:${prev_output.includes("source-b")}:${prev_output.includes("boom")}`',
+          condition: 'on_success',
+        },
+      ],
+    });
+
+    const runtime = new WorkflowProcessRuntime({
+      async runAgentStep(request) {
+        if (request.agentId === 'source-a') {
+          throw new Error('boom');
+        }
+        if (request.agentId === 'source-b') {
+          return '子结果:source-b';
+        }
+        return 'should not run';
+      },
+    });
+
+    const first = await runtime.step(
+      runtime.createInitialState({
+        runId: 'run-super-node-continue',
+        workflow,
+        input: '行业主题',
+      }),
+      {
+        pid: 'pid-super-node-continue' as never,
+        now: 70,
+        runCount: 0,
+        retryCount: 0,
+        metadata: {},
+      },
+    );
+
+    expect(first.signal).toBe('YIELD');
+    expect(first.state.run.stepResults[0]?.error).toContain("participant 'source-a' failed");
+
+    const second = await runtime.step(first.state, {
+      pid: 'pid-super-node-continue' as never,
+      now: 71,
+      runCount: 1,
+      retryCount: 0,
+      metadata: {},
+    });
+
+    expect(second.signal).toBe('DONE');
+    expect(second.state.run.stepResults[1]?.output).toBe('continued:true:true:true');
+  });
+
   it('restores legacy serialized state by resolving currentStepId from currentStepIndex', () => {
     const workflow = createWorkflow({
       steps: [

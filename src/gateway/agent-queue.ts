@@ -9,7 +9,15 @@
  */
 export class AgentQueue {
   private _busy = false;
-  private readonly _pending: Array<() => Promise<void>> = [];
+  private readonly _pending: Array<QueuedTask<unknown>> = [];
+
+  private startTask<T>(task: QueuedTask<T>, wasQueued: boolean): void {
+    task.hooks?.onStarted?.({
+      wasQueued,
+      queueDepth: this._pending.length,
+    });
+    void task.run().finally(() => this._drain());
+  }
 
   /**
    * Enqueue a task. If the agent is idle the task starts immediately.
@@ -18,24 +26,41 @@ export class AgentQueue {
    * The returned promise resolves (or rejects) when the enqueued task finishes.
    * This lets channel handlers await the full reply before accepting the next one.
    */
-  enqueue(fn: () => Promise<void>): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      const wrapped = async (): Promise<void> => {
+  enqueue<T>(fn: () => Promise<T>, hooks?: AgentQueueHooks): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const task: QueuedTask<T> = {
+        hooks,
+        taskKey: hooks?.taskKey,
+        cancel: (): void => {
+          resolve(undefined as T);
+        },
+        run: async (): Promise<void> => {
         try {
-          await fn();
-          resolve();
+            resolve(await fn());
         } catch (err) {
           reject(err);
         }
+        },
       };
 
       if (!this._busy) {
         this._busy = true;
-        void wrapped().finally(() => this._drain());
+        this.startTask(task, false);
       } else {
-        this._pending.push(wrapped);
+        hooks?.onQueued?.({ position: this._pending.length + 1 });
+        this._pending.push(task);
       }
     });
+  }
+
+  cancelPending(taskKey: string): boolean {
+    const index = this._pending.findIndex((task) => task.taskKey === taskKey);
+    if (index < 0) {
+      return false;
+    }
+    const [task] = this._pending.splice(index, 1);
+    task?.cancel();
+    return true;
   }
 
   /** Returns true while a task is running or tasks are pending. */
@@ -48,14 +73,42 @@ export class AgentQueue {
     return this._pending.length;
   }
 
+  /** Snapshot of current execution/queue state for status surfaces. */
+  get snapshot(): AgentQueueSnapshot {
+    return {
+      hasActiveTask: this._busy,
+      pendingCount: this._pending.length,
+      busy: this._busy || this._pending.length > 0,
+    };
+  }
+
   private _drain(): void {
     const next = this._pending.shift();
     if (!next) {
       this._busy = false;
       return;
     }
-    void next().finally(() => this._drain());
+    this.startTask(next, true);
   }
+}
+
+interface AgentQueueHooks {
+  taskKey?: string;
+  onQueued?: (event: { position: number }) => void;
+  onStarted?: (event: { wasQueued: boolean; queueDepth: number }) => void;
+}
+
+export interface AgentQueueSnapshot {
+  hasActiveTask: boolean;
+  pendingCount: number;
+  busy: boolean;
+}
+
+interface QueuedTask<T> {
+  taskKey?: string;
+  cancel: () => void;
+  run: () => Promise<void>;
+  hooks?: AgentQueueHooks;
 }
 
 /**
@@ -74,6 +127,24 @@ export class AgentQueueRegistry {
       this._queues.set(agentId, q);
     }
     return q;
+  }
+
+  /** Peek the queue without creating a new one. */
+  get(agentId: string): AgentQueue | undefined {
+    return this._queues.get(agentId);
+  }
+
+  /** Return current queue status for an agent. */
+  status(agentId: string): AgentQueueSnapshot {
+    return this._queues.get(agentId)?.snapshot ?? {
+      hasActiveTask: false,
+      pendingCount: 0,
+      busy: false,
+    };
+  }
+
+  cancelPending(agentId: string, taskKey: string): boolean {
+    return this._queues.get(agentId)?.cancelPending(taskKey) ?? false;
   }
 
   /** Remove the queue when an agent is unregistered (optional cleanup). */

@@ -6,6 +6,7 @@ import { createLogger } from '../core/logger.js';
 import { summarizeSessionErrors } from '../core/session/error-stats.js';
 import { type StreamChunk, asAgentId, parseSessionKey } from '../core/types.js';
 import { getAgentKernelService } from './agent-kernel.js';
+import type { AgentQueueRegistry } from './agent-queue.js';
 import { validateToken } from './auth.js';
 import { captureChatTurnDeliverable } from './chat-deliverables.js';
 import { buildConsoleHtml } from './console/index.js';
@@ -19,6 +20,7 @@ const logger = createLogger('gateway:router');
 export interface RouterOptions {
   authToken: string;
   rpcContext: RpcContext;
+  agentQueues?: AgentQueueRegistry;
   logBroadcaster: LogBroadcaster;
   inboxBroadcaster?: InboxBroadcaster;
   port: number;
@@ -392,51 +394,69 @@ export async function routeRequest(
     };
 
     try {
-      let replyText = '';
       const startedAt = Date.now();
       const agentKernel = await getAgentKernelService(opts.rpcContext);
-      const gen = agentKernel.streamTurn({
-        agentId,
-        userMessage: inboundMessage,
-        threadKey: thread,
-      });
-      let next = await gen.next();
-      let finalResult = next.done ? next.value : null;
-      while (!next.done) {
-        const chunk = next.value as StreamChunk;
-        if (chunk.type === 'text_delta' && chunk.text) {
-          replyText += chunk.text;
+      const executeStream = async (): Promise<void> => {
+        let replyText = '';
+        const gen = agentKernel.streamTurn({
+          agentId,
+          userMessage: inboundMessage,
+          threadKey: thread,
+        });
+        let next = await gen.next();
+        let finalResult = next.done ? next.value : null;
+        while (!next.done) {
+          const chunk = next.value as StreamChunk;
+          if (chunk.type === 'text_delta' && chunk.text) {
+            replyText += chunk.text;
+          }
+          sendEvent(chunk);
+          next = await gen.next();
+          if (next.done) {
+            finalResult = next.value;
+          }
         }
-        sendEvent(chunk);
-        next = await gen.next();
-        if (next.done) {
-          finalResult = next.value;
+        const resolvedThreadKey =
+          finalResult && parseSessionKey(finalResult.sessionKey)?.threadKey
+            ? (parseSessionKey(finalResult.sessionKey)?.threadKey as unknown as string)
+            : (thread ?? '');
+        if (replyText.trim() && opts.inboxBroadcaster) {
+          opts.inboxBroadcaster.publish({
+            kind: 'agent_reply',
+            agentId,
+            threadKey: resolvedThreadKey,
+            channelId: 'chat',
+            title: `${agentId} replied`,
+            text: replyText.trim(),
+          });
         }
-      }
-      const resolvedThreadKey =
-        finalResult && parseSessionKey(finalResult.sessionKey)?.threadKey
-          ? (parseSessionKey(finalResult.sessionKey)?.threadKey as unknown as string)
-          : (thread ?? '');
-      if (replyText.trim() && opts.inboxBroadcaster) {
-        opts.inboxBroadcaster.publish({
-          kind: 'agent_reply',
+        await captureChatTurnDeliverable(opts.rpcContext, {
           agentId,
           threadKey: resolvedThreadKey,
           channelId: 'chat',
-          title: `${agentId} replied`,
-          text: replyText.trim(),
+          replyText,
+          startedAt,
         });
+      };
+
+      const agentQueue = opts.agentQueues?.for(agentId);
+      if (agentQueue) {
+        await agentQueue.enqueue(executeStream, {
+          onQueued: ({ position }) => {
+            sendEvent({ type: 'queued', position });
+          },
+          onStarted: ({ wasQueued, queueDepth }) => {
+            if (wasQueued) {
+              sendEvent({ type: 'started', queueDepth });
+            }
+          },
+        });
+      } else {
+        await executeStream();
       }
-      await captureChatTurnDeliverable(opts.rpcContext, {
-        agentId,
-        threadKey: resolvedThreadKey,
-        channelId: 'chat',
-        replyText,
-        startedAt,
-      });
     } catch (err) {
       logger.error('Streaming chat error', { agentId, error: String(err) });
-      sendEvent({ type: 'error', error: String(err) });
+      sendEvent({ type: 'error', message: String(err) });
     }
     res.write('data: [DONE]\n\n');
     res.end();

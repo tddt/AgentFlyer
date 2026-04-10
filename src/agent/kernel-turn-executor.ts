@@ -44,6 +44,7 @@ export interface ExecuteAgentTurnViaKernelOptions {
   runners: AgentRunnerResolver;
   input: AgentTurnProcessInput;
   dataDir?: string;
+  timeoutMs?: number;
 }
 
 function resolveRunner(runners: AgentRunnerResolver, agentId: string): AgentRunner | undefined {
@@ -119,6 +120,26 @@ class AgentKernelTurnExecutor {
   async executeTurn(input: AgentTurnProcessInput): Promise<TurnResult> {
     const started = await this.startTurn(input);
     return await this.waitForCompletion(started.runId);
+  }
+
+  async abortTurn(runId: string, message: string): Promise<void> {
+    await this.initialize();
+    const snapshot = this.kernel.getSnapshot(asProcessId(runId));
+    if (snapshot) {
+      try {
+        const state = this.runtime.deserialize(snapshot.state) as AgentTurnProcessState;
+        const runner = this.resolveRunnerFn(state.agentId);
+        if (runner) {
+          runner.restoreState(state.runnerState);
+          runner.forceReset();
+        }
+      } catch {
+        // Best effort: timeout cleanup should not fail if lease recovery is unavailable.
+      }
+      await this.kernel.deleteProcess(snapshot.pid);
+    }
+    this.suspendedRuns.delete(runId);
+    this.completeRun(runId, { ok: false, message });
   }
 
   private schedulePump(delayMs: number): void {
@@ -284,16 +305,29 @@ class AgentKernelTurnExecutor {
 
 const sharedExecutors = new Map<string, Promise<AgentKernelTurnExecutor>>();
 
+function buildExecutorKey(options: ExecuteAgentTurnViaKernelOptions): string | null {
+  if (!options.dataDir) {
+    return null;
+  }
+  if (options.runners instanceof Map && options.runners.size === 1) {
+    const onlyAgentId = options.runners.keys().next().value;
+    if (typeof onlyAgentId === 'string' && onlyAgentId.length > 0) {
+      return `${options.dataDir}::${onlyAgentId}`;
+    }
+  }
+  return options.dataDir;
+}
+
 async function getExecutor(
   options: ExecuteAgentTurnViaKernelOptions,
 ): Promise<AgentKernelTurnExecutor> {
-  if (!options.dataDir) {
+  const key = buildExecutorKey(options);
+  if (!key) {
     const executor = new AgentKernelTurnExecutor(options.runners, createCheckpointStore());
     await executor.initialize();
     return executor;
   }
 
-  const key = options.dataDir;
   const existing = sharedExecutors.get(key);
   if (existing) {
     const executor = await existing;
@@ -319,8 +353,32 @@ export async function executeAgentTurnViaKernel(
   options: ExecuteAgentTurnViaKernelOptions,
 ): Promise<TurnResult> {
   const executor = await getExecutor(options);
-  return await executor.executeTurn({
+  const runId = options.input.runId ?? ulid();
+  const turnPromise = executor.executeTurn({
     ...options.input,
-    runId: options.input.runId ?? ulid(),
+    runId,
+  });
+  if (!options.timeoutMs || options.timeoutMs <= 0) {
+    return await turnPromise;
+  }
+
+  return await new Promise<TurnResult>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const message = `Agent '${options.input.agentId}' turn timed out after ${options.timeoutMs}ms`;
+      void executor.abortTurn(runId, message).finally(() => {
+        reject(new Error(message));
+      });
+    }, options.timeoutMs);
+
+    turnPromise.then(
+      (result) => {
+        clearTimeout(timer);
+        resolve(result);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
   });
 }

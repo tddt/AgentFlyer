@@ -128,14 +128,14 @@ export function buildWorkflowSuperNodeCoordinatorPrompt(params: {
 
   switch (type) {
     case 'multi_source':
-      return `你正在作为“多源信息采集节点”的总协调者。\n请整合以下多维采集结果，输出“行业信息整合包”。${domainRuleBlock}${previousOutputBlock}\n主任务:\n${baseMessage}\n\n请输出 Markdown，结构固定为:\n## 核心数据\n## 趋势信号\n## 异常点\n## 综合判断\n\n以下是各子结果:\n${evidence}`;
+      return `你正在作为“多源信息采集节点”的总协调者。\n请整合以下多维采集结果，输出“行业信息整合包”。${domainRuleBlock}${previousOutputBlock}\n主任务:\n${baseMessage}\n\n最终结果必须覆盖：核心数据、趋势信号、异常点、综合判断。请遵循当前节点已经配置的输出格式要求。\n\n以下是各子结果:\n${evidence}`;
     case 'debate':
-      return `你正在作为“多维对抗辩论节点”的主持与纪要整理者。\n请综合各立场辩论结果，输出“对抗辩论纪要”。${domainRuleBlock}${previousOutputBlock}\n辩题:\n${baseMessage}\n\n请输出 Markdown，结构固定为:\n## 核心观点\n## 分歧点\n## 共识结论\n## 待补证据\n\n以下是各子结果:\n${evidence}`;
+      return `你正在作为“多维对抗辩论节点”的主持与纪要整理者。\n请综合各立场辩论结果，输出“对抗辩论纪要”。${domainRuleBlock}${previousOutputBlock}\n辩题:\n${baseMessage}\n\n最终结果必须覆盖：核心观点、分歧点、共识结论、待补证据。请遵循当前节点已经配置的输出格式要求。\n\n以下是各子结果:\n${evidence}`;
     case 'decision':
-      return `你正在执行“决策生成节点”。\n请结合辩论结论、补充分析与行业规则，输出“结构化决策方案”。${domainRuleBlock}${previousOutputBlock}\n任务:\n${baseMessage}\n\n请输出 Markdown，结构固定为:\n## 方向\n## 优先级\n## 执行步骤\n## 关键依赖\n## 置信度\n\n以下是可用输入:\n${evidence || '（无额外并行子结果）'}`;
+      return `你正在执行“决策生成节点”。\n请结合辩论结论、补充分析与行业规则，输出“结构化决策方案”。${domainRuleBlock}${previousOutputBlock}\n任务:\n${baseMessage}\n\n最终结果必须覆盖：方向、优先级、执行步骤、关键依赖、置信度。请遵循当前节点已经配置的输出格式要求。\n\n以下是可用输入:\n${evidence || '（无额外并行子结果）'}`;
     case 'risk_review':
-      return `你正在作为“风险审核节点”的总协调者。\n请基于并行风险审核结果与行业规则，输出“风险审核报告”。${domainRuleBlock}${previousOutputBlock}\n待审核方案:\n${baseMessage}\n\n请输出 Markdown，结构固定为:\n## 风险等级\n## 主要风险\n## 整改建议\n## 否决项\n## 是否建议进入裁定\n\n以下是各子结果:\n${evidence}`;
+      return `你正在作为“风险审核节点”的总协调者。\n请基于并行风险审核结果与行业规则，输出“风险审核报告”。${domainRuleBlock}${previousOutputBlock}\n待审核方案:\n${baseMessage}\n\n最终结果必须覆盖：风险等级、主要风险、整改建议、否决项、是否建议进入裁定。请遵循当前节点已经配置的输出格式要求。\n\n以下是各子结果:\n${evidence}`;
     case 'adjudication':
-      return `你正在执行“裁定节点”，需要基于全局视角做最终拍板。\n请综合风控结果、参考分析与行业规则，输出“最终执行方案”。${domainRuleBlock}${previousOutputBlock}\n待裁定事项:\n${baseMessage}\n\n请输出 Markdown，结构固定为:\n## 拍板结果\n## 责任分配\n## 落地节点\n## 继续观察项\n\n以下是各子结果:\n${evidence || '（无额外并行子结果）'}`;
+      return `你正在执行“裁定节点”，需要基于全局视角做最终拍板。\n请综合风控结果、参考分析与行业规则，输出“最终执行方案”。${domainRuleBlock}${previousOutputBlock}\n待裁定事项:\n${baseMessage}\n\n最终结果必须覆盖：拍板结果、责任分配、落地节点、继续观察项。请遵循当前节点已经配置的输出格式要求。\n\n以下是各子结果:\n${evidence || '（无额外并行子结果）'}`;
   }
 }

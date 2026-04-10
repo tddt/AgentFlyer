@@ -11,6 +11,7 @@ import { SessionMetaStore } from '../core/session/meta.js';
 import { SessionStore } from '../core/session/store.js';
 import type { StreamChunk } from '../core/types.js';
 import { AgentKernelService, getAgentKernelService } from './agent-kernel.js';
+import { AgentQueueRegistry } from './agent-queue.js';
 import type { RpcContext } from './rpc.js';
 import { dispatchRpc } from './rpc.js';
 
@@ -158,6 +159,45 @@ class FakeRecoverableBlockedLlmProvider implements LLMProvider {
   }
 }
 
+class BlockingProvider implements LLMProvider {
+  readonly id = 'fake-blocking-llm';
+
+  private runCount = 0;
+
+  constructor(private readonly releaseFirstRun: Promise<void>) {}
+
+  async *run(_params: RunParams): AsyncIterable<StreamChunk> {
+    this.runCount += 1;
+    if (this.runCount === 1) {
+      await this.releaseFirstRun;
+      yield { type: 'text_delta', text: 'first run released' };
+      yield {
+        type: 'done',
+        inputTokens: 1,
+        outputTokens: 1,
+        stopReason: 'end_turn',
+      };
+      return;
+    }
+
+    yield { type: 'text_delta', text: 'queued rpc reply' };
+    yield {
+      type: 'done',
+      inputTokens: 1,
+      outputTokens: 1,
+      stopReason: 'end_turn',
+    };
+  }
+
+  async countTokens(): Promise<number> {
+    return 0;
+  }
+
+  supports(): boolean {
+    return true;
+  }
+}
+
 function createRunner(
   dataDir: string,
   provider: LLMProvider = new FakeProvider(),
@@ -207,7 +247,11 @@ function createRunner(
   );
 }
 
-function createRpcContext(dataDir: string, runner: AgentRunner): RpcContext {
+function createRpcContext(
+  dataDir: string,
+  runner: AgentRunner,
+  overrides: Partial<RpcContext> = {},
+): RpcContext {
   return {
     runners: new Map([['agent-main', runner]]),
     gatewayVersion: 'test',
@@ -229,6 +273,7 @@ function createRpcContext(dataDir: string, runner: AgentRunner): RpcContext {
     deliverableStore: {} as never,
     channels: new Map(),
     runningTasks: new Map(),
+    ...overrides,
   };
 }
 
@@ -271,15 +316,15 @@ async function waitForArchivedRun(
 async function waitForRpcRunPhase(
   ctx: RpcContext,
   runId: string,
-  phase: 'suspended' | 'done',
+  phase: 'pending' | 'suspended' | 'done',
 ): Promise<{
-  phase: 'suspended' | 'done';
+  phase: 'pending' | 'suspended' | 'done';
   processStatus: string;
   error?: { code: string; message: string };
   result?: { text: string };
 }> {
   let lastRun: {
-    phase: 'suspended' | 'done';
+    phase: 'pending' | 'suspended' | 'done';
     processStatus: string;
     error?: { code: string; message: string };
     result?: { text: string };
@@ -720,5 +765,326 @@ describe('AgentKernelService', () => {
       ctx,
     );
     expect((afterResume.result as { processStatus?: string } | null)?.processStatus).toBe('ready');
+  });
+
+  it('queues agent.chat behind an already running turn when agentQueues are configured', async () => {
+    const dataDir = await createTempDir();
+    let releaseFirstRun!: () => void;
+    const firstRunReleased = new Promise<void>((resolve) => {
+      releaseFirstRun = resolve;
+    });
+    const provider = new BlockingProvider(firstRunReleased);
+    const runner = createRunner(dataDir, provider);
+    const ctx = createRpcContext(dataDir, runner, {
+      agentQueues: new AgentQueueRegistry(),
+    });
+    const service = await getAgentKernelService(ctx);
+    services.push(service);
+
+    const started = await service.startTurn({
+      agentId: 'agent-main',
+      userMessage: 'block the runner first',
+      threadKey: 'rpc-chat-queue-blocking-thread',
+    });
+
+    let settled = false;
+    const queuedChat = dispatchRpc(
+      {
+        id: 2,
+        method: 'agent.chat',
+        params: {
+          agentId: 'agent-main',
+          message: 'queued rpc message',
+          thread: 'rpc-chat-queue-thread',
+        },
+      },
+      ctx,
+    ).then((response) => {
+      settled = true;
+      return response;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+
+    releaseFirstRun();
+    await waitForArchivedRun(service, started.runId);
+
+    const response = await queuedChat;
+    expect((response.result as { reply: string }).reply).toContain('queued rpc reply');
+  });
+
+  it('reports active run and pending queue state through agent.status and agent.list', async () => {
+    const dataDir = await createTempDir();
+    let releaseFirstRun!: () => void;
+    const firstRunReleased = new Promise<void>((resolve) => {
+      releaseFirstRun = resolve;
+    });
+    const provider = new BlockingProvider(firstRunReleased);
+    const runner = createRunner(dataDir, provider);
+    const ctx = createRpcContext(dataDir, runner, {
+      agentQueues: new AgentQueueRegistry(),
+    });
+    const service = await getAgentKernelService(ctx);
+    services.push(service);
+
+    const firstChat = dispatchRpc(
+      {
+        id: 1,
+        method: 'agent.chat',
+        params: {
+          agentId: 'agent-main',
+          message: 'status block the runner first',
+          thread: 'status-blocking-thread',
+        },
+      },
+      ctx,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const queuedChat = dispatchRpc(
+      {
+        id: 2,
+        method: 'agent.chat',
+        params: {
+          agentId: 'agent-main',
+          message: 'queued status message',
+          thread: 'status-queued-thread',
+        },
+      },
+      ctx,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const statusResponse = await dispatchRpc(
+      {
+        id: 3,
+        method: 'agent.status',
+        params: { agentId: 'agent-main' },
+      },
+      ctx,
+    );
+    expect(statusResponse.result).toMatchObject({
+      agentId: 'agent-main',
+      activity: {
+        state: 'running',
+        pendingCount: 1,
+        activeRun: {
+          threadKey: 'status-blocking-thread',
+        },
+      },
+    });
+
+    const listResponse = await dispatchRpc(
+      {
+        id: 4,
+        method: 'agent.list',
+      },
+      ctx,
+    );
+    expect((listResponse.result as { agents: Array<{ agentId: string; activity: { pendingCount: number } }> }).agents).toContainEqual(
+      expect.objectContaining({
+        agentId: 'agent-main',
+        activity: expect.objectContaining({
+          state: 'running',
+          pendingCount: 1,
+        }),
+      }),
+    );
+
+    releaseFirstRun();
+    await firstChat;
+    await queuedChat;
+  });
+
+  it('returns a queued run handle immediately and exposes pending runStatus before kernel start', async () => {
+    const dataDir = await createTempDir();
+    let releaseFirstRun!: () => void;
+    const firstRunReleased = new Promise<void>((resolve) => {
+      releaseFirstRun = resolve;
+    });
+    const provider = new BlockingProvider(firstRunReleased);
+    const runner = createRunner(dataDir, provider);
+    const ctx = createRpcContext(dataDir, runner, {
+      agentQueues: new AgentQueueRegistry(),
+    });
+    services.push(await getAgentKernelService(ctx));
+
+    const firstStarted = await dispatchRpc(
+      {
+        id: 1,
+        method: 'agent.run',
+        params: {
+          agentId: 'agent-main',
+          message: 'first queued run',
+          thread: 'queued-run-first-thread',
+        },
+      },
+      ctx,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const secondStarted = await dispatchRpc(
+      {
+        id: 2,
+        method: 'agent.run',
+        params: {
+          agentId: 'agent-main',
+          message: 'second queued run',
+          thread: 'queued-run-second-thread',
+        },
+      },
+      ctx,
+    );
+
+    const secondRunId = (secondStarted.result as { runId: string; queued?: boolean }).runId;
+    expect((secondStarted.result as { queued?: boolean }).queued).toBe(true);
+
+    const pending = await waitForRpcRunPhase(ctx, secondRunId, 'pending');
+    expect(pending.processStatus).toBe('waiting');
+
+    const statusResponse = await dispatchRpc(
+      {
+        id: 3,
+        method: 'agent.status',
+        params: { agentId: 'agent-main' },
+      },
+      ctx,
+    );
+    expect(statusResponse.result).toMatchObject({
+      agentId: 'agent-main',
+      activity: {
+        state: 'running',
+        pendingCount: 1,
+        queuedRuns: [
+          {
+            runId: secondRunId,
+            threadKey: 'queued-run-second-thread',
+            processStatus: 'waiting',
+            phase: 'pending',
+          },
+        ],
+      },
+    });
+
+    releaseFirstRun();
+
+    const firstRunId = (firstStarted.result as { runId: string }).runId;
+    await waitForRpcRunPhase(ctx, firstRunId, 'done');
+    const completed = await waitForRpcRunPhase(ctx, secondRunId, 'done');
+    expect(completed.result?.text).toContain('queued rpc reply');
+  });
+
+  it('cancels a queued run before kernel start and keeps it from starting later', async () => {
+    const dataDir = await createTempDir();
+    let releaseFirstRun!: () => void;
+    const firstRunReleased = new Promise<void>((resolve) => {
+      releaseFirstRun = resolve;
+    });
+    const provider = new BlockingProvider(firstRunReleased);
+    const runner = createRunner(dataDir, provider);
+    const ctx = createRpcContext(dataDir, runner, {
+      agentQueues: new AgentQueueRegistry(),
+    });
+    services.push(await getAgentKernelService(ctx));
+
+    const firstStarted = await dispatchRpc(
+      {
+        id: 1,
+        method: 'agent.run',
+        params: {
+          agentId: 'agent-main',
+          message: 'first blocking run',
+          thread: 'queued-cancel-first-thread',
+        },
+      },
+      ctx,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const secondStarted = await dispatchRpc(
+      {
+        id: 2,
+        method: 'agent.run',
+        params: {
+          agentId: 'agent-main',
+          message: 'second queued run to cancel',
+          thread: 'queued-cancel-second-thread',
+        },
+      },
+      ctx,
+    );
+
+    const secondRunId = (secondStarted.result as { runId: string; queued?: boolean }).runId;
+    const cancelled = await dispatchRpc(
+      {
+        id: 3,
+        method: 'agent.cancel',
+        params: { runId: secondRunId },
+      },
+      ctx,
+    );
+
+    expect((cancelled.result as { cancelled: boolean }).cancelled).toBe(true);
+
+    const cancelledStatus = await dispatchRpc(
+      {
+        id: 4,
+        method: 'agent.runStatus',
+        params: { runId: secondRunId },
+      },
+      ctx,
+    );
+    expect(cancelledStatus.result).toMatchObject({
+      runId: secondRunId,
+      processStatus: 'error',
+      phase: 'error',
+      error: {
+        code: 'AGENT_TURN_CANCELLED',
+      },
+    });
+
+    const statusResponse = await dispatchRpc(
+      {
+        id: 5,
+        method: 'agent.status',
+        params: { agentId: 'agent-main' },
+      },
+      ctx,
+    );
+    expect(statusResponse.result).toMatchObject({
+      agentId: 'agent-main',
+      activity: {
+        state: 'running',
+        pendingCount: 0,
+        queuedRuns: [],
+      },
+    });
+
+    releaseFirstRun();
+
+    const firstRunId = (firstStarted.result as { runId: string }).runId;
+    await waitForRpcRunPhase(ctx, firstRunId, 'done');
+
+    const finalCancelledStatus = await dispatchRpc(
+      {
+        id: 6,
+        method: 'agent.runStatus',
+        params: { runId: secondRunId },
+      },
+      ctx,
+    );
+    expect(finalCancelledStatus.result).toMatchObject({
+      runId: secondRunId,
+      processStatus: 'error',
+      phase: 'error',
+      error: {
+        code: 'AGENT_TURN_CANCELLED',
+      },
+    });
   });
 });

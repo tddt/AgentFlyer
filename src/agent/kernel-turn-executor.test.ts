@@ -46,7 +46,23 @@ class FakeProvider implements LLMProvider {
   }
 }
 
-function createRunner(dataDir: string, agentId = 'agent-main'): AgentRunner {
+class HangingProvider implements LLMProvider {
+  readonly id = 'hanging';
+
+  async *run(_params: RunParams): AsyncIterable<StreamChunk> {
+    await new Promise<never>(() => undefined);
+  }
+
+  async countTokens(): Promise<number> {
+    return 0;
+  }
+
+  supports(): boolean {
+    return true;
+  }
+}
+
+function createRunner(dataDir: string, agentId = 'agent-main', provider?: LLMProvider): AgentRunner {
   return new AgentRunner(
     {
       id: agentId,
@@ -67,7 +83,7 @@ function createRunner(dataDir: string, agentId = 'agent-main'): AgentRunner {
       persona: { language: 'zh-CN', outputDir: 'output' },
     },
     {
-      provider: new FakeProvider(`hello from ${agentId}`),
+      provider: provider ?? new FakeProvider(`hello from ${agentId}`),
       toolRegistry: new ToolRegistry(),
       sessionStore: new SessionStore(join(dataDir, 'sessions')),
       metaStore: new SessionMetaStore(join(dataDir, 'sessions')),
@@ -129,5 +145,57 @@ describe('executeAgentTurnViaKernel', () => {
     expect(mainResult.sessionKey).toContain('executor-main');
     expect(altResult.text).toContain('hello from agent-alt');
     expect(altResult.sessionKey).toContain('executor-alt');
+  });
+
+  it('keeps concurrent narrow runner maps isolated per agent', async () => {
+    const dataDir = await createTempDir();
+    const mainRunner = createRunner(dataDir, 'agent-main');
+    const altRunner = createRunner(dataDir, 'agent-alt');
+
+    const [mainResult, altResult] = await Promise.all([
+      executeAgentTurnViaKernel({
+        runners: new Map([['agent-main', mainRunner]]),
+        dataDir,
+        input: {
+          agentId: 'agent-main',
+          userMessage: 'hello main narrow',
+          threadKey: 'executor-main-narrow',
+        },
+      }),
+      executeAgentTurnViaKernel({
+        runners: new Map([['agent-alt', altRunner]]),
+        dataDir,
+        input: {
+          agentId: 'agent-alt',
+          userMessage: 'hello alt narrow',
+          threadKey: 'executor-alt-narrow',
+        },
+      }),
+    ]);
+
+    expect(mainResult.text).toContain('hello from agent-main');
+    expect(mainResult.sessionKey).toContain('executor-main-narrow');
+    expect(altResult.text).toContain('hello from agent-alt');
+    expect(altResult.sessionKey).toContain('executor-alt-narrow');
+  });
+
+  it('aborts timed out kernel turns and releases the runner lease', async () => {
+    const dataDir = await createTempDir();
+    const runner = createRunner(dataDir, 'agent-main', new HangingProvider());
+
+    await expect(
+      executeAgentTurnViaKernel({
+        runners: new Map([['agent-main', runner]]),
+        dataDir,
+        timeoutMs: 20,
+        input: {
+          agentId: 'agent-main',
+          userMessage: 'hang forever',
+          threadKey: 'executor-timeout',
+        },
+      }),
+    ).rejects.toThrow("Agent 'agent-main' turn timed out after 20ms");
+
+    expect(runner.isRunning).toBe(false);
   });
 });
