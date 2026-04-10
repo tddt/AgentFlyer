@@ -1,7 +1,7 @@
 {
   "name": "agentflyer",
   "version": "1.1.0",
-  "description": "Decentralized, cross-platform, multi-host federated AI Agent framework",
+  "description": "Distributed AgentOS for multi-agent orchestration, workflows, memory, and multi-channel AI runtimes",
   "type": "module",
   "license": "MIT",
   "author": "dteric",
@@ -14,16 +14,17 @@
     "url": "https://github.com/tddt/AgentFlyer/issues"
   },
   "keywords": [
+    "agentos",
     "ai",
     "agent",
-    "llm",
-    "framework",
-    "federation",
     "multi-agent",
-    "claude",
-    "openai",
-    "chatbot",
+    "workflow",
+    "orchestration",
+    "mcp",
+    "sandbox",
+    "memory",
     "automation",
+    "multi-channel",
     "bun",
     "typescript"
   ],
