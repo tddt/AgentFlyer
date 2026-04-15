@@ -1,6 +1,6 @@
 {
   "name": "agentflyer",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Distributed AgentOS for multi-agent orchestration, workflows, memory, and multi-channel AI runtimes",
   "type": "module",
   "license": "MIT",
