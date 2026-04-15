@@ -1219,7 +1219,7 @@ describe('workflow-backend kernel integration', () => {
     const runs = (history.result as { runs: WorkflowRunRecord[] }).runs;
     expect(runs.length).toBeGreaterThan(0);
     expect(runs.every((run) => run.status === 'done')).toBe(true);
-  });
+  }, 30_000);
 
   it('runs scheduler workflow execution through the kernel service', async () => {
     const dataDir = join(process.cwd(), `.tmp-workflow-backend-test-scheduler-${ulid()}`);

@@ -177,7 +177,7 @@ export class WorkflowProcessRuntime
       priorResults.push(options.appendStepResult);
     }
     const prevOutputs = priorResults
-      .slice(0, fromStepIndex)  // don't include appended step result in prevOutputs
+      .slice(0, fromStepIndex) // don't include appended step result in prevOutputs
       .map((r) => r.output ?? '');
 
     // Reconstruct SerializedStepVars from the varsSnapshot of the last completed step
@@ -405,7 +405,7 @@ export class WorkflowProcessRuntime
           throw new Error('Workflow agent step handler is not configured');
         }
         const onToken = this.handlers.onToken
-          ? (token: string) => this.handlers.onToken!(state.run.runId, step.id, token)
+          ? (token: string) => this.handlers.onToken?.(state.run.runId, step.id, token)
           : undefined;
         return {
           output: (

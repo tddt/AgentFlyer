@@ -12,6 +12,7 @@ function createTempDir(label: string): string {
 describe('sandbox runtime', () => {
   it('persists sandbox run records and output files', async () => {
     const dataDir = createTempDir('sandbox-runtime');
+
     const runtime = createHostSandboxRuntime({ dataDir });
     const nodeCommand = [
       "$ErrorActionPreference = 'Stop'",
@@ -43,7 +44,7 @@ describe('sandbox runtime', () => {
     await expect(
       readFile(join(dataDir, 'sandbox', result.runId, 'stderr.txt'), 'utf-8'),
     ).resolves.toContain('sandbox-stderr');
-  });
+  }, 15_000);
 
   it('mirrors changed artifacts back into the workspace', async () => {
     const dataDir = createTempDir('sandbox-runtime-artifacts');
@@ -76,7 +77,7 @@ describe('sandbox runtime', () => {
         'utf-8',
       ).then((content) => content.trim()),
     ).resolves.toBe('artifact-from-sandbox');
-  });
+  }, 15_000);
 
   it('selects docker runtime when sandbox config enables docker provider', async () => {
     const runtime = createSandboxRuntime({

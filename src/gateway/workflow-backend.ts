@@ -1217,8 +1217,7 @@ export async function dispatchWorkflowRpc(
       const service = await getWorkflowKernelService(ctx);
       const workflows = await readWorkflowsFile(ctx.dataDir);
       const history = await readWorkflowRunsFile(ctx.dataDir);
-      const priorRun =
-        service.getRun(runId) ?? history.find((r) => r.runId === runId) ?? null;
+      const priorRun = service.getRun(runId) ?? history.find((r) => r.runId === runId) ?? null;
       if (!priorRun) return err(id, 404, `Run not found: ${runId}`);
       const workflow = workflows.find((w) => w.id === priorRun.workflowId);
       if (!workflow) return err(id, 404, `Workflow not found: ${priorRun.workflowId}`);
@@ -1235,7 +1234,7 @@ export async function dispatchWorkflowRpc(
       const priorRun = service.getRun(runId) ?? history.find((r) => r.runId === runId) ?? null;
       if (!priorRun) return err(id, 404, `Run not found: ${runId}`);
       if (priorRun.status === 'running') {
-        return err(id, 400, `Cannot skip a step while the run is still running; cancel first.`);
+        return err(id, 400, 'Cannot skip a step while the run is still running; cancel first.');
       }
       const newRun = await service.skipStep(runId, stepId);
       return ok(id, { runId: newRun.runId });

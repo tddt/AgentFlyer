@@ -336,12 +336,13 @@ export class WorkflowKernelService {
       throw new Error(`No step to continue to after ${stepId} (it was the last step)`);
     }
     // Get the failed step's existing result (or create a synthetic one)
-    const failedResult: WorkflowStepResult =
-      priorRun.stepResults.find((r) => r.stepId === stepId) ?? {
-        stepId,
-        error: 'Skipped by operator',
-        finishedAt: Date.now(),
-      };
+    const failedResult: WorkflowStepResult = priorRun.stepResults.find(
+      (r) => r.stepId === stepId,
+    ) ?? {
+      stepId,
+      error: 'Skipped by operator',
+      finishedAt: Date.now(),
+    };
     const newRunId = ulid();
     this.runnerSnapshots.set(newRunId, new Map(this.liveRunners));
     const newSnapshot = await this.kernel.createProcess<WorkflowProcessInput>({
