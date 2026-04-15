@@ -190,8 +190,12 @@ export class AgentKernel {
   async resolveSyscall(
     pid: ProcessId,
     resolution: SyscallResolution,
-  ): Promise<KernelProcessSnapshot> {
-    this.requireSnapshot(pid);
+  ): Promise<KernelProcessSnapshot | null> {
+    if (!this.snapshots.has(pid)) {
+      // Process was deleted (e.g. cancelled) while we were awaiting the syscall — silently ignore
+      logger.warn('resolveSyscall: process already deleted, ignoring', { pid });
+      return null;
+    }
     const updated = this.updateSnapshot(pid, {
       status: 'ready',
       updatedAt: resolution.resolvedAt,

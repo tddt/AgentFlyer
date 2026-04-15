@@ -161,6 +161,10 @@ export interface WorkflowStepResult {
   /** Streaming-in-progress or final output text. */
   output?: string;
   error?: string;
+  /** Unix timestamp (ms) when this step started executing. */
+  startedAt?: number;
+  /** Unix timestamp (ms) when this step finished (success or error). */
+  finishedAt?: number;
   superNodeTrace?: {
     type: 'multi_source' | 'debate' | 'decision' | 'risk_review' | 'adjudication';
     coordinatorAgentId: string;
@@ -185,6 +189,10 @@ export interface WorkflowRunRecord {
   status: 'running' | 'done' | 'error' | 'cancelled';
   stepResults: WorkflowStepResult[];
   latestDeliverableId?: string;
+  /** If this run was forked from another, the source run ID. */
+  forkFromRunId?: string;
+  /** The step ID in the source run where the fork started. */
+  forkFromStepId?: string;
 }
 
 const workflowKernelServices = new WeakMap<RpcContext, Promise<WorkflowKernelService>>();
@@ -981,7 +989,7 @@ export function validateWorkflowDef(workflow: WorkflowDef): string | null {
   return null;
 }
 
-async function getWorkflowKernelService(ctx: RpcContext): Promise<WorkflowKernelService> {
+export async function getWorkflowKernelService(ctx: RpcContext): Promise<WorkflowKernelService> {
   const existing = workflowKernelServices.get(ctx);
   if (existing) {
     return existing;
@@ -1058,7 +1066,9 @@ export type WorkflowRpcMethod =
   | 'workflow.run'
   | 'workflow.runStatus'
   | 'workflow.cancel'
-  | 'workflow.history';
+  | 'workflow.history'
+  | 'workflow.retryFromStep'
+  | 'workflow.skipStep';
 
 interface RpcResponse {
   id: string | number | null;
@@ -1198,6 +1208,37 @@ export async function dispatchWorkflowRpc(
         100,
       );
       return ok(id, { runs: merged });
+    }
+
+    case 'workflow.retryFromStep': {
+      const { runId, fromStepId } = (params ?? {}) as { runId?: string; fromStepId?: string };
+      if (!runId) return err(id, -32602, 'runId is required');
+      if (!fromStepId) return err(id, -32602, 'fromStepId is required');
+      const service = await getWorkflowKernelService(ctx);
+      const workflows = await readWorkflowsFile(ctx.dataDir);
+      const history = await readWorkflowRunsFile(ctx.dataDir);
+      const priorRun =
+        service.getRun(runId) ?? history.find((r) => r.runId === runId) ?? null;
+      if (!priorRun) return err(id, 404, `Run not found: ${runId}`);
+      const workflow = workflows.find((w) => w.id === priorRun.workflowId);
+      if (!workflow) return err(id, 404, `Workflow not found: ${priorRun.workflowId}`);
+      const newRun = await service.retryFromStep(workflow, priorRun, fromStepId);
+      return ok(id, { runId: newRun.runId });
+    }
+
+    case 'workflow.skipStep': {
+      const { runId, stepId } = (params ?? {}) as { runId?: string; stepId?: string };
+      if (!runId) return err(id, -32602, 'runId is required');
+      if (!stepId) return err(id, -32602, 'stepId is required');
+      const service = await getWorkflowKernelService(ctx);
+      const history = await readWorkflowRunsFile(ctx.dataDir);
+      const priorRun = service.getRun(runId) ?? history.find((r) => r.runId === runId) ?? null;
+      if (!priorRun) return err(id, 404, `Run not found: ${runId}`);
+      if (priorRun.status === 'running') {
+        return err(id, 400, `Cannot skip a step while the run is still running; cancel first.`);
+      }
+      const newRun = await service.skipStep(runId, stepId);
+      return ok(id, { runId: newRun.runId });
     }
 
     default: {

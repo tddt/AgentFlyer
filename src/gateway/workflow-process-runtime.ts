@@ -34,6 +34,13 @@ export interface WorkflowProcessInput {
   workflow: WorkflowDef;
   input: string;
   startedAt?: number;
+  /** When present, creates a forked state instead of a fresh state. */
+  _fork?: {
+    priorRun: WorkflowRunRecord;
+    fromStepId: string;
+    /** When set, include this step result in the copied prior results (used for skipStep). */
+    appendStepResult?: WorkflowStepResult;
+  };
 }
 
 export interface WorkflowProcessState {
@@ -54,6 +61,8 @@ export interface WorkflowAgentStepRequest {
   agentId: string;
   message: string;
   threadKey: string;
+  /** Called for each streamed text token from the LLM during this step. */
+  onToken?: (token: string) => void;
 }
 
 export interface WorkflowHttpStepRequest {
@@ -67,6 +76,8 @@ export interface WorkflowHttpStepRequest {
 export interface WorkflowRuntimeHandlers {
   runAgentStep?(request: WorkflowAgentStepRequest): Promise<string>;
   runHttpStep?(request: WorkflowHttpStepRequest): Promise<string>;
+  /** Optional: called for each streamed text token from a running agent step. */
+  onToken?(runId: string, stepId: string, token: string): void;
 }
 
 function buildError(code: string, message: string, retryable: boolean): ProcessErrorEvent {
@@ -116,6 +127,11 @@ export class WorkflowProcessRuntime
   constructor(private readonly handlers: WorkflowRuntimeHandlers = {}) {}
 
   createInitialState(input: WorkflowProcessInput): WorkflowProcessState {
+    if (input._fork) {
+      return this.createForkState(input, input._fork.priorRun, input._fork.fromStepId, {
+        appendStepResult: input._fork.appendStepResult,
+      });
+    }
     const currentStepIndex = resolveWorkflowEntryStepIndex(input.workflow);
 
     return {
@@ -134,6 +150,70 @@ export class WorkflowProcessRuntime
       currentStepIndex,
       prevOutputs: [],
       stepVars: {},
+      currentAttempt: 0,
+    };
+  }
+
+  /**
+   * Create a forked initial state that pre-populates completed steps from a prior run.
+   * Used by retryFromStep to skip re-executing already-completed steps.
+   */
+  createForkState(
+    input: WorkflowProcessInput,
+    priorRun: WorkflowRunRecord,
+    fromStepId: string,
+    options?: { appendStepResult?: WorkflowStepResult },
+  ): WorkflowProcessState {
+    const fromStepIndex = input.workflow.steps.findIndex((s) => s.id === fromStepId);
+    if (fromStepIndex <= 0) {
+      // If fork point is the first step or not found, start fresh
+      return this.createInitialState({ ...input, _fork: undefined });
+    }
+
+    // Take only step results that are BEFORE the retry step
+    const priorResults = priorRun.stepResults.slice(0, fromStepIndex);
+    // For skipStep: append the failed step result so history is preserved
+    if (options?.appendStepResult) {
+      priorResults.push(options.appendStepResult);
+    }
+    const prevOutputs = priorResults
+      .slice(0, fromStepIndex)  // don't include appended step result in prevOutputs
+      .map((r) => r.output ?? '');
+
+    // Reconstruct SerializedStepVars from the varsSnapshot of the last completed step
+    const lastSnap = [...priorResults].reverse().find((r) => r.varsSnapshot);
+    const stepVars: Record<string, Record<string, string>> = {};
+    if (lastSnap?.varsSnapshot) {
+      for (const [key, value] of Object.entries(lastSnap.varsSnapshot)) {
+        const dotIdx = key.indexOf('.');
+        if (dotIdx > 0) {
+          const sid = key.slice(0, dotIdx);
+          const vname = key.slice(dotIdx + 1);
+          if (!stepVars[sid]) stepVars[sid] = {};
+          // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+          stepVars[sid]![vname] = value;
+        }
+      }
+    }
+
+    return {
+      phase: 'running',
+      workflow: input.workflow,
+      run: {
+        runId: input.runId,
+        workflowId: input.workflow.id,
+        workflowName: input.workflow.name,
+        input: priorRun.input,
+        startedAt: input.startedAt ?? Date.now(),
+        status: 'running',
+        stepResults: priorResults,
+        forkFromRunId: priorRun.runId,
+        forkFromStepId: fromStepId,
+      },
+      currentStepId: resolveWorkflowStepId(input.workflow, fromStepIndex),
+      currentStepIndex: fromStepIndex,
+      prevOutputs,
+      stepVars,
       currentAttempt: 0,
     };
   }
@@ -197,12 +277,17 @@ export class WorkflowProcessRuntime
         return this.handleConditionStep(state, context.now, stepResults, prevOutputs, stepVars);
       }
 
+      const stepStartedAt = Date.now();
       const execution = await this.executeStep(type, step, message, state, currentStepIndex);
+      const stepFinishedAt = Date.now();
       extractStepVars(execution.output, step.id, step, stepVars, globals);
       prevOutputs.push(execution.output);
 
       stepResults.push(
-        this.buildSuccessStepResult(step.id, execution.output, stepVars, execution.superNodeTrace),
+        this.buildSuccessStepResult(step.id, execution.output, stepVars, execution.superNodeTrace, {
+          startedAt: stepStartedAt,
+          finishedAt: stepFinishedAt,
+        }),
       );
       const nextState = this.advanceState(
         state,
@@ -211,7 +296,7 @@ export class WorkflowProcessRuntime
           prevOutputs,
           stepVars: serializeStepVars(stepVars),
         },
-        context.now,
+        stepFinishedAt,
         resolveWorkflowNextStepIndex(state.workflow, step, currentStepIndex),
       );
       return {
@@ -223,6 +308,7 @@ export class WorkflowProcessRuntime
       const messageText = error instanceof Error ? error.message : String(error);
       const superNodeTrace =
         error instanceof WorkflowSuperNodeExecutionError ? error.trace : undefined;
+      const errorFinishedAt = Date.now();
       if (state.currentAttempt < maxRetries) {
         return {
           signal: 'RETRYABLE_ERROR',
@@ -238,6 +324,7 @@ export class WorkflowProcessRuntime
       stepResults.push({
         stepId: step.id,
         error: messageText,
+        finishedAt: errorFinishedAt,
         ...(superNodeTrace ? { superNodeTrace } : {}),
       });
       if (step.condition === 'on_success') {
@@ -246,12 +333,12 @@ export class WorkflowProcessRuntime
           signal: 'ERROR',
           error: finalError,
           state: {
-            ...this.failState(state, finalError, context.now),
+            ...this.failState(state, finalError, errorFinishedAt),
             run: {
               ...state.run,
               stepResults,
               status: 'error',
-              finishedAt: context.now,
+              finishedAt: errorFinishedAt,
             },
             currentAttempt: 0,
           },
@@ -268,7 +355,7 @@ export class WorkflowProcessRuntime
           ],
           stepVars: serializeStepVars(stepVars),
         },
-        context.now,
+        errorFinishedAt,
         resolveWorkflowNextStepIndex(state.workflow, step, currentStepIndex),
       );
       return {
@@ -317,6 +404,9 @@ export class WorkflowProcessRuntime
         if (!this.handlers.runAgentStep) {
           throw new Error('Workflow agent step handler is not configured');
         }
+        const onToken = this.handlers.onToken
+          ? (token: string) => this.handlers.onToken!(state.run.runId, step.id, token)
+          : undefined;
         return {
           output: (
             await this.handlers.runAgentStep({
@@ -325,6 +415,7 @@ export class WorkflowProcessRuntime
               agentId,
               message: applyFormatInstruction(step, message),
               threadKey: workflowThreadKey(state.run.runId, currentStepIndex),
+              onToken,
             })
           ).trim(),
         };
@@ -568,11 +659,13 @@ export class WorkflowProcessRuntime
     output: string,
     stepVars: ReturnType<typeof deserializeStepVars>,
     superNodeTrace?: WorkflowStepResult['superNodeTrace'],
+    timing?: { startedAt: number; finishedAt: number },
   ): WorkflowStepResult {
     const varsSnapshot = snapshotVars(stepVars);
     return {
       stepId,
       output,
+      ...(timing ? { startedAt: timing.startedAt, finishedAt: timing.finishedAt } : {}),
       ...(superNodeTrace ? { superNodeTrace } : {}),
       ...(Object.keys(varsSnapshot).length > 0 ? { varsSnapshot } : {}),
     };

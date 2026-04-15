@@ -475,6 +475,10 @@ export interface WorkflowStepResult {
   /** Streaming-in-progress or final output text. */
   output?: string;
   error?: string;
+  /** Unix timestamp (ms) when this step started executing. */
+  startedAt?: number;
+  /** Unix timestamp (ms) when this step finished (success or error). */
+  finishedAt?: number;
   superNodeTrace?: {
     type: 'multi_source' | 'debate' | 'decision' | 'risk_review' | 'adjudication';
     coordinatorAgentId: string;
@@ -500,6 +504,10 @@ export interface WorkflowRunRecord {
   status: 'running' | 'done' | 'error' | 'cancelled';
   stepResults: WorkflowStepResult[];
   latestDeliverableId?: string;
+  /** If this run was forked from another, the source run ID. */
+  forkFromRunId?: string;
+  /** The step ID in the source run where the fork started. */
+  forkFromStepId?: string;
 }
 
 export type DeliverableStatus = 'ready' | 'error' | 'cancelled';

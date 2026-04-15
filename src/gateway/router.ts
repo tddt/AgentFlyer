@@ -14,6 +14,8 @@ import type { InboxBroadcaster } from './inbox-broadcaster.js';
 import type { IntentRouter } from './intent-router.js';
 import type { LogBroadcaster } from './log-buffer.js';
 import { type RpcContext, dispatchRpc } from './rpc.js';
+import { getWorkflowKernelService } from './workflow-backend.js';
+import type { RunStreamEvent } from './workflow-kernel.js';
 
 const logger = createLogger('gateway:router');
 
@@ -270,6 +272,66 @@ export async function routeRequest(
       'Transfer-Encoding': 'chunked',
     });
     opts.logBroadcaster.subscribe(res);
+    return true;
+  }
+
+  // GET /api/workflow-stream?runId=<runId>&token=<token>  — SSE workflow step token stream
+  if (url.startsWith('/api/workflow-stream') && method === 'GET') {
+    const queryToken = queryTokenFromUrl(url);
+    const authCheck = validateToken(`Bearer ${queryToken}`, opts.authToken);
+    if (!authCheck.ok) {
+      writeUnauthorized(res);
+      return true;
+    }
+    const parsedUrl = new URL(url, 'http://localhost');
+    const runId = parsedUrl.searchParams.get('runId');
+    if (!runId) {
+      json(res, 400, { error: 'runId is required' });
+      return true;
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'Transfer-Encoding': 'chunked',
+    });
+
+    const service = await getWorkflowKernelService(opts.rpcContext);
+    const run = service.getRun(runId);
+    if (!run || run.status !== 'running') {
+      res.write('data: {"done":true}\n\n');
+      res.end();
+      return true;
+    }
+
+    const unsubscribe = service.subscribeToStreamOutput(runId, (event: RunStreamEvent) => {
+      try {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      } catch {
+        unsubscribe();
+      }
+    });
+
+    // Poll for run completion to send the done event
+    const checkDone = setInterval(() => {
+      const current = service.getRun(runId);
+      if (!current || current.status !== 'running') {
+        clearInterval(checkDone);
+        try {
+          res.write('data: {"done":true}\n\n');
+          res.end();
+        } catch {
+          // Client already disconnected
+        }
+      }
+    }, 500);
+
+    res.on('close', () => {
+      unsubscribe();
+      clearInterval(checkDone);
+    });
+
     return true;
   }
 

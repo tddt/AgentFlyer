@@ -6,6 +6,7 @@ import {
   type KernelProcessSnapshot,
   ScopedCheckpointStore,
 } from '../core/kernel/index.js';
+import type { StreamChunk } from '../core/types.js';
 import { asProcessId } from '../core/types.js';
 import { drainWaitingAgentSyscalls } from './kernel-syscall-broker.js';
 import {
@@ -45,6 +46,8 @@ export interface ExecuteAgentTurnViaKernelOptions {
   input: AgentTurnProcessInput;
   dataDir?: string;
   timeoutMs?: number;
+  /** Called for every StreamChunk emitted by the agent during this turn. */
+  onChunk?: (chunk: StreamChunk) => void;
 }
 
 function resolveRunner(runners: AgentRunnerResolver, agentId: string): AgentRunner | undefined {
@@ -75,16 +78,54 @@ class AgentKernelTurnExecutor {
   private readonly finalizing = new Set<string>();
   private readonly suspendedRuns = new Set<string>();
   private resolveRunnerFn: (agentId: string) => AgentRunner | undefined;
+  private readonly chunkSubscribers = new Map<string, Set<(chunk: StreamChunk) => void>>();
+  private readonly activitySubscribers = new Map<string, Set<() => void>>();
 
   constructor(runners: AgentRunnerResolver, checkpointStore: CheckpointStore) {
     this.resolveRunnerFn = (agentId) => resolveRunner(runners, agentId);
     this.kernel = new AgentKernel({ checkpointStore });
-    this.runtime = new AgentTurnProcessRuntime((agentId) => this.resolveRunnerFn(agentId));
+    this.runtime = new AgentTurnProcessRuntime((agentId) => this.resolveRunnerFn(agentId), {
+      onChunk: (runId, chunk) => {
+        const subs = this.chunkSubscribers.get(runId);
+        if (subs) {
+          for (const sub of subs) sub(chunk);
+        }
+      },
+    });
     this.kernel.registerProcessRuntime(this.runtime);
   }
 
   setRunnerResolver(runners: AgentRunnerResolver): void {
     this.resolveRunnerFn = (agentId) => resolveRunner(runners, agentId);
+  }
+
+  subscribeToTurnChunks(runId: string, onChunk: (chunk: StreamChunk) => void): () => void {
+    const subs = this.chunkSubscribers.get(runId) ?? new Set();
+    subs.add(onChunk);
+    this.chunkSubscribers.set(runId, subs);
+    return () => {
+      const current = this.chunkSubscribers.get(runId);
+      if (!current) return;
+      current.delete(onChunk);
+      if (current.size === 0) this.chunkSubscribers.delete(runId);
+    };
+  }
+
+  /**
+   * Subscribe to step-level activity for a turn. The callback fires each time the
+   * kernel completes a step (tick or syscall resolution) while the turn is alive.
+   * Used to implement a sliding timeout that resets on each agent step.
+   */
+  subscribeToTurnActivity(runId: string, onActivity: () => void): () => void {
+    const subs = this.activitySubscribers.get(runId) ?? new Set();
+    subs.add(onActivity);
+    this.activitySubscribers.set(runId, subs);
+    return () => {
+      const current = this.activitySubscribers.get(runId);
+      if (!current) return;
+      current.delete(onActivity);
+      if (current.size === 0) this.activitySubscribers.delete(runId);
+    };
   }
 
   async initialize(): Promise<void> {
@@ -203,11 +244,44 @@ class AgentKernelTurnExecutor {
 
   private async runPump(): Promise<void> {
     await this.reconcileSnapshots();
+    // Notify activity for any process that is actively waiting for a syscall.
+    // This resets the idle-timeout clock at the START of syscall execution so
+    // long-running tool calls or slow-starting LLM responses don't mistakenly
+    // trigger the watchdog before the syscall has had a chance to produce output.
+    for (const snapshot of this.kernel.listSnapshots()) {
+      if (snapshot.processType === this.runtime.type && snapshot.status === 'waiting') {
+        this.notifyStepActivity(String(snapshot.pid));
+      }
+    }
     const resolvedSyscalls = await drainWaitingAgentSyscalls(this.kernel, this.runtime);
     if (!resolvedSyscalls) {
-      await this.kernel.tick();
+      const tickResult = await this.kernel.tick();
+      if (tickResult.kind === 'executed' && tickResult.pid !== undefined) {
+        this.notifyStepActivity(String(tickResult.pid));
+      }
+    } else {
+      // One or more syscalls resolved — notify all still-alive run IDs
+      this.notifyStepActivityAll();
     }
     await this.reconcileSnapshots();
+  }
+
+  /** Fire step-activity for a specific run ID. */
+  private notifyStepActivity(runId: string): void {
+    const subs = this.activitySubscribers.get(runId);
+    if (subs) {
+      for (const sub of subs) sub();
+    }
+  }
+
+  /** Fire step-activity for all run IDs that are still alive (ready/waiting). */
+  private notifyStepActivityAll(): void {
+    for (const snapshot of this.kernel.listSnapshots()) {
+      if (snapshot.processType !== this.runtime.type) continue;
+      if (snapshot.status === 'ready' || snapshot.status === 'waiting') {
+        this.notifyStepActivity(String(snapshot.pid));
+      }
+    }
   }
 
   private async reconcileSnapshots(): Promise<void> {
@@ -354,29 +428,59 @@ export async function executeAgentTurnViaKernel(
 ): Promise<TurnResult> {
   const executor = await getExecutor(options);
   const runId = options.input.runId ?? ulid();
+
+  let unsubscribeFn: (() => void) | undefined;
+  if (options.onChunk) {
+    unsubscribeFn = executor.subscribeToTurnChunks(runId, options.onChunk);
+  }
+
   const turnPromise = executor.executeTurn({
     ...options.input,
     runId,
   });
+
   if (!options.timeoutMs || options.timeoutMs <= 0) {
-    return await turnPromise;
+    return await turnPromise.finally(() => unsubscribeFn?.());
   }
 
+  // Sliding deadline: reset on every streaming chunk or completed kernel step so that
+  // active LLM streaming or tool execution doesn't count as inactivity.
   return await new Promise<TurnResult>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      const message = `Agent '${options.input.agentId}' turn timed out after ${options.timeoutMs}ms`;
-      void executor.abortTurn(runId, message).finally(() => {
-        reject(new Error(message));
-      });
-    }, options.timeoutMs);
+    let lastActivityAt = Date.now();
+    const resetActivity = (): void => {
+      lastActivityAt = Date.now();
+    };
+
+    // Reset deadline on every streaming token
+    const chunkActivityUnsub = executor.subscribeToTurnChunks(runId, resetActivity);
+    // Reset deadline on every completed kernel step (tool calls, LLM round-trips, etc.)
+    const stepActivityUnsub = executor.subscribeToTurnActivity(runId, resetActivity);
+
+    const cleanup = (): void => {
+      clearInterval(watchdogTimer);
+      chunkActivityUnsub();
+      stepActivityUnsub();
+      unsubscribeFn?.();
+    };
+
+    // Check roughly once per second (or once per timeoutMs if it's very short)
+    const watchdogIntervalMs = Math.min(options.timeoutMs!, 1_000);
+    const watchdogTimer = setInterval(() => {
+      const idleMs = Date.now() - lastActivityAt;
+      if (idleMs >= options.timeoutMs!) {
+        cleanup();
+        const message = `Agent '${options.input.agentId}' turn timed out after ${options.timeoutMs}ms`;
+        void executor.abortTurn(runId, message).finally(() => reject(new Error(message)));
+      }
+    }, watchdogIntervalMs);
 
     turnPromise.then(
       (result) => {
-        clearTimeout(timer);
+        cleanup();
         resolve(result);
       },
       (error: unknown) => {
-        clearTimeout(timer);
+        cleanup();
         reject(error instanceof Error ? error : new Error(String(error)));
       },
     );

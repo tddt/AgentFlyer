@@ -22,6 +22,10 @@ export async function drainWaitingAgentSyscalls(
     }
     const state = runtime.deserialize(snapshot.state);
     const resolution = await runtime.executePendingSyscall(state, pendingSyscall, Date.now());
+    // Guard: process may have been deleted (e.g. cancelled/completed) during the async syscall execution
+    if (!kernel.getSnapshot(snapshot.pid)) {
+      continue;
+    }
     await kernel.resolveSyscall(snapshot.pid, resolution);
     resolvedAny = true;
   }

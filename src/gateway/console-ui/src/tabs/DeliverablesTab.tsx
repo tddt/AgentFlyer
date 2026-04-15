@@ -209,54 +209,49 @@ export function DeliverablesTab() {
   );
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="rounded-[32px] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(14,165,233,0.18),transparent_28%),radial-gradient(circle_at_top_right,rgba(168,85,247,0.16),transparent_24%),linear-gradient(135deg,rgba(15,23,42,0.96),rgba(2,6,23,0.96))] p-6 shadow-[0_40px_120px_rgba(2,6,23,0.45)]">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="max-w-2xl">
-            <div className="text-[11px] uppercase tracking-[0.28em] text-cyan-300/70">
+    <div className="flex flex-col gap-4">
+      <div className="rounded-xl border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(14,165,233,0.18),transparent_28%),radial-gradient(circle_at_top_right,rgba(168,85,247,0.16),transparent_24%),linear-gradient(135deg,rgba(15,23,42,0.96),rgba(2,6,23,0.96))] p-4 shadow-[0_40px_120px_rgba(2,6,23,0.45)]">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.28em] text-cyan-300/70">
               {t('deliverables.kicker')}
             </div>
-            <h1 className="mt-3 text-3xl font-semibold tracking-tight text-slate-50">
+            <h1 className="mt-1 text-xl font-semibold tracking-tight text-slate-50">
               {t('deliverables.title')}
             </h1>
-            <p className="mt-3 text-sm leading-6 text-slate-300">
-              {t('deliverables.subtitle')}
-            </p>
           </div>
           <Button size="sm" variant="ghost" onClick={() => setQuery('')}>
             {t('deliverables.clearFilters')}
           </Button>
         </div>
 
-        <div className="mt-6 grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+        <div className="mt-3 flex flex-wrap gap-2">
           {metrics.map((metric, index) => (
             <div
               key={metric.label}
-              className={`rounded-2xl border px-4 py-3 ${metricTone(index)}`}
+              className={`inline-flex items-center gap-2 rounded border px-2.5 py-1 ${metricTone(index)}`}
             >
-              <div className="text-[11px] uppercase tracking-[0.18em] text-white/60">
-                {metric.label}
-              </div>
-              <div className="mt-3 text-2xl font-semibold">{metric.value}</div>
+              <span className="text-sm font-semibold tabular-nums">{metric.value}</span>
+              <span className="text-[10px] uppercase tracking-[0.14em] opacity-60">{metric.label}</span>
             </div>
           ))}
         </div>
       </div>
 
-      <div className="flex flex-col gap-4 rounded-[28px] border border-white/8 bg-slate-900/70 p-5 backdrop-blur-xl">
+      <div className="flex flex-col gap-4 rounded-xl border border-white/8 bg-slate-900/70 p-4 backdrop-blur-xl">
         <div className="flex flex-wrap items-center gap-3">
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={t('deliverables.searchPlaceholder')}
-            className="min-w-[220px] flex-1 rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-2.5 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-cyan-400/40"
+            className="min-w-[220px] flex-1 rounded-lg border border-white/10 bg-slate-950/70 px-4 py-2.5 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-cyan-400/40"
           />
           <div className="flex flex-wrap gap-2">
             {(['all', 'workflow_run', 'scheduler_task_run', 'chat_turn'] as SourceFilter[]).map((value) => (
               <button
                 key={value}
                 onClick={() => setSourceFilter(value)}
-                className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
                   sourceFilter === value
                     ? 'bg-cyan-500/15 text-cyan-200 ring-1 ring-cyan-400/30'
                     : 'bg-white/[0.04] text-slate-400 hover:text-slate-200'
@@ -271,7 +266,7 @@ export function DeliverablesTab() {
               <button
                 key={value}
                 onClick={() => setStatusFilter(value)}
-                className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
                   statusFilter === value
                     ? 'bg-fuchsia-500/15 text-fuchsia-200 ring-1 ring-fuchsia-400/30'
                     : 'bg-white/[0.04] text-slate-400 hover:text-slate-200'
@@ -289,7 +284,7 @@ export function DeliverablesTab() {
               <button
                 key={value}
                 onClick={() => setTimeRange(value)}
-                className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
                   timeRange === value
                     ? 'bg-amber-500/15 text-amber-200 ring-1 ring-amber-400/30'
                     : 'bg-white/[0.04] text-slate-400 hover:text-slate-200'
@@ -304,7 +299,7 @@ export function DeliverablesTab() {
               <button
                 key={value}
                 onClick={() => setHighlightFilter(value)}
-                className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
                   highlightFilter === value
                     ? 'bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-400/30'
                     : 'bg-white/[0.04] text-slate-400 hover:text-slate-200'
@@ -317,167 +312,174 @@ export function DeliverablesTab() {
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <div className="rounded-[24px] border border-cyan-400/10 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.18),transparent_38%),rgba(2,6,23,0.82)] p-5">
-          <div className="text-[11px] uppercase tracking-[0.2em] text-cyan-200/70">
-            {t('deliverables.spotlight.filtered')}
+      <div className="flex flex-wrap gap-3">
+        <div className="min-w-[140px] flex-1 rounded-lg border border-cyan-400/10 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.12),transparent_60%),rgba(2,6,23,0.82)] px-4 py-2.5">
+          <div className="flex items-baseline gap-2">
+            <span className="text-xl font-semibold text-cyan-50">{filteredItems.length}</span>
+            <span className="text-[10px] uppercase tracking-[0.18em] text-cyan-200/70">{t('deliverables.spotlight.filtered')}</span>
           </div>
-          <div className="mt-3 text-3xl font-semibold text-cyan-50">{filteredItems.length}</div>
-          <div className="mt-2 text-sm text-slate-300">{t('deliverables.spotlight.filteredHint')}</div>
+          <div className="mt-0.5 text-xs text-slate-400">{t('deliverables.spotlight.filteredHint')}</div>
         </div>
-        <div className="rounded-[24px] border border-emerald-400/10 bg-[radial-gradient(circle_at_top_left,rgba(34,197,94,0.16),transparent_34%),rgba(2,6,23,0.82)] p-5">
-          <div className="text-[11px] uppercase tracking-[0.2em] text-emerald-200/70">
-            {t('deliverables.spotlight.media')}
+        <div className="min-w-[140px] flex-1 rounded-lg border border-emerald-400/10 bg-[radial-gradient(circle_at_top_left,rgba(34,197,94,0.10),transparent_60%),rgba(2,6,23,0.82)] px-4 py-2.5">
+          <div className="flex items-baseline gap-2">
+            <span className="text-xl font-semibold text-emerald-50">{spotlight.media}</span>
+            <span className="text-[10px] uppercase tracking-[0.18em] text-emerald-200/70">{t('deliverables.spotlight.media')}</span>
           </div>
-          <div className="mt-3 text-3xl font-semibold text-emerald-50">{spotlight.media}</div>
-          <div className="mt-2 text-sm text-slate-300">{t('deliverables.spotlight.mediaHint')}</div>
+          <div className="mt-0.5 text-xs text-slate-400">{t('deliverables.spotlight.mediaHint')}</div>
         </div>
-        <div className="rounded-[24px] border border-rose-400/10 bg-[radial-gradient(circle_at_top_left,rgba(244,63,94,0.16),transparent_34%),rgba(2,6,23,0.82)] p-5">
-          <div className="text-[11px] uppercase tracking-[0.2em] text-rose-200/70">
-            {t('deliverables.spotlight.problems')}
+        <div className="min-w-[140px] flex-1 rounded-lg border border-rose-400/10 bg-[radial-gradient(circle_at_top_left,rgba(244,63,94,0.10),transparent_60%),rgba(2,6,23,0.82)] px-4 py-2.5">
+          <div className="flex items-baseline gap-2">
+            <span className="text-xl font-semibold text-rose-50">{spotlight.problems}</span>
+            <span className="text-[10px] uppercase tracking-[0.18em] text-rose-200/70">{t('deliverables.spotlight.problems')}</span>
           </div>
-          <div className="mt-3 text-3xl font-semibold text-rose-50">{spotlight.problems}</div>
-          <div className="mt-2 text-sm text-slate-300">{t('deliverables.spotlight.problemsHint')}</div>
-        </div>
-      </div>
-
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
-        <div className="rounded-[28px] border border-white/8 bg-slate-900/70 p-5 backdrop-blur-xl">
-          <div className="mb-4 flex items-center justify-between gap-2">
-            <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">
-              {t('deliverables.group.title')}
-            </div>
-            <Badge variant="gray">{grouped.length}</Badge>
-          </div>
-          <div className="grid gap-3 md:grid-cols-2">
-            {grouped.map((group) => (
-              <div key={group.kind} className="rounded-2xl border border-white/8 bg-slate-950/55 p-4">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-sm font-medium text-slate-100">{group.label}</div>
-                  <Badge variant={sourceBadgeVariant(group.kind)}>
-                    {group.items.length}
-                  </Badge>
-                </div>
-                <div className="mt-2 text-xs text-slate-500">
-                  {group.items[0] ? new Date(group.items[0].createdAt).toLocaleString() : ''}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="rounded-[28px] border border-rose-400/10 bg-[linear-gradient(180deg,rgba(127,29,29,0.16),rgba(2,6,23,0.82))] p-5 backdrop-blur-xl">
-          <div className="mb-4 flex items-center justify-between gap-2">
-            <div className="text-[11px] uppercase tracking-[0.22em] text-rose-200/70">
-              {t('deliverables.diagnostics.title')}
-            </div>
-            <Badge variant="red">{problemItems.length}</Badge>
-          </div>
-          <div className="flex flex-col gap-3">
-            {problemItems.length === 0 && (
-              <div className="rounded-2xl border border-emerald-400/10 bg-emerald-500/10 p-4 text-sm text-emerald-100">
-                {t('deliverables.diagnostics.clean')}
-              </div>
-            )}
-            {problemItems.map((item) => (
-              <button
-                key={item.id}
-                onClick={() => setSelectedId(item.id)}
-                className="rounded-2xl border border-white/8 bg-slate-950/45 p-4 text-left hover:border-white/15"
-              >
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant={item.status === 'error' ? 'red' : 'gray'}>{item.status}</Badge>
-                  <span className="text-sm font-medium text-slate-100">{item.title}</span>
-                </div>
-                <div className="mt-2 line-clamp-3 text-xs leading-5 text-slate-300">
-                  {item.previewText || item.summary}
-                </div>
-              </button>
-            ))}
-          </div>
+          <div className="mt-0.5 text-xs text-slate-400">{t('deliverables.spotlight.problemsHint')}</div>
         </div>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[300px_minmax(0,1fr)]">
-        <div className="rounded-[28px] border border-white/8 bg-slate-900/70 p-4 backdrop-blur-xl">
-          <div className="mb-3 flex items-center justify-between">
-            <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">
-              {t('deliverables.listTitle')}
+      {/* ── Main workspace: sidebar (groups + diagnostics) | list | detail ── */}
+      <div className="grid gap-4 xl:grid-cols-[240px_minmax(0,1fr)]">
+
+        {/* Left sidebar — bounded height, never pushes the list+detail section */}
+        <div className="flex flex-col gap-4">
+
+          {/* Source groups (at most 3 entries, does not grow) */}
+          <div className="rounded-lg border border-white/8 bg-slate-900/70 p-4 backdrop-blur-xl">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">
+                {t('deliverables.group.title')}
+              </div>
+              <Badge variant="gray">{grouped.length}</Badge>
             </div>
-            <Badge variant="gray">{filteredItems.length}</Badge>
+            <div className="flex flex-col gap-2">
+              {grouped.map((group) => (
+                <div key={group.kind} className="rounded-md border border-white/8 bg-slate-950/55 px-3 py-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="truncate text-xs font-medium text-slate-100">{group.label}</div>
+                    <Badge variant={sourceBadgeVariant(group.kind)}>{group.items.length}</Badge>
+                  </div>
+                  <div className="mt-1 text-[11px] text-slate-500">
+                    {group.items[0] ? new Date(group.items[0].createdAt).toLocaleString() : ''}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
 
-          {loading && <div className="py-6 text-sm text-slate-400">{t('deliverables.loading')}</div>}
-
-          {!loading && filteredItems.length === 0 && (
-            <div className="rounded-2xl border border-dashed border-white/10 bg-slate-950/50 p-5 text-sm text-slate-500">
-              {t('deliverables.empty')}
+          {/* Problem diagnostics — scrollable so it never overflows */}
+          <div className="rounded-lg border border-rose-400/10 bg-[linear-gradient(180deg,rgba(127,29,29,0.16),rgba(2,6,23,0.82))] p-4 backdrop-blur-xl">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <div className="text-[11px] uppercase tracking-[0.22em] text-rose-200/70">
+                {t('deliverables.diagnostics.title')}
+              </div>
+              <Badge variant="red">{problemItems.length}</Badge>
             </div>
-          )}
-
-          <div className="mb-3 rounded-2xl border border-white/8 bg-slate-950/60 px-4 py-3">
-            <div className="flex items-center justify-between gap-2 text-xs text-slate-400">
-              <span>{t('deliverables.listTitle')}</span>
-              <span>{filteredItems.length}</span>
-            </div>
-            <div className="mt-2 text-[11px] leading-5 text-slate-500">
-              {grouped
-                .filter((group) => group.items.length > 0)
-                .map((group) => `${group.label} ${group.items.length}`)
-                .join(' · ')}
-            </div>
-          </div>
-
-          <div className="flex max-h-[860px] flex-col gap-2 overflow-auto pr-1">
-            {filteredItems.map((item) => {
-              const active = item.id === selected?.id;
-              const mediaCount = mediaArtifactCount(item);
-              return (
+            <div className="flex max-h-72 flex-col gap-2 overflow-y-auto pr-1">
+              {problemItems.length === 0 && (
+                <div className="rounded-md border border-emerald-400/10 bg-emerald-500/10 p-3 text-sm text-emerald-100">
+                  {t('deliverables.diagnostics.clean')}
+                </div>
+              )}
+              {problemItems.map((item) => (
                 <button
                   key={item.id}
                   onClick={() => setSelectedId(item.id)}
-                  className={`rounded-2xl border px-4 py-3 text-left transition-all ${
-                    active
-                      ? 'border-cyan-400/35 bg-cyan-500/10 shadow-[0_20px_50px_rgba(6,182,212,0.08)]'
-                      : 'border-white/8 bg-slate-950/55 hover:border-white/15 hover:bg-white/[0.03]'
-                  }`}
+                  className="rounded-md border border-white/8 bg-slate-950/45 p-3 text-left hover:border-white/15"
                 >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge
-                      variant={
-                        item.status === 'ready'
-                          ? 'green'
-                          : item.status === 'error'
-                            ? 'red'
-                            : 'gray'
-                      }
-                    >
-                      {item.status}
-                    </Badge>
-                    <Badge variant={sourceBadgeVariant(item.source.kind)}>
-                      {t(`deliverables.source.${sourceKeyLabel(item.source.kind)}`)}
-                    </Badge>
-                    {mediaCount > 0 && (
-                      <Badge variant="green">{t('deliverables.card.mediaCount', { n: String(mediaCount) })}</Badge>
-                    )}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Badge variant={item.status === 'error' ? 'red' : 'gray'}>{item.status}</Badge>
+                    <span className="line-clamp-1 text-xs font-medium text-slate-100">{item.title}</span>
                   </div>
-                  <div className="mt-3 line-clamp-2 text-sm font-semibold text-slate-100">
-                    {item.title}
-                  </div>
-                  <div className="mt-2 line-clamp-2 text-xs leading-5 text-slate-400">
+                  <div className="mt-1.5 line-clamp-2 text-xs leading-4 text-slate-400">
                     {item.previewText || item.summary}
                   </div>
-                  <div className="mt-3 flex items-center justify-between text-[11px] text-slate-500">
-                    <span>{new Date(item.createdAt).toLocaleString()}</span>
-                    <span>{item.artifacts.length}</span>
-                  </div>
                 </button>
-              );
-            })}
+              ))}
+            </div>
           </div>
         </div>
 
-        <DeliverableDetailView deliverable={selected} loading={loading && !selected} />
+        {/* Right area: list + detail always visible alongside the sidebar */}
+        <div className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
+          <div className="rounded-xl border border-white/8 bg-slate-900/70 p-4 backdrop-blur-xl">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">
+                {t('deliverables.listTitle')}
+              </div>
+              <Badge variant="gray">{filteredItems.length}</Badge>
+            </div>
+
+            {loading && data === null && <div className="py-6 text-sm text-slate-400">{t('deliverables.loading')}</div>}
+
+            {!loading && filteredItems.length === 0 && (
+              <div className="rounded-md border border-dashed border-white/10 bg-slate-950/50 p-5 text-sm text-slate-500">
+                {t('deliverables.empty')}
+              </div>
+            )}
+
+            <div className="mb-3 rounded-md border border-white/8 bg-slate-950/60 px-4 py-3">
+              <div className="flex items-center justify-between gap-2 text-xs text-slate-400">
+                <span>{t('deliverables.listTitle')}</span>
+                <span>{filteredItems.length}</span>
+              </div>
+              <div className="mt-2 text-[11px] leading-5 text-slate-500">
+                {grouped
+                  .filter((group) => group.items.length > 0)
+                  .map((group) => `${group.label} ${group.items.length}`)
+                  .join(' · ')}
+              </div>
+            </div>
+
+            <div className="flex max-h-[860px] flex-col gap-2 overflow-auto pr-1">
+              {filteredItems.map((item) => {
+                const active = item.id === selected?.id;
+                const mediaCount = mediaArtifactCount(item);
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => setSelectedId(item.id)}
+                    className={`rounded-md border px-4 py-3 text-left transition-all ${
+                      active
+                        ? 'border-cyan-400/35 bg-cyan-500/10 shadow-[0_20px_50px_rgba(6,182,212,0.08)]'
+                        : 'border-white/8 bg-slate-950/55 hover:border-white/15 hover:bg-white/[0.03]'
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge
+                        variant={
+                          item.status === 'ready'
+                            ? 'green'
+                            : item.status === 'error'
+                              ? 'red'
+                              : 'gray'
+                        }
+                      >
+                        {item.status}
+                      </Badge>
+                      <Badge variant={sourceBadgeVariant(item.source.kind)}>
+                        {t(`deliverables.source.${sourceKeyLabel(item.source.kind)}`)}
+                      </Badge>
+                      {mediaCount > 0 && (
+                        <Badge variant="green">{t('deliverables.card.mediaCount', { n: String(mediaCount) })}</Badge>
+                      )}
+                    </div>
+                    <div className="mt-3 line-clamp-2 text-sm font-semibold text-slate-100">
+                      {item.title}
+                    </div>
+                    <div className="mt-2 line-clamp-2 text-xs leading-5 text-slate-400">
+                      {item.previewText || item.summary}
+                    </div>
+                    <div className="mt-3 flex items-center justify-between text-[11px] text-slate-500">
+                      <span>{new Date(item.createdAt).toLocaleString()}</span>
+                      <span>{item.artifacts.length}</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <DeliverableDetailView deliverable={selected} loading={loading && !selected} />
+        </div>
       </div>
     </div>
   );

@@ -19,6 +19,35 @@ import {
 const logger = createLogger('gateway:workflow-kernel');
 const DEFAULT_WORKFLOW_AGENT_STEP_TIMEOUT_MS = 300_000;
 
+/** Structured event pushed over the SSE stream for a running workflow step. */
+export type RunStreamEvent =
+  | { type: 'token'; text: string }
+  | { type: 'tool_call'; name: string; id: string };
+
+/** Per-run SSE broadcaster: buffers events for replay + notifies live subscribers. */
+class WorkflowRunStreamBroadcaster {
+  private buffer: RunStreamEvent[] = [];
+  private readonly listeners = new Set<(event: RunStreamEvent) => void>();
+
+  push(event: RunStreamEvent): void {
+    this.buffer.push(event);
+    for (const listener of this.listeners) listener(event);
+  }
+
+  subscribe(onEvent: (event: RunStreamEvent) => void): () => void {
+    this.listeners.add(onEvent);
+    // Replay existing buffer so late subscribers get partial output
+    for (const event of this.buffer) onEvent(event);
+    return () => this.listeners.delete(onEvent);
+  }
+
+  /** Clear buffer and listeners when a new step starts. */
+  clear(): void {
+    this.buffer = [];
+    this.listeners.clear();
+  }
+}
+
 export interface WorkflowKernelCallbacks {
   onRunComplete(workflow: WorkflowDef, run: WorkflowRunRecord): Promise<void>;
   findArchivedRun?(runId: string): Promise<WorkflowRunRecord | null> | WorkflowRunRecord | null;
@@ -62,6 +91,7 @@ export class WorkflowKernelService {
   private readonly runnerSnapshots = new Map<string, Map<string, AgentRunner>>();
   private readonly finalizing = new Set<string>();
   private readonly completionWaiters = new Map<string, Array<(run: WorkflowRunRecord) => void>>();
+  private readonly streamBroadcasters = new Map<string, WorkflowRunStreamBroadcaster>();
   private initPromise: Promise<void> | null = null;
   private pumpPromise: Promise<void> | null = null;
   private pumpTimer: ReturnType<typeof setTimeout> | null = null;
@@ -86,11 +116,31 @@ export class WorkflowKernelService {
         if (!runner) {
           throw new Error(`Agent not found: ${request.agentId}`);
         }
+
+        // Ensure a fresh broadcaster per step (clear old tokens between steps)
+        let broadcaster = service.streamBroadcasters.get(request.runId);
+        if (!broadcaster) {
+          broadcaster = new WorkflowRunStreamBroadcaster();
+          service.streamBroadcasters.set(request.runId, broadcaster);
+        } else {
+          broadcaster.clear();
+        }
+
+        const seenToolIds = new Set<string>();
         const execute = async (): Promise<string> => {
           const result = await executeAgentTurnViaKernel({
             runners: new Map([[request.agentId, runner]]),
             dataDir: options.dataDir,
             timeoutMs: workflowAgentStepTimeoutMs,
+            onChunk: (chunk) => {
+              if (chunk.type === 'text_delta' && chunk.text) {
+                request.onToken?.(chunk.text);
+                broadcaster.push({ type: 'token', text: chunk.text });
+              } else if (chunk.type === 'tool_use_delta' && !seenToolIds.has(chunk.id)) {
+                seenToolIds.add(chunk.id);
+                broadcaster.push({ type: 'tool_call', name: chunk.name, id: chunk.id });
+              }
+            },
             input: {
               agentId: request.agentId,
               userMessage: request.message,
@@ -100,6 +150,10 @@ export class WorkflowKernelService {
           return result.text || '';
         };
         return await service.workflowAgentQueues.for(request.agentId).enqueue(execute);
+      },
+      onToken(_runId, _stepId, _token) {
+        // Tokens are forwarded via broadcaster in runAgentStep above;
+        // this handler is here for completeness if other code paths use it.
       },
     });
     this.kernel.registerProcessRuntime(this.runtime);
@@ -204,6 +258,112 @@ export class WorkflowKernelService {
       waiters.push(resolve);
       this.completionWaiters.set(runId, waiters);
     });
+  }
+
+  /**
+   * Subscribe to real-time streamed text tokens for a running step.
+   * Returns an unsubscribe function. Replays any already-buffered tokens immediately.
+   */
+  subscribeToStreamOutput(runId: string, onToken: (event: RunStreamEvent) => void): () => void {
+    let broadcaster = this.streamBroadcasters.get(runId);
+    if (!broadcaster) {
+      broadcaster = new WorkflowRunStreamBroadcaster();
+      this.streamBroadcasters.set(runId, broadcaster);
+    }
+    return broadcaster.subscribe(onToken);
+  }
+
+  /**
+   * Fork a prior run, re-executing from a specific step onwards.
+   * Prior step results before `fromStepId` are preserved unchanged.
+   */
+  async retryFromStep(
+    workflow: WorkflowDef,
+    priorRun: WorkflowRunRecord,
+    fromStepId: string,
+  ): Promise<WorkflowRunRecord> {
+    await this.initialize();
+    const newRunId = ulid();
+    this.runnerSnapshots.set(newRunId, new Map(this.liveRunners));
+    const snapshot = await this.kernel.createProcess<WorkflowProcessInput>({
+      processType: this.runtime.type,
+      processId: asProcessId(newRunId),
+      input: {
+        runId: newRunId,
+        workflow,
+        input: priorRun.input,
+        _fork: { priorRun, fromStepId },
+      },
+      metadata: {
+        workflowId: workflow.id,
+        workflowName: workflow.name,
+      },
+    });
+    const run = this.snapshotToRun(snapshot);
+    if (!run) {
+      throw new Error(`Failed to initialize forked workflow run: ${newRunId}`);
+    }
+    this.schedulePump(0);
+    return run;
+  }
+
+  /**
+   * Skip a failed step in a running (or errored) run.
+   * Creates a new forked run that starts from the step AFTER `stepId`,
+   * preserving the failed step's error record in history.
+   */
+  async skipStep(runId: string, stepId: string): Promise<WorkflowRunRecord> {
+    await this.initialize();
+    const priorRun = this.getRun(runId) ?? (await this.callbacks.findArchivedRun?.(runId));
+    if (!priorRun) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+    // Extract the workflow definition from the prior run's process state
+    const snapshot = this.kernel.getSnapshot(asProcessId(runId));
+    const state = snapshot
+      ? (this.runtime.deserialize(snapshot.state) as WorkflowProcessState)
+      : null;
+    if (!state) {
+      throw new Error(`Cannot skip step: run state not available for ${runId}`);
+    }
+    const workflow = state.workflow;
+    const failedStepIndex = workflow.steps.findIndex((s) => s.id === stepId);
+    if (failedStepIndex < 0) {
+      throw new Error(`Step not found: ${stepId}`);
+    }
+    const nextStep = workflow.steps[failedStepIndex + 1];
+    if (!nextStep) {
+      throw new Error(`No step to continue to after ${stepId} (it was the last step)`);
+    }
+    // Get the failed step's existing result (or create a synthetic one)
+    const failedResult: WorkflowStepResult =
+      priorRun.stepResults.find((r) => r.stepId === stepId) ?? {
+        stepId,
+        error: 'Skipped by operator',
+        finishedAt: Date.now(),
+      };
+    const newRunId = ulid();
+    this.runnerSnapshots.set(newRunId, new Map(this.liveRunners));
+    const newSnapshot = await this.kernel.createProcess<WorkflowProcessInput>({
+      processType: this.runtime.type,
+      processId: asProcessId(newRunId),
+      input: {
+        runId: newRunId,
+        workflow,
+        input: priorRun.input,
+        _fork: { priorRun, fromStepId: nextStep.id, appendStepResult: failedResult },
+      },
+      metadata: {
+        workflowId: workflow.id,
+        workflowName: workflow.name,
+      },
+    });
+    const run = this.snapshotToRun(newSnapshot);
+    if (!run) {
+      throw new Error(`Failed to initialize skipped-step workflow run: ${newRunId}`);
+    }
+    this.schedulePump(0);
+    return run;
   }
 
   private schedulePump(delayMs: number): void {

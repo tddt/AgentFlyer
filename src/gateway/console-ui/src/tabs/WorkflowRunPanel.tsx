@@ -2,7 +2,7 @@
  * WorkflowRunPanel — panel that starts a server-side workflow run and polls
  * workflow.runStatus every 500ms for live step output.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { Badge } from '../components/Badge.js';
 import { Button } from '../components/Button.js';
 import { DeliverableModal } from '../components/DeliverableModal.js';
@@ -30,10 +30,16 @@ function diffSnapshot(
   return delta;
 }
 
+/** Format elapsed milliseconds as a human-readable string */
+function formatElapsed(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
 function renderSuperNodeTrace(
   stepResult: WorkflowStepResult,
   agentName: (agentId: string) => string,
-): JSX.Element | null {
+): ReactNode {
   const trace = stepResult.superNodeTrace;
   if (!trace) {
     return null;
@@ -86,7 +92,7 @@ function renderSuperNodeTrace(
 function renderSuperNodeStructuredSummary(
   stepType: WorkflowDef['steps'][number]['type'],
   stepResult: WorkflowStepResult,
-): JSX.Element | null {
+): ReactNode {
   const summary = parseWorkflowSuperNodeStructuredSummary(stepType, stepResult.output);
   if (!summary) {
     return null;
@@ -180,9 +186,97 @@ export function WorkflowRunPanel({
   const [runId, setRunId] = useState<string | null>(initialRunId ?? null);
   const [run, setRun] = useState<WorkflowRunRecord | null>(null);
   const [deliverableId, setDeliverableId] = useState<string | null>(null);
+  const [liveElapsed, setLiveElapsed] = useState(0);
+  const [stepElapsed, setStepElapsed] = useState(0);
+  const [streamBuffer, setStreamBuffer] = useState('');
+  const [toolCalls, setToolCalls] = useState<Array<{ id: string; name: string }>>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const runStartRef = useRef<number>(Date.now());
+  const stepStartRef = useRef<number>(Date.now());
+  const eventSourceRef = useRef<EventSource | null>(null);
 
   const running = run?.status === 'running';
+
+  // Live elapsed timer while a run is active
+  useEffect(() => {
+    if (!running) {
+      if (elapsedRef.current) {
+        clearInterval(elapsedRef.current);
+        elapsedRef.current = null;
+      }
+      return;
+    }
+    runStartRef.current = run?.startedAt ?? Date.now();
+    stepStartRef.current = Date.now();
+    elapsedRef.current = setInterval(() => {
+      setLiveElapsed(Date.now() - runStartRef.current);
+      setStepElapsed(Date.now() - stepStartRef.current);
+    }, 250);
+    return () => {
+      if (elapsedRef.current) {
+        clearInterval(elapsedRef.current);
+        elapsedRef.current = null;
+      }
+    };
+  }, [running, run?.startedAt]);
+
+  // Reset per-step timer and stream buffer whenever a step transitions (stepResults grows)
+  useEffect(() => {
+    if (running) {
+      stepStartRef.current = Date.now();
+      setStepElapsed(0);
+      setStreamBuffer('');
+      setToolCalls([]);
+    }
+  }, [run?.stepResults.length, running]);
+
+  // Subscribe to the SSE stream while a run is active
+  useEffect(() => {
+    if (!runId || !running) {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+      return;
+    }
+    const TOKEN = window.__AF_TOKEN__;
+    const PORT = window.__AF_PORT__;
+    const es = new EventSource(
+      `http://127.0.0.1:${PORT}/api/workflow-stream?runId=${encodeURIComponent(runId)}&token=${TOKEN}`,
+    );
+    eventSourceRef.current = es;
+
+    es.onmessage = (e: MessageEvent<string>) => {
+      try {
+        const data = JSON.parse(e.data) as {
+          type?: string;
+          text?: string;
+          done?: boolean;
+          name?: string;
+          id?: string;
+        };
+        if (data.done) {
+          es.close();
+          eventSourceRef.current = null;
+          return;
+        }
+        if (data.type === 'token' && data.text) {
+          setStreamBuffer((prev) => prev + data.text);
+        } else if (data.type === 'tool_call' && data.name) {
+          setToolCalls((prev) => [...prev, { id: data.id ?? data.name!, name: data.name! }]);
+        }
+      } catch {
+        // skip malformed events
+      }
+    };
+
+    return () => {
+      es.close();
+      eventSourceRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runId, running]);
 
   // Poll runStatus every 500ms while a run is active
   useEffect(() => {
@@ -228,6 +322,8 @@ export function WorkflowRunPanel({
     // Allow empty input when workflow doesn't require it
     if (workflow.inputRequired !== false && !input.trim()) return;
     try {
+      setStreamBuffer('');
+      setToolCalls([]);
       const result = await rpc<{ runId: string }>('workflow.run', {
         workflowId: workflow.id,
         input: input.trim(),
@@ -246,6 +342,39 @@ export function WorkflowRunPanel({
       await rpc('workflow.cancel', { runId });
     } catch {
       // Status will update via next poll tick
+    }
+  };
+
+  const retryFromStep = async (fromStepId: string) => {
+    if (!runId) return;
+    try {
+      const result = await rpc<{ runId: string }>('workflow.retryFromStep', {
+        runId,
+        fromStepId,
+      });
+      setStreamBuffer('');
+      setToolCalls([]);
+      setRunId(result.runId);
+      setRun(null);
+      setActiveRunRef({ runId: result.runId, workflowDef: workflow });
+      toast(t('workflow.run.retryFromStep'), 'info');
+    } catch (e) {
+      toast(`Failed to retry: ${e instanceof Error ? e.message : String(e)}`, 'error');
+    }
+  };
+
+  const skipStep = async (stepId: string) => {
+    if (!runId) return;
+    try {
+      const result = await rpc<{ runId: string }>('workflow.skipStep', { runId, stepId });
+      setStreamBuffer('');
+      setToolCalls([]);
+      setRunId(result.runId);
+      setRun(null);
+      setActiveRunRef({ runId: result.runId, workflowDef: workflow });
+      toast(t('workflow.run.skipStep'), 'info');
+    } catch (e) {
+      toast(`Failed to skip: ${e instanceof Error ? e.message : String(e)}`, 'error');
     }
   };
 
@@ -268,6 +397,20 @@ export function WorkflowRunPanel({
     return 'running';
   };
 
+  // Currently executing step info
+  const currentStepIndex = run ? run.stepResults.length : 0;
+  const currentStep = running ? (workflow.steps[currentStepIndex] ?? null) : null;
+
+  // Progress calc: completed (non-pending) steps / total
+  const completedSteps = run
+    ? workflow.steps.filter((s) => {
+        const sr = run.stepResults.find((r) => r.stepId === s.id);
+        return sr && (sr.output !== undefined || sr.error !== undefined);
+      }).length
+    : 0;
+  const progressPct =
+    workflow.steps.length > 0 ? (completedSteps / workflow.steps.length) * 100 : 0;
+
   return (
     <div className="flex flex-col gap-5">
       <div className="flex items-center justify-between">
@@ -286,6 +429,9 @@ export function WorkflowRunPanel({
       <div className="flex items-center gap-2 overflow-x-auto pb-1">
         {workflow.steps.map((s, i) => {
           const st = stepStatus(s.id, i);
+          const sr = run?.stepResults.find((r) => r.stepId === s.id);
+          const elapsed =
+            sr?.startedAt && sr.finishedAt ? sr.finishedAt - sr.startedAt : undefined;
           const color =
             st === 'pending'
               ? 'bg-slate-800 ring-slate-700 text-slate-500'
@@ -297,13 +443,40 @@ export function WorkflowRunPanel({
           return (
             <div key={s.id} className="flex items-center gap-1.5 shrink-0">
               <div className={`rounded-lg px-3 py-1.5 text-xs font-medium ring-1 ${color}`}>
-                {s.label ?? agentName(s.agentId)}
+                {s.label ?? agentName(s.agentId ?? '')}
+                {elapsed !== undefined && (
+                  <span className="ml-1.5 text-[10px] opacity-60">{formatElapsed(elapsed)}</span>
+                )}
               </div>
               {i < workflow.steps.length - 1 && <span className="text-slate-600">→</span>}
             </div>
           );
         })}
       </div>
+
+      {/* Progress bar — only shown while a run is active */}
+      {run && (
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center justify-between text-[10px] text-slate-500">
+            <span>{t('workflow.run.progress', { n: String(completedSteps), total: String(workflow.steps.length) })}</span>
+            {running && (
+              <span className="font-mono tabular-nums">{formatElapsed(liveElapsed)}</span>
+            )}
+          </div>
+          <div className="h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-300 ${
+                run.status === 'error'
+                  ? 'bg-red-500'
+                  : run.status === 'done'
+                    ? 'bg-emerald-500'
+                    : 'bg-indigo-500'
+              }`}
+              style={{ width: `${progressPct}%` }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Input — only shown before first run */}
       {!runId && workflow.inputRequired !== false && (
@@ -327,8 +500,13 @@ export function WorkflowRunPanel({
 
       {/* Run ID badge */}
       {runId && (
-        <div className="rounded-lg bg-slate-900/50 ring-1 ring-slate-700/50 px-3 py-2 text-xs text-slate-500 font-mono break-all">
-          {t('workflow.run.runId', { id: runId })}
+        <div className="rounded-lg bg-slate-900/50 ring-1 ring-slate-700/50 px-3 py-2 text-xs text-slate-500 font-mono break-all flex flex-wrap items-center gap-2">
+          <span>{t('workflow.run.runId', { id: runId })}</span>
+          {run?.forkFromRunId && (
+            <span className="text-indigo-400 text-[10px]">
+              {t('workflow.run.forkOf', { id: run.forkFromRunId.slice(-6) })}
+            </span>
+          )}
         </div>
       )}
 
@@ -339,15 +517,54 @@ export function WorkflowRunPanel({
             {t('workflow.run.start')}
           </Button>
         ) : running ? (
-          <>
-            <span className="text-xs text-yellow-400 flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse inline-block" />
-              {t('workflow.run.runningLabel')}
-            </span>
-            <Button size="sm" variant="danger" onClick={() => void cancelRun()}>
-              {t('workflow.run.cancel')}
-            </Button>
-          </>
+          // ── Rich running status block ──────────────────────────────────────
+          <div className="w-full rounded-xl bg-slate-900/80 ring-1 ring-yellow-500/25 px-4 py-3 flex flex-col gap-2.5">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 min-w-0">
+                {/* Ping indicator */}
+                <span className="relative flex h-2 w-2 shrink-0">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-60" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-yellow-400" />
+                </span>
+                <span className="text-xs font-medium text-yellow-200 shrink-0">
+                  {currentStep
+                    ? t('workflow.run.stepOf', { n: String(currentStepIndex + 1), total: String(workflow.steps.length) })
+                    : t('workflow.run.runningLabel')}
+                </span>
+                {currentStep && (
+                  <span className="text-xs text-slate-300 truncate">
+                    {currentStep.label ?? agentName(currentStep.agentId ?? '')}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-3 shrink-0">
+                <div className="flex flex-col items-end gap-0.5">
+                  {currentStep && (
+                    <span className="text-[10px] text-slate-500 font-mono tabular-nums">
+                      {t('workflow.run.stepElapsedLabel')}: {formatElapsed(stepElapsed)}
+                    </span>
+                  )}
+                  <span className="text-[10px] text-yellow-400/70 font-mono tabular-nums">
+                    {t('workflow.run.totalElapsedLabel')}: {formatElapsed(liveElapsed)}
+                  </span>
+                </div>
+                <Button size="sm" variant="danger" onClick={() => void cancelRun()}>
+                  {t('workflow.run.cancel')}
+                </Button>
+              </div>
+            </div>
+            {/* Animated scan line */}
+            <div className="h-px w-full bg-slate-800 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-yellow-400/50 rounded-full"
+                style={{
+                  width: `${progressPct > 0 ? progressPct : 20}%`,
+                  transition: 'width 0.4s ease',
+                  animation: progressPct === 0 ? 'pulse 1.5s ease-in-out infinite' : undefined,
+                }}
+              />
+            </div>
+          </div>
         ) : (
           <Button
             size="sm"
@@ -408,6 +625,92 @@ export function WorkflowRunPanel({
             </div>
           )}
 
+          {/* Live: currently executing step card */}
+          {running && currentStep && (
+            <div className="rounded-xl bg-yellow-900/10 ring-1 ring-yellow-500/20 p-4 flex flex-col gap-2.5">
+              {/* Header row: step index · label · running badge · elapsed */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-mono text-yellow-500/60">
+                  {t('workflow.run.step', { n: String(currentStepIndex + 1) })}
+                </span>
+                <span className="text-xs font-medium text-yellow-100">
+                  {currentStep.label ?? agentName(currentStep.agentId ?? '')}
+                </span>
+                <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-yellow-500/15 text-yellow-400">
+                  ⏳ {t('workflow.run.runningLabel')}
+                </span>
+                <span className="ml-auto text-[10px] font-mono text-yellow-400/60 tabular-nums">
+                  {formatElapsed(stepElapsed)}
+                </span>
+              </div>
+
+              {/* Agent identity row */}
+              {currentStep.agentId && (
+                <div className="flex items-center gap-1.5 px-0.5">
+                  <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-indigo-500/25 text-indigo-300 text-[9px] font-bold shrink-0 select-none">
+                    {agentName(currentStep.agentId).charAt(0).toUpperCase()}
+                  </span>
+                  <span className="text-[11px] text-indigo-300/80 font-medium truncate">
+                    {agentName(currentStep.agentId)}
+                  </span>
+                </div>
+              )}
+
+              {/* Active tool calls */}
+              {toolCalls.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 px-0.5">
+                  {toolCalls.map((tc) => (
+                    <span
+                      key={tc.id}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-800/70 ring-1 ring-slate-700/40 text-[10px] font-mono text-slate-300"
+                    >
+                      <span className="text-amber-400/80">⚙</span>
+                      {tc.name}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Thinking dots / streaming output */}
+              {streamBuffer ? (
+                <div className="rounded-lg bg-slate-900/40 ring-1 ring-slate-800/50 px-3 py-2.5 max-h-72 overflow-y-auto text-sm text-slate-200 leading-relaxed whitespace-pre-wrap break-words">
+                  <MarkdownView content={streamBuffer} />
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 px-0.5">
+                  <span className="text-[11px] text-slate-600">{t('workflow.run.thinking')}</span>
+                  <div className="flex gap-0.5 items-center">
+                    {[0, 1, 2].map((i) => (
+                      <span
+                        key={i}
+                        className="inline-block w-1 h-1 rounded-full bg-slate-600 animate-bounce"
+                        style={{ animationDelay: `${i * 0.15}s` }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Pending steps */}
+          {running && workflow.steps.slice(currentStepIndex + 1).map((s, i) => (
+            <div
+              key={s.id}
+              className="rounded-xl bg-slate-900/30 ring-1 ring-slate-800/40 px-4 py-2.5 flex items-center gap-2 opacity-35"
+            >
+              <span className="text-[10px] font-mono text-slate-600 shrink-0">
+                {t('workflow.run.step', { n: String(currentStepIndex + 2 + i) })}
+              </span>
+              <span className="text-xs text-slate-500 truncate">
+                {s.label ?? agentName(s.agentId ?? '')}
+              </span>
+              <span className="ml-auto text-[10px] text-slate-700 shrink-0">
+                {t('workflow.run.pending')}
+              </span>
+            </div>
+          ))}
+
           {run.stepResults.map((sr, i) => {
             const step = workflow.steps.find((s) => s.id === sr.stepId);
             const stStatus: 'running' | 'success' | 'error' = sr.error
@@ -422,7 +725,7 @@ export function WorkflowRunPanel({
                 key={sr.stepId}
                 className="rounded-xl bg-slate-900/60 ring-1 ring-slate-700/50 p-4 flex flex-col gap-2"
               >
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-xs font-mono text-slate-500">{t('workflow.run.step', { n: String(i + 1) })}</span>
                   <span className="text-xs text-slate-300">
                     {step?.label ?? agentName(step?.agentId ?? '')}
@@ -434,7 +737,32 @@ export function WorkflowRunPanel({
                   >
                     {stStatus === 'running' ? '⏳' : stStatus === 'success' ? '✓' : '✗'} {stStatus}
                   </Badge>
+                  {sr.startedAt && sr.finishedAt && (
+                    <span className="text-[10px] text-slate-500 font-mono">
+                      {formatElapsed(sr.finishedAt - sr.startedAt)}
+                    </span>
+                  )}
                 </div>
+                {stStatus === 'error' && !running && (
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => void retryFromStep(sr.stepId)}
+                    >
+                      {t('workflow.run.retryFromStep')}
+                    </Button>
+                    {i < workflow.steps.length - 1 && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => void skipStep(sr.stepId)}
+                      >
+                        {t('workflow.run.skipStep')}
+                      </Button>
+                    )}
+                  </div>
+                )}
                 {renderSuperNodeStructuredSummary(step?.type, sr)}
                 {(sr.output !== undefined || sr.error) && (
                   <div className="text-sm text-slate-300 max-h-64 overflow-y-auto">
