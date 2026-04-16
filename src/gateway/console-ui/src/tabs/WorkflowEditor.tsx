@@ -19,6 +19,7 @@ import type {
   WorkflowDesignerLayout,
   WorkflowDesignerPosition,
   WorkflowGraphDiagnostic,
+  WorkflowRunRecord,
   WorkflowValidationDiagnostic,
   WorkflowStep,
 } from '../types.js';
@@ -332,6 +333,38 @@ function buildWorkflowGraphEdges(steps: WorkflowStep[]): WorkflowGraphEdge[] {
     });
   }
 
+  return edges;
+}
+
+/** Parse all {{vars.stepId.varName}} references from a template string. */
+function parseVarRefs(template: string): string[] {
+  const stepIds: string[] = [];
+  const pattern = /\{\{vars\.([^.}]+)\.[^}]+\}\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = pattern.exec(template)) !== null) {
+    if (m[1] && !stepIds.includes(m[1])) stepIds.push(m[1]);
+  }
+  return stepIds;
+}
+
+/** Build data-flow edges: step A declares {{vars.B.*}} → A depends on B. */
+function buildDataFlowEdges(steps: WorkflowStep[]): Array<{ fromStepId: string; toStepId: string }> {
+  const stepIdSet = new Set(steps.map((s) => s.id));
+  const edges: Array<{ fromStepId: string; toStepId: string }> = [];
+  for (const step of steps) {
+    const templates = [
+      step.messageTemplate,
+      step.bodyTemplate ?? '',
+      step.transformCode ?? '',
+      ...(step.superNodePrompts ?? []),
+      ...(step.branches?.map((b) => b.expression) ?? []),
+    ].join(' ');
+    for (const sourceId of parseVarRefs(templates)) {
+      if (stepIdSet.has(sourceId) && sourceId !== step.id) {
+        edges.push({ fromStepId: sourceId, toStepId: step.id });
+      }
+    }
+  }
   return edges;
 }
 
@@ -3177,6 +3210,8 @@ export function WorkflowEditor({
     normalizeWorkflowDesignerLayout(workflow?.steps ?? [], workflow?.designerLayout),
   );
   const [graphZoom, setGraphZoom] = useState(1);
+  const [graphScroll, setGraphScroll] = useState({ x: 0, y: 0 });
+  const [liveRun, setLiveRun] = useState<WorkflowRunRecord | null>(null);
   const [editorMode, setEditorMode] = useState<WorkflowEditorMode>(
     workflow?.designerLayout?.preferredMode === 'graph' ? 'graph' : 'form',
   );
@@ -3194,6 +3229,21 @@ export function WorkflowEditor({
   const [collapsedStepIds, setCollapsedStepIds] = useState<string[]>([]);
   const workflowStarters = useMemo(() => buildWorkflowStarters(), []);
   const graphViewportRef = useRef<HTMLDivElement | null>(null);
+  const [editingLabelStepId, setEditingLabelStepId] = useState<string | null>(null);
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [showStageSummary, setShowStageSummary] = useState(false);
+  // Undo/redo: positions snapshots (max 20 entries)
+  const positionsHistoryRef = useRef<Array<Record<string, WorkflowDesignerPosition>>>([]);
+  const positionsHistoryCursorRef = useRef<number>(-1);
+  // Stable mutable refs used in event handlers to avoid stale closures
+  const graphSelectionStepIdsRef = useRef<string[]>(graphSelectionStepIds);
+  graphSelectionStepIdsRef.current = graphSelectionStepIds;
+  const stepsRef = useRef<WorkflowStep[]>(steps);
+  stepsRef.current = steps;
+  const editorModeRef = useRef<WorkflowEditorMode>(editorMode);
+  editorModeRef.current = editorMode;
+  const graphZoomRef = useRef(graphZoom);
+  graphZoomRef.current = graphZoom;
 
   const stepIssueMap = useMemo(() => collectStepIssueMap(diagnosis), [diagnosis]);
   const workflowIssueMessages = useMemo(() => collectWorkflowIssueMessages(diagnosis), [diagnosis]);
@@ -3222,6 +3272,7 @@ export function WorkflowEditor({
   const allStepsCollapsed = steps.length > 0 && steps.every((step) => collapsedStepIds.includes(step.id));
   const nodePositions = designerLayout.positions ?? {};
   const graphEdges = useMemo(() => buildWorkflowGraphEdges(steps), [steps]);
+  const dataFlowEdges = useMemo(() => buildDataFlowEdges(steps), [steps]);
   const endNodePosition = useMemo(
     () => buildWorkflowGraphEndPosition(steps, nodePositions),
     [nodePositions, steps],
@@ -3387,6 +3438,17 @@ export function WorkflowEditor({
 
     const handlePointerUp = (event: PointerEvent) => {
       if (dragState && event.pointerId === dragState.pointerId) {
+        // Push current positions to undo history after a drag completes
+        setDesignerLayout((current) => {
+          const snapshot = { ...(current.positions ?? {}) };
+          const history = positionsHistoryRef.current;
+          const cursor = positionsHistoryCursorRef.current;
+          const trimmed = history.slice(0, cursor + 1);
+          const next = [...trimmed, snapshot].slice(-20);
+          positionsHistoryRef.current = next;
+          positionsHistoryCursorRef.current = next.length - 1;
+          return current;
+        });
         setDragState(null);
       }
 
@@ -3416,6 +3478,154 @@ export function WorkflowEditor({
       window.removeEventListener('pointerup', handlePointerUp);
     };
   }, [dragState, editorMode, graphMarquee, graphZoom, nodePositions, steps]);
+
+  // A5: Poll for the latest workflow run to display live execution state
+  useEffect(() => {
+    if (!workflow?.id || editorMode !== 'graph') return;
+    const workflowId = workflow.id;
+    const controller = new AbortController();
+    let timeoutId: ReturnType<typeof window.setTimeout>;
+
+    const poll = () => {
+      void rpc<{ runs: WorkflowRunRecord[] }>('workflow.history', null, controller.signal).then((data) => {
+        if (controller.signal.aborted) return;
+        const latest = data.runs.find((r) => r.workflowId === workflowId);
+        setLiveRun(latest ?? null);
+        if (latest?.status === 'running') {
+          timeoutId = window.setTimeout(poll, 1500);
+        } else {
+          timeoutId = window.setTimeout(poll, 8000);
+        }
+      }).catch(() => {
+        if (!controller.signal.aborted) timeoutId = window.setTimeout(poll, 10000);
+      });
+    };
+
+    poll();
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeoutId);
+    };
+  }, [workflow?.id, editorMode]);
+
+  // A1: Mouse-wheel zoom on the canvas viewport (Ctrl+Wheel = zoom, plain Wheel = native scroll)
+  useEffect(() => {
+    const viewport = graphViewportRef.current;
+    if (!viewport) return;
+    const handleWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      const factor = event.deltaY > 0 ? -0.1 : 0.1;
+      setGraphZoom((current) => Math.min(2.0, Math.max(0.3, Number((current + factor).toFixed(2)))));
+    };
+    const handleScroll = () => setGraphScroll({ x: viewport.scrollLeft, y: viewport.scrollTop });
+    viewport.addEventListener('wheel', handleWheel, { passive: false });
+    viewport.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      viewport.removeEventListener('wheel', handleWheel);
+      viewport.removeEventListener('scroll', handleScroll);
+    };
+  });
+
+  // A2: Global keyboard shortcuts when graph canvas is active
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (editorModeRef.current !== 'graph') return;
+      const tag = (event.target as HTMLElement).tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+      // Escape — cancel wiring / clear label edit
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setConnectionState(null);
+        setEditingLabelStepId(null);
+        setGraphSelectionStepIds([]);
+        return;
+      }
+
+      // Delete / Backspace — remove selected nodes
+      if ((event.key === 'Delete' || event.key === 'Backspace') && graphSelectionStepIdsRef.current.length > 0) {
+        event.preventDefault();
+        // Snapshot current positions for undo
+        const idsToRemove = new Set(graphSelectionStepIdsRef.current);
+        setDesignerLayout((current) => {
+          const snapshot = { ...(current.positions ?? {}) };
+          const trimmed = positionsHistoryRef.current.slice(0, positionsHistoryCursorRef.current + 1);
+          const next = [...trimmed, snapshot].slice(-20);
+          positionsHistoryRef.current = next;
+          positionsHistoryCursorRef.current = next.length - 1;
+          return current;
+        });
+        setSteps((current) => current.filter((step) => !idsToRemove.has(step.id)));
+        setGraphSelectionStepIds([]);
+        return;
+      }
+
+      if (event.ctrlKey || event.metaKey) {
+        // Ctrl+A — select all nodes
+        if (event.key === 'a' || event.key === 'A') {
+          event.preventDefault();
+          setGraphSelectionStepIds(stepsRef.current.map((step) => step.id));
+          return;
+        }
+        // Ctrl+Z — undo positions, Ctrl+Shift+Z / Ctrl+Y — redo positions
+        if (event.key === 'z' || event.key === 'Z') {
+          event.preventDefault();
+          if (event.shiftKey) {
+            // Redo
+            const cursor = positionsHistoryCursorRef.current;
+            const history = positionsHistoryRef.current;
+            if (cursor < history.length - 1) {
+              positionsHistoryCursorRef.current = cursor + 1;
+              const snapshot = history[positionsHistoryCursorRef.current];
+              if (snapshot) setDesignerLayout((current) => ({ ...current, positions: snapshot }));
+            }
+          } else {
+            // Undo
+            const cursor = positionsHistoryCursorRef.current;
+            const history = positionsHistoryRef.current;
+            if (cursor > 0) {
+              positionsHistoryCursorRef.current = cursor - 1;
+              const snapshot = history[positionsHistoryCursorRef.current];
+              if (snapshot) setDesignerLayout((current) => ({ ...current, positions: snapshot }));
+            }
+          }
+          return;
+        }
+        if (event.key === 'y' || event.key === 'Y') {
+          event.preventDefault();
+          const cursor = positionsHistoryCursorRef.current;
+          const history = positionsHistoryRef.current;
+          if (cursor < history.length - 1) {
+            positionsHistoryCursorRef.current = cursor + 1;
+            const snapshot = history[positionsHistoryCursorRef.current];
+            if (snapshot) setDesignerLayout((current) => ({ ...current, positions: snapshot }));
+          }
+          return;
+        }
+      }
+
+      // Arrow keys — nudge selected nodes (Shift = ±40px, plain = ±8px)
+      if (graphSelectionStepIdsRef.current.length > 0 && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+        event.preventDefault();
+        const delta = event.shiftKey ? 40 : 8;
+        const dx = event.key === 'ArrowLeft' ? -delta : event.key === 'ArrowRight' ? delta : 0;
+        const dy = event.key === 'ArrowUp' ? -delta : event.key === 'ArrowDown' ? delta : 0;
+        const ids = graphSelectionStepIdsRef.current;
+        setDesignerLayout((current) => {
+          const nextPositions = { ...(current.positions ?? {}) };
+          ids.forEach((stepId) => {
+            const pos = nextPositions[stepId] ?? { x: 72, y: 72 };
+            nextPositions[stepId] = clampDesignerPosition({ x: pos.x + dx, y: pos.y + dy });
+          });
+          return { ...current, positions: nextPositions };
+        });
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const focusStep = (stepId: string) => {
     setSelectedStepId(stepId);
@@ -3541,6 +3751,45 @@ export function WorkflowEditor({
       }),
     );
     setConnectionState(null);
+  };
+
+  const deleteEdge = (edgeId: string) => {
+    const parts = edgeId.split(':');
+    const sourceId = parts[0];
+    if (!sourceId) return;
+    setSteps((current) =>
+      current.map((step) => {
+        if (step.id !== sourceId) return step;
+        if (parts[1] === 'next') {
+          return { ...step, nextStepId: undefined };
+        }
+        if (parts[1] === 'branch' && typeof parts[2] === 'string') {
+          const branchIdx = parseInt(parts[2], 10);
+          if (isNaN(branchIdx)) return step;
+          const branches = [...(step.branches ?? [])];
+          const existing = branches[branchIdx];
+          if (existing) branches[branchIdx] = { ...existing, goto: '' };
+          return { ...step, branches };
+        }
+        return step;
+      }),
+    );
+    setSelectedEdgeId(null);
+  };
+
+  const reconnectEdge = (edgeId: string) => {
+    const parts = edgeId.split(':');
+    const sourceId = parts[0];
+    if (!sourceId) return;
+    if (parts[1] === 'next') {
+      setConnectionState({ sourceStepId: sourceId, mode: 'next' });
+    } else if (parts[1] === 'branch' && typeof parts[2] === 'string') {
+      const branchIdx = parseInt(parts[2], 10);
+      if (!isNaN(branchIdx)) {
+        setConnectionState({ sourceStepId: sourceId, mode: 'branch', branchIndex: branchIdx });
+      }
+    }
+    setSelectedEdgeId(null);
   };
 
   const beginNextConnectionFromStep = (stepId: string) => {
@@ -3781,7 +4030,7 @@ export function WorkflowEditor({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="flex flex-wrap items-center gap-2">
         {[
           { label: formText.statSteps, value: String(steps.length) },
           { label: formText.statSuperNodes, value: String(superStepCount) },
@@ -3790,10 +4039,10 @@ export function WorkflowEditor({
         ].map((item) => (
           <div
             key={item.label}
-            className="rounded-xl bg-slate-800/45 ring-1 ring-slate-700/50 px-4 py-3 flex flex-col gap-1"
+            className="flex items-center gap-1.5 rounded-lg bg-slate-800/45 ring-1 ring-slate-700/50 px-3 py-1"
           >
-            <span className="text-[11px] uppercase tracking-wider text-slate-500">{item.label}</span>
-            <span className="text-lg font-semibold text-slate-100">{item.value}</span>
+            <span className="text-[11px] text-slate-500">{item.label}</span>
+            <span className="text-sm font-semibold text-slate-100">{item.value}</span>
           </div>
         ))}
       </div>
@@ -3826,7 +4075,25 @@ export function WorkflowEditor({
         </div>
       )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] gap-3">
+      <div>
+        <button
+          type="button"
+          onClick={() => setShowStageSummary((v) => !v)}
+          className="mb-2 flex items-center gap-2 text-xs text-slate-400 hover:text-slate-200"
+        >
+          <span className="text-slate-600">{showStageSummary ? '▼' : '▶'}</span>
+          <span>{formText.stageSummary}</span>
+          {workflowStageSummaries.length > 0 && (
+            <span className="text-slate-500">{workflowStageSummaries.length} {locale === 'zh' ? '个阶段' : 'stages'}</span>
+          )}
+          {workflowChecklist.length > 0 && (
+            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-200 ring-1 ring-amber-500/25">
+              {workflowChecklist.length} {locale === 'zh' ? '待处理' : 'pending'}
+            </span>
+          )}
+        </button>
+        {showStageSummary && (
+        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] gap-3">
         <div className="rounded-2xl bg-slate-800/45 ring-1 ring-slate-700/50 px-4 py-4 flex flex-col gap-3">
           <div className="flex items-center justify-between gap-3">
             <span className="text-xs text-slate-400">{formText.stageSummary}</span>
@@ -3929,6 +4196,8 @@ export function WorkflowEditor({
             </div>
           )}
         </div>
+      </div>
+        )}
       </div>
 
       {/* Input mode toggle */}
@@ -4140,34 +4409,6 @@ export function WorkflowEditor({
         </div>
       </div>
 
-      {editorMode === 'form' && (
-        <div className="rounded-2xl bg-[linear-gradient(135deg,rgba(6,182,212,0.14),rgba(15,23,42,0.92))] ring-1 ring-cyan-500/20 px-4 py-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div className="flex flex-col gap-1">
-            <span className="text-xs uppercase tracking-[0.18em] text-cyan-300">{graphText.canvasEntryEyebrow}</span>
-            <span className="text-sm text-slate-100">{graphText.canvasEntryTitle}</span>
-            <span className="text-xs text-slate-300">
-              {graphText.canvasEntryBody}
-            </span>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setEditorMode('graph')}
-              className="rounded-xl bg-cyan-500/15 px-4 py-2 text-sm text-cyan-100 ring-1 ring-cyan-500/30 hover:bg-cyan-500/20"
-            >
-              {graphText.openCanvas}
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowHelp(true)}
-              className="rounded-xl bg-slate-900/70 px-4 py-2 text-sm text-slate-200 ring-1 ring-slate-700/60 hover:bg-slate-900"
-            >
-              {graphText.entryGuide}
-            </button>
-          </div>
-        </div>
-      )}
-
       {editorMode === 'graph' && (
         <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.7fr)_420px] gap-4">
           <div className="rounded-[28px] overflow-hidden bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.12),transparent_38%),linear-gradient(180deg,rgba(15,23,42,0.96),rgba(2,6,23,0.98))] ring-1 ring-slate-700/60 shadow-[0_20px_80px_rgba(2,6,23,0.45)]">
@@ -4304,6 +4545,20 @@ export function WorkflowEditor({
                   transformOrigin: 'top left',
                 }}
               >
+                <defs>
+                  <marker id="arrow-default" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+                    <path d="M 0 0 L 8 3 L 0 6 z" fill="rgba(56,189,248,0.85)" />
+                  </marker>
+                  <marker id="arrow-branch" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+                    <path d="M 0 0 L 8 3 L 0 6 z" fill="rgba(244,114,182,0.85)" />
+                  </marker>
+                  <marker id="arrow-default-sel" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+                    <path d="M 0 0 L 8 3 L 0 6 z" fill="rgba(56,189,248,1)" />
+                  </marker>
+                  <marker id="arrow-branch-sel" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+                    <path d="M 0 0 L 8 3 L 0 6 z" fill="rgba(244,114,182,1)" />
+                  </marker>
+                </defs>
                 {graphEdges.map((edge) => {
                   const from = nodePositions[edge.fromStepId];
                   const to =
@@ -4325,16 +4580,57 @@ export function WorkflowEditor({
                   const labelX = (startX + endX) / 2;
                   const labelY = (startY + endY) / 2;
                   const labelWidth = Math.max(56, (edge.label?.length ?? 0) * 8 + 18);
+                  const isSelected = selectedEdgeId === edge.id;
+                  const arrowId = isSelected
+                    ? `arrow-${edge.tone}-sel`
+                    : `arrow-${edge.tone}`;
                   return (
-                    <g key={edge.id}>
+                    <g
+                      key={edge.id}
+                      style={{ pointerEvents: 'all', cursor: 'pointer' }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedEdgeId((prev) => (prev === edge.id ? null : edge.id));
+                      }}
+                    >
+                      {/* Wide transparent hit area for easy clicking */}
+                      <path d={path} fill="none" stroke="transparent" strokeWidth={16} />
+                      {/* Visible edge path */}
                       <path
                         d={path}
                         fill="none"
-                        stroke={edge.tone === 'branch' ? 'rgba(244,114,182,0.75)' : 'rgba(56,189,248,0.7)'}
-                        strokeWidth={edge.tone === 'branch' ? 2 : 2.5}
+                        stroke={
+                          isSelected
+                            ? edge.tone === 'branch' ? 'rgba(244,114,182,1)' : 'rgba(56,189,248,1)'
+                            : edge.tone === 'branch' ? 'rgba(244,114,182,0.75)' : 'rgba(56,189,248,0.7)'
+                        }
+                        strokeWidth={isSelected ? 3 : edge.tone === 'branch' ? 2 : 2.5}
                         strokeDasharray={edge.tone === 'branch' ? '7 6' : undefined}
+                        markerEnd={`url(#${arrowId})`}
                       />
-                      {edge.label && (
+                      {/* Label or action buttons */}
+                      {isSelected ? (
+                        <g>
+                          <g
+                            style={{ cursor: 'pointer' }}
+                            onClick={(e) => { e.stopPropagation(); deleteEdge(edge.id); }}
+                          >
+                            <rect x={labelX - 20} y={labelY - 12} width={40} height={24} rx={7}
+                              fill="rgba(239,68,68,0.18)" stroke="rgba(239,68,68,0.55)" strokeWidth={1} />
+                            <text x={labelX} y={labelY + 5} textAnchor="middle" fontSize="12"
+                              fill="rgba(252,165,165,0.95)" fontWeight="700" style={{ userSelect: 'none' }}>✕</text>
+                          </g>
+                          <g
+                            style={{ cursor: 'pointer' }}
+                            onClick={(e) => { e.stopPropagation(); reconnectEdge(edge.id); }}
+                          >
+                            <rect x={labelX + 24} y={labelY - 12} width={48} height={24} rx={7}
+                              fill="rgba(56,189,248,0.12)" stroke="rgba(56,189,248,0.45)" strokeWidth={1} />
+                            <text x={labelX + 48} y={labelY + 5} textAnchor="middle" fontSize="11"
+                              fill="rgba(147,210,249,0.95)" fontWeight="600" style={{ userSelect: 'none' }}>重连</text>
+                          </g>
+                        </g>
+                      ) : edge.label ? (
                         <g>
                           <rect
                             x={labelX - labelWidth / 2}
@@ -4355,8 +4651,36 @@ export function WorkflowEditor({
                             {edge.label}
                           </text>
                         </g>
-                      )}
+                      ) : null}
                     </g>
+                  );
+                })}
+                {/* A5: Variable data-flow dependency edges (dashed orange) */}
+                {dataFlowEdges.map((edge, idx) => {
+                  const from = nodePositions[edge.fromStepId];
+                  const to =
+                    edge.toStepId === GRAPH_END_NODE_ID
+                      ? endNodePosition
+                      : nodePositions[edge.toStepId];
+                  if (!from || !to) return null;
+                  const startX = from.x + GRAPH_NODE_WIDTH / 2;
+                  const startY = from.y + GRAPH_NODE_HEIGHT;
+                  const endX = to.x + GRAPH_NODE_WIDTH / 2;
+                  const endY =
+                    edge.toStepId === GRAPH_END_NODE_ID
+                      ? to.y + GRAPH_END_NODE_HEIGHT / 2
+                      : to.y;
+                  const delta = Math.max(48, Math.abs(endY - startY) / 2);
+                  const path = `M ${startX} ${startY} C ${startX} ${startY + delta}, ${endX} ${endY - delta}, ${endX} ${endY}`;
+                  return (
+                    <path
+                      key={`df-${idx}`}
+                      d={path}
+                      fill="none"
+                      stroke="rgba(251,146,60,0.5)"
+                      strokeWidth={1.5}
+                      strokeDasharray="5 4"
+                    />
                   );
                 })}
               </svg>
@@ -4373,6 +4697,7 @@ export function WorkflowEditor({
                   if (event.target !== event.currentTarget) {
                     return;
                   }
+                  setSelectedEdgeId(null);
                   beginGraphMarquee(event.pointerId, event.clientX, event.clientY);
                 }}
               >
@@ -4441,6 +4766,28 @@ export function WorkflowEditor({
                           'linear-gradient(160deg, rgba(15,23,42,0.98), rgba(30,41,59,0.92) 62%, rgba(15,23,42,0.98))',
                       }}
                     >
+                      {/* A5: Execution status badge overlay */}
+                      {(() => {
+                        if (!liveRun) return null;
+                        const result = liveRun.stepResults?.find((r) => r.stepId === step.id);
+                        const isActive = liveRun.status === 'running' && !result?.finishedAt;
+                        const badge = result?.error
+                          ? { color: 'bg-red-500', label: '✗' }
+                          : result?.finishedAt
+                            ? { color: 'bg-emerald-500', label: '✓' }
+                            : isActive
+                              ? { color: 'bg-amber-400 animate-pulse', label: '⬤' }
+                              : null;
+                        if (!badge) return null;
+                        return (
+                          <span
+                            className={`absolute top-2 right-2 z-10 w-5 h-5 rounded-full text-[9px] flex items-center justify-center text-white font-bold ${badge.color}`}
+                            title={result?.error ?? (result?.finishedAt ? '已完成' : '执行中…')}
+                          >
+                            {badge.label}
+                          </span>
+                        );
+                      })()}
                       <div
                         className="flex items-center justify-between rounded-t-[22px] border-b border-slate-800/80 px-4 py-3 cursor-grab active:cursor-grabbing"
                         onPointerDown={(event) => {
@@ -4457,7 +4804,38 @@ export function WorkflowEditor({
                       </div>
                       <div className="flex h-[calc(100%-53px)] flex-col justify-between px-4 py-3">
                         <div>
-                          <div className="truncate text-sm font-semibold text-slate-100">{step.label ?? step.id}</div>
+                          {editingLabelStepId === step.id ? (
+                            <input
+                              autoFocus
+                              className="w-full rounded-md bg-slate-700/80 px-2 py-0.5 text-sm font-semibold text-slate-100 ring-1 ring-cyan-400/60 outline-none"
+                              defaultValue={step.label ?? step.id}
+                              onBlur={(e) => {
+                                const next = e.target.value.trim();
+                                if (next && next !== step.id) {
+                                  const idx = stepsRef.current.findIndex((s) => s.id === step.id);
+                                  if (idx >= 0) updateStep(idx, { ...stepsRef.current[idx]!, label: next });
+                                }
+                                setEditingLabelStepId(null);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                                if (e.key === 'Escape') setEditingLabelStepId(null);
+                                e.stopPropagation();
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          ) : (
+                            <div
+                              className="truncate text-sm font-semibold text-slate-100 cursor-pointer"
+                              title={locale === 'zh' ? '双击编辑名称' : 'Double-click to edit name'}
+                              onDoubleClick={(e) => {
+                                e.stopPropagation();
+                                setEditingLabelStepId(step.id);
+                              }}
+                            >
+                              {step.label ?? step.id}
+                            </div>
+                          )}
                           <div className="mt-1 text-[11px] text-slate-500 font-mono truncate">{step.id}</div>
                         </div>
                         <div className="flex flex-col gap-1">
@@ -4522,6 +4900,88 @@ export function WorkflowEditor({
                 </button>
               </div>
               </div>
+              {/* A4: Minimap — sticky bottom-right overview */}
+              {(() => {
+                const MM_W = 130;
+                const MM_H = 90;
+                const cw = Math.max(graphCanvasMetrics.width, 1);
+                const ch = Math.max(graphCanvasMetrics.height, 1);
+                const mmScale = Math.min(MM_W / cw, MM_H / ch);
+                const viewport = graphViewportRef.current;
+                const vpW = viewport?.clientWidth ?? 800;
+                const vpH = viewport?.clientHeight ?? 600;
+                const vpRectW = Math.min(MM_W, (vpW / graphZoom) * mmScale);
+                const vpRectH = Math.min(MM_H, (vpH / graphZoom) * mmScale);
+                const vpRectX = (graphScroll.x / graphZoom) * mmScale;
+                const vpRectY = (graphScroll.y / graphZoom) * mmScale;
+                return (
+                  <div
+                    className="sticky bottom-3 z-10 -mt-28 flex justify-end pr-3 pointer-events-none"
+                    style={{ height: `${MM_H + 12}px` }}
+                  >
+                    <svg
+                      width={MM_W + 4}
+                      height={MM_H + 4}
+                      className="rounded-xl ring-1 ring-slate-600/70 bg-slate-900/85 backdrop-blur-sm pointer-events-auto cursor-pointer"
+                      title={locale === 'zh' ? '点击跳转到该区域' : 'Click to navigate'}
+                      onClick={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const cx = (e.clientX - rect.left - 2) / mmScale;
+                        const cy = (e.clientY - rect.top - 2) / mmScale;
+                        const vp = graphViewportRef.current;
+                        if (!vp) return;
+                        vp.scrollTo({
+                          left: cx * graphZoom - vp.clientWidth / 2,
+                          top: cy * graphZoom - vp.clientHeight / 2,
+                          behavior: 'smooth',
+                        });
+                      }}
+                    >
+                      <g transform="translate(2,2)">
+                        {/* node blobs */}
+                        {steps.map((step) => {
+                          const pos = nodePositions[step.id] ?? { x: 72, y: 72 };
+                          return (
+                            <rect
+                              key={step.id}
+                              x={pos.x * mmScale}
+                              y={pos.y * mmScale}
+                              width={Math.max(4, GRAPH_NODE_WIDTH * mmScale)}
+                              height={Math.max(3, GRAPH_NODE_HEIGHT * mmScale)}
+                              rx={2}
+                              fill={
+                                graphSelectionStepIds.includes(step.id)
+                                  ? 'rgba(34,211,238,0.7)'
+                                  : 'rgba(100,116,139,0.55)'
+                              }
+                            />
+                          );
+                        })}
+                        {/* end node blob */}
+                        <rect
+                          x={endNodePosition.x * mmScale}
+                          y={endNodePosition.y * mmScale}
+                          width={Math.max(4, GRAPH_END_NODE_WIDTH * mmScale)}
+                          height={Math.max(3, GRAPH_END_NODE_HEIGHT * mmScale)}
+                          rx={2}
+                          fill="rgba(245,158,11,0.5)"
+                        />
+                        {/* viewport indicator */}
+                        <rect
+                          x={vpRectX}
+                          y={vpRectY}
+                          width={vpRectW}
+                          height={vpRectH}
+                          rx={2}
+                          fill="rgba(34,211,238,0.07)"
+                          stroke="rgba(34,211,238,0.55)"
+                          strokeWidth={1}
+                        />
+                      </g>
+                    </svg>
+                  </div>
+                );
+              })()}
             </div>
           </div>
 

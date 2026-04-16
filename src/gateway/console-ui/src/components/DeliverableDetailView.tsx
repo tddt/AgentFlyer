@@ -1,12 +1,18 @@
 import type { KeyboardEvent as ReactKeyboardEvent, ReactElement } from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Badge } from './Badge.js';
 import { CopyButton } from './CopyButton.js';
 import { MarkdownView } from './MarkdownView.js';
 import { useLocale } from '../context/i18n.js';
 import { rpc } from '../hooks/useRpc.js';
 import { useToast } from '../hooks/useToast.js';
-import type { ArtifactRef, DeliverablePublicationTarget, DeliverableRecord } from '../types.js';
+import type {
+  ArtifactRef,
+  DeliverablePublicationTarget,
+  DeliverableRecord,
+  WorkflowRunRecord,
+  WorkflowStepResult,
+} from '../types.js';
 
 const CONTENT_BASE = `http://127.0.0.1:${window.__AF_PORT__}`;
 const CONTENT_TOKEN = encodeURIComponent(window.__AF_TOKEN__);
@@ -117,6 +123,37 @@ function renderArtifactTextContent(artifact: ArtifactRef, textContent: string): 
 function artifactUrl(artifact: ArtifactRef | null | undefined): string | null {
   if (!artifact?.contentItemId) return null;
   return `${CONTENT_BASE}/api/content/${encodeURIComponent(artifact.contentItemId)}?token=${CONTENT_TOKEN}`;
+}
+
+function triggerDownload(url: string, filename: string): void {
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  queueMicrotask(() => document.body.removeChild(a));
+}
+
+function downloadArtifact(artifact: ArtifactRef): void {
+  const url = artifactUrl(artifact);
+  if (url) {
+    triggerDownload(url, artifact.name);
+    return;
+  }
+  if (artifact.textContent) {
+    const blob = new Blob([artifact.textContent], { type: artifact.mimeType ?? 'text/plain' });
+    const blobUrl = URL.createObjectURL(blob);
+    triggerDownload(blobUrl, artifact.name);
+    queueMicrotask(() => URL.revokeObjectURL(blobUrl));
+  }
+}
+
+function downloadAllArtifacts(artifacts: ArtifactRef[]): void {
+  // stagger by 80ms to avoid browser blocking multiple simultaneous downloads
+  artifacts.forEach((artifact, idx) => {
+    setTimeout(() => downloadArtifact(artifact), idx * 80);
+  });
 }
 
 function renderMediaPreview(
@@ -257,15 +294,37 @@ export function DeliverableDetailView({
   const { t } = useLocale();
   const { toast } = useToast();
   const [publishingId, setPublishingId] = useState<string | null>(null);
+  const [batchPublishing, setBatchPublishing] = useState(false);
   const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
   const [publicationOverrides, setPublicationOverrides] = useState<
     Record<string, Partial<DeliverablePublicationTarget>>
   >({});
+  // B4: inline title/summary editing
+  const [editingField, setEditingField] = useState<'title' | 'summary' | null>(null);
+  const [localTitle, setLocalTitle] = useState<string | null>(null);
+  const [localSummary, setLocalSummary] = useState<string | null>(null);
+  // B3: file attach
+  const [showAttach, setShowAttach] = useState(false);
+  const [attachPath, setAttachPath] = useState('');
+  const [attaching, setAttaching] = useState(false);
+  // B5: execution trace
+  const [traceOpen, setTraceOpen] = useState(false);
+  const [traceRun, setTraceRun] = useState<WorkflowRunRecord | null>(null);
+  const [traceLoading, setTraceLoading] = useState(false);
+  const titleInputRef = useRef<HTMLInputElement>(null);
+  const summaryInputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     setPublicationOverrides({});
     setPublishingId(null);
     setSelectedArtifactId(null);
+    setEditingField(null);
+    setLocalTitle(null);
+    setLocalSummary(null);
+    setShowAttach(false);
+    setAttachPath('');
+    setTraceOpen(false);
+    setTraceRun(null);
   }, [deliverable?.id]);
 
   if (loading) {
@@ -359,6 +418,74 @@ export function DeliverableDetailView({
     }
   };
 
+  const batchPublishAll = async (): Promise<void> => {
+    setBatchPublishing(true);
+    try {
+      const result = await rpc<{ total: number; results: Array<{ ok: boolean }> }>(
+        'deliverable.batchPublish',
+        { deliverableId: deliverable.id },
+      );
+      const successCount = result.results.filter((r) => r.ok).length;
+      toast(t('deliverables.publish.batchDone', { count: String(successCount) }), 'success');
+      onPublished?.();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : t('deliverables.publish.failed'), 'error');
+    } finally {
+      setBatchPublishing(false);
+    }
+  };
+
+  const saveField = async (field: 'title' | 'summary', value: string): Promise<void> => {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    if (field === 'title') setLocalTitle(trimmed);
+    else setLocalSummary(trimmed);
+    try {
+      await rpc('deliverable.update', { deliverableId: deliverable.id, [field]: trimmed });
+      toast(t('deliverables.update.success'), 'success');
+      onPublished?.();
+    } catch {
+      toast(t('deliverables.update.failed'), 'error');
+      if (field === 'title') setLocalTitle(null);
+      else setLocalSummary(null);
+    }
+    setEditingField(null);
+  };
+
+  const attachFile = async (): Promise<void> => {
+    if (!attachPath.trim()) return;
+    setAttaching(true);
+    try {
+      await rpc('deliverable.attachArtifact', {
+        deliverableId: deliverable.id,
+        filePath: attachPath.trim(),
+      });
+      toast(t('deliverables.attach.success'), 'success');
+      setAttachPath('');
+      setShowAttach(false);
+      onPublished?.();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : t('deliverables.attach.failed'), 'error');
+    } finally {
+      setAttaching(false);
+    }
+  };
+
+  const loadTrace = async (): Promise<void> => {
+    if (deliverable.source.kind !== 'workflow_run') return;
+    setTraceLoading(true);
+    try {
+      const result = await rpc<WorkflowRunRecord | null>('workflow.runStatus', {
+        runId: deliverable.source.runId,
+      });
+      setTraceRun(result);
+    } catch {
+      // silently ignore
+    } finally {
+      setTraceLoading(false);
+    }
+  };
+
   return (
     <div className="rounded-[28px] border border-white/10 bg-[radial-gradient(circle_at_top_right,rgba(34,197,94,0.14),transparent_22%),radial-gradient(circle_at_top_left,rgba(59,130,246,0.18),transparent_32%),rgba(2,6,23,0.88)] p-6 shadow-[0_30px_80px_rgba(2,6,23,0.45)] backdrop-blur-xl">
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/8 pb-4">
@@ -379,10 +506,52 @@ export function DeliverableDetailView({
             <Badge variant="gray">{artifacts.length}</Badge>
           </div>
           <h3 className="mt-3 text-xl font-semibold tracking-tight text-slate-50">
-            {deliverable.title}
+            {editingField === 'title' ? (
+              <input
+                ref={titleInputRef}
+                autoFocus
+                defaultValue={localTitle ?? deliverable.title}
+                className="w-full rounded-lg bg-slate-800/80 px-3 py-1.5 text-xl font-semibold text-slate-50 ring-1 ring-cyan-400/50 outline-none"
+                onBlur={(e) => void saveField('title', e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                  if (e.key === 'Escape') setEditingField(null);
+                  e.stopPropagation();
+                }}
+              />
+            ) : (
+              <span
+                title={t('deliverables.detail.editHint')}
+                className="cursor-text hover:opacity-80"
+                onDoubleClick={() => setEditingField('title')}
+              >
+                {localTitle ?? deliverable.title}
+              </span>
+            )}
           </h3>
           <p className="mt-1 max-w-3xl line-clamp-2 text-sm leading-6 text-slate-300">
-            {deliverable.summary || deliverable.previewText || t('deliverables.artifact.noPreview')}
+            {editingField === 'summary' ? (
+              <textarea
+                ref={summaryInputRef}
+                autoFocus
+                rows={2}
+                defaultValue={localSummary ?? deliverable.summary}
+                className="w-full rounded-lg bg-slate-800/80 px-3 py-1.5 text-sm text-slate-300 ring-1 ring-cyan-400/50 outline-none resize-none"
+                onBlur={(e) => void saveField('summary', e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') setEditingField(null);
+                  e.stopPropagation();
+                }}
+              />
+            ) : (
+              <span
+                title={t('deliverables.detail.editHint')}
+                className="cursor-text hover:opacity-80"
+                onDoubleClick={() => setEditingField('summary')}
+              >
+                {(localSummary ?? deliverable.summary) || deliverable.previewText || t('deliverables.artifact.noPreview')}
+              </span>
+            )}
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <div className="rounded-full border border-white/8 bg-white/[0.03] px-3 py-1.5 text-xs text-slate-300">
@@ -413,7 +582,19 @@ export function DeliverableDetailView({
               <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">
                 {t('deliverables.detail.artifacts')}
               </div>
-              <Badge variant="gray">{artifacts.length}</Badge>
+              <div className="flex items-center gap-2">
+                {artifacts.length > 1 && (
+                  <button
+                    type="button"
+                    className="rounded-full border border-cyan-400/20 bg-cyan-500/10 px-2.5 py-1 text-[10px] text-cyan-200 hover:bg-cyan-500/18"
+                    onClick={() => downloadAllArtifacts(artifacts)}
+                    title={t('deliverables.artifact.downloadAll')}
+                  >
+                    ↓ {t('deliverables.artifact.downloadAll')}
+                  </button>
+                )}
+                <Badge variant="gray">{artifacts.length}</Badge>
+              </div>
             </div>
             <div className="mb-3 rounded-xl border border-cyan-400/10 bg-cyan-500/[0.06] px-3 py-2 text-[11px] leading-5 text-cyan-100/80">
               {t('deliverables.artifact.keyboardHint')}
@@ -443,8 +624,18 @@ export function DeliverableDetailView({
                     />
                     <div className="flex items-center justify-between gap-3">
                       <div className="truncate text-sm font-medium text-slate-100">{artifact.name}</div>
-                      <div className="rounded-full border border-white/8 bg-slate-900/80 px-2 py-0.5 text-[10px] text-slate-400">
-                        {index + 1}/{artifacts.length}
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          className="rounded-full border border-slate-600/40 bg-slate-800/60 px-2 py-0.5 text-[10px] text-slate-300 hover:bg-slate-700/70"
+                          onClick={(e) => { e.stopPropagation(); downloadArtifact(artifact); }}
+                          title={t('deliverables.artifact.download')}
+                        >
+                          ↓
+                        </button>
+                        <div className="rounded-full border border-white/8 bg-slate-900/80 px-2 py-0.5 text-[10px] text-slate-400">
+                          {index + 1}/{artifacts.length}
+                        </div>
                       </div>
                     </div>
                     <div className="mt-2 flex flex-wrap gap-2">
@@ -461,6 +652,47 @@ export function DeliverableDetailView({
                 );
               })}
             </div>
+            {/* B3: Attach file */}
+            {!showAttach ? (
+              <button
+                type="button"
+                className="mt-3 w-full rounded-xl border border-dashed border-slate-600/50 py-2 text-[11px] text-slate-500 hover:border-cyan-400/30 hover:text-cyan-300"
+                onClick={() => setShowAttach(true)}
+              >
+                {t('deliverables.attach.action')}
+              </button>
+            ) : (
+              <div className="mt-3 flex flex-col gap-2">
+                <input
+                  autoFocus
+                  className="w-full rounded-lg bg-slate-800/70 px-3 py-2 text-xs text-slate-200 ring-1 ring-slate-600/60 outline-none focus:ring-cyan-400/40"
+                  placeholder={t('deliverables.attach.placeholder')}
+                  value={attachPath}
+                  onChange={(e) => setAttachPath(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void attachFile();
+                    if (e.key === 'Escape') { setShowAttach(false); setAttachPath(''); }
+                  }}
+                />
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={attaching || !attachPath.trim()}
+                    className="flex-1 rounded-lg bg-cyan-600/30 py-1.5 text-xs text-cyan-100 hover:bg-cyan-600/45 disabled:cursor-not-allowed disabled:opacity-50"
+                    onClick={() => void attachFile()}
+                  >
+                    {attaching ? '…' : t('deliverables.attach.confirm')}
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-lg border border-slate-600/40 px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200"
+                    onClick={() => { setShowAttach(false); setAttachPath(''); }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            )}
           </section>
         </div>
 
@@ -601,7 +833,19 @@ export function DeliverableDetailView({
               <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">
                 {t('deliverables.detail.distribution')}
               </div>
-              <Badge variant="gray">{publications.length}</Badge>
+              <div className="flex items-center gap-2">
+                {publications.some((p) => p.status === 'available' || p.status === 'planned') && (
+                  <button
+                    type="button"
+                    disabled={batchPublishing}
+                    className="rounded-full border border-cyan-400/20 bg-cyan-500/10 px-2.5 py-1 text-[10px] text-cyan-200 hover:bg-cyan-500/18 disabled:cursor-not-allowed disabled:opacity-50"
+                    onClick={() => void batchPublishAll()}
+                  >
+                    {batchPublishing ? t('deliverables.publish.batchSending') : t('deliverables.publish.publishAll')}
+                  </button>
+                )}
+                <Badge variant="gray">{publications.length}</Badge>
+              </div>
             </div>
             <div className="flex flex-col gap-3">
               {publications.map((publication) => (
@@ -617,6 +861,11 @@ export function DeliverableDetailView({
                       {t(`deliverables.publication.mode.${publication.mode}`)}
                     </Badge>
                     <Badge variant="gray">{t(`deliverables.publication.kind.${publication.kind}`)}</Badge>
+                    {publication.lastAttemptAt && publication.status === 'sent' && (
+                      <span className="text-[10px] text-slate-500">
+                        {new Date(publication.lastAttemptAt).toLocaleString()}
+                      </span>
+                    )}
                   </div>
                   <div className="mt-3 text-sm font-medium text-slate-100">{publication.label}</div>
                   {publication.detail && (
@@ -631,7 +880,7 @@ export function DeliverableDetailView({
                   {publication.agentId && (
                     <div className="mt-1 text-[11px] text-slate-500">agentId: {publication.agentId}</div>
                   )}
-                  {publication.kind === 'channel' && publication.threadKey && (
+                  {(publication.status === 'available' || publication.status === 'planned' || publication.status === 'failed') && (
                     <div className="mt-3 flex justify-end">
                       <button
                         className="rounded-lg border border-cyan-400/20 bg-cyan-500/10 px-3 py-1.5 text-xs text-cyan-200 hover:bg-cyan-500/15 disabled:cursor-not-allowed disabled:opacity-50"
@@ -640,7 +889,9 @@ export function DeliverableDetailView({
                       >
                         {publishingId === publication.id
                           ? t('deliverables.publish.sending')
-                          : t('deliverables.publish.action')}
+                          : publication.status === 'failed'
+                            ? t('deliverables.publish.retry')
+                            : t('deliverables.publish.action')}
                       </button>
                     </div>
                   )}
@@ -653,6 +904,89 @@ export function DeliverableDetailView({
               )}
             </div>
           </section>
+
+          {/* B5: Workflow execution trace panel */}
+          {deliverable.source.kind === 'workflow_run' && (
+            <section className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between text-[11px] uppercase tracking-[0.22em] text-slate-500 hover:text-slate-300"
+                onClick={() => {
+                  const next = !traceOpen;
+                  setTraceOpen(next);
+                  if (next && !traceRun && !traceLoading) void loadTrace();
+                }}
+              >
+                <span>{t('deliverables.trace.title')}</span>
+                <span className="text-slate-600">{traceOpen ? '▲' : '▼'}</span>
+              </button>
+              {traceOpen && (
+                <div className="mt-3">
+                  {traceLoading && (
+                    <div className="text-xs text-slate-500">{t('deliverables.trace.loading')}</div>
+                  )}
+                  {!traceLoading && traceRun && traceRun.stepResults.length === 0 && (
+                    <div className="text-xs text-slate-500">{t('deliverables.trace.empty')}</div>
+                  )}
+                  {!traceLoading && traceRun && traceRun.stepResults.length > 0 && (
+                    <div className="flex flex-col gap-2">
+                      {traceRun.stepResults.map((result: WorkflowStepResult, idx: number) => {
+                        const duration =
+                          result.startedAt && result.finishedAt
+                            ? `${((result.finishedAt - result.startedAt) / 1000).toFixed(1)}s`
+                            : null;
+                        const hasError = !!result.error;
+                        const isDone = !!result.finishedAt && !hasError;
+                        return (
+                          <button
+                            key={result.stepId}
+                            type="button"
+                            className={`rounded-xl border p-3 text-left transition-all ${
+                              artifacts.some((a) => a.stepId === result.stepId)
+                                ? 'border-cyan-400/25 bg-cyan-500/8 hover:bg-cyan-500/14'
+                                : 'border-white/8 bg-slate-950/50 hover:border-white/15'
+                            }`}
+                            onClick={() => {
+                              const artifact = artifacts.find((a) => a.stepId === result.stepId);
+                              if (artifact) setSelectedArtifactId(artifact.id);
+                            }}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-medium text-slate-200">
+                                {idx + 1}. {result.stepId}
+                              </span>
+                              <div className="flex items-center gap-2">
+                                {duration && (
+                                  <span className="text-[10px] text-slate-500">
+                                    {t('deliverables.trace.duration')}: {duration}
+                                  </span>
+                                )}
+                                <Badge variant={hasError ? 'red' : isDone ? 'green' : 'gray'}>
+                                  {hasError
+                                    ? t('deliverables.trace.step.error')
+                                    : isDone
+                                      ? t('deliverables.trace.step.done')
+                                      : t('deliverables.trace.step.running')}
+                                </Badge>
+                              </div>
+                            </div>
+                            {(result.error ?? result.output) && (
+                              <div className="mt-1.5 line-clamp-2 text-[11px] leading-5 text-slate-400">
+                                {result.error ?? result.output}
+                              </div>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {!traceLoading && !traceRun && (
+                    <div className="text-xs text-slate-500">{t('deliverables.trace.empty')}</div>
+                  )}
+                </div>
+              )}
+            </section>
+          )}
         </div>
       </div>
     </div>

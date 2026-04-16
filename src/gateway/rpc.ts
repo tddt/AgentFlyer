@@ -349,6 +349,9 @@ export type RpcMethod =
   | 'deliverable.list'
   | 'deliverable.get'
   | 'deliverable.publish'
+  | 'deliverable.update'
+  | 'deliverable.attachArtifact'
+  | 'deliverable.batchPublish'
   | 'memory.search'
   | 'memory.delete'
   | 'stats.get'
@@ -1743,6 +1746,117 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         } catch (publishErr) {
           return buildErrorResponse(id, -32603, `Publish failed: ${String(publishErr)}`);
         }
+      }
+
+      case 'deliverable.update': {
+        const { deliverableId, title, summary } = (params ?? {}) as {
+          deliverableId?: string;
+          title?: string;
+          summary?: string;
+        };
+        if (!deliverableId) return buildErrorResponse(id, -32602, 'deliverableId is required');
+        const updates: Partial<
+          Pick<import('./deliverables.js').DeliverableRecord, 'title' | 'summary'>
+        > = {};
+        if (title !== undefined) updates.title = title;
+        if (summary !== undefined) updates.summary = summary;
+        if (Object.keys(updates).length === 0) {
+          return buildErrorResponse(id, -32602, 'title or summary is required');
+        }
+        const updated = await ctx.deliverableStore.update(deliverableId, updates);
+        if (!updated) return buildErrorResponse(id, 404, `Deliverable not found: ${deliverableId}`);
+        return { id, result: updated };
+      }
+
+      case 'deliverable.attachArtifact': {
+        const {
+          deliverableId,
+          filePath: attachFilePath,
+          name: attachName,
+        } = (params ?? {}) as {
+          deliverableId?: string;
+          filePath?: string;
+          name?: string;
+        };
+        if (!deliverableId) return buildErrorResponse(id, -32602, 'deliverableId is required');
+        if (!attachFilePath) return buildErrorResponse(id, -32602, 'filePath is required');
+
+        const { existsSync: existsSyncNode } = await import('node:fs');
+        if (!existsSyncNode(attachFilePath)) {
+          return buildErrorResponse(id, 400, `File not found: ${attachFilePath}`);
+        }
+
+        const { basename, extname } = await import('node:path');
+        const { statSync } = await import('node:fs');
+        const { ulid: newUlid } = await import('ulid');
+        const ext = extname(attachFilePath).toLowerCase().slice(1);
+        const mimeMap: Record<string, string> = {
+          png: 'image/png',
+          jpg: 'image/jpeg',
+          jpeg: 'image/jpeg',
+          gif: 'image/gif',
+          webp: 'image/webp',
+          svg: 'image/svg+xml',
+          pdf: 'application/pdf',
+          mp4: 'video/mp4',
+          webm: 'video/webm',
+          mp3: 'audio/mpeg',
+          ogg: 'audio/ogg',
+          json: 'application/json',
+          csv: 'text/csv',
+          md: 'text/markdown',
+          txt: 'text/plain',
+        };
+        const mimeType = mimeMap[ext] ?? 'application/octet-stream';
+        const stat = statSync(attachFilePath);
+        const artifact: import('./deliverables.js').ArtifactRef = {
+          id: newUlid(),
+          name: attachName ?? basename(attachFilePath),
+          role: 'file',
+          format: mimeType.startsWith('image/')
+            ? 'image'
+            : mimeType.startsWith('video/')
+              ? 'video'
+              : mimeType.startsWith('audio/')
+                ? 'audio'
+                : mimeType === 'application/json'
+                  ? 'json'
+                  : mimeType === 'text/csv'
+                    ? 'csv'
+                    : mimeType === 'text/markdown'
+                      ? 'markdown'
+                      : mimeType === 'text/plain'
+                        ? 'text'
+                        : 'file',
+          mimeType,
+          filePath: attachFilePath,
+          size: stat.size,
+          createdAt: Date.now(),
+        };
+        const updated = await ctx.deliverableStore.attachArtifact(deliverableId, artifact);
+        if (!updated) return buildErrorResponse(id, 404, `Deliverable not found: ${deliverableId}`);
+        return { id, result: updated };
+      }
+
+      case 'deliverable.batchPublish': {
+        const { deliverableId } = (params ?? {}) as { deliverableId?: string };
+        if (!deliverableId) return buildErrorResponse(id, -32602, 'deliverableId is required');
+        const deliverable = await ctx.deliverableStore.get(deliverableId);
+        if (!deliverable)
+          return buildErrorResponse(id, 404, `Deliverable not found: ${deliverableId}`);
+        const pending = (deliverable.publications ?? []).filter(
+          (pub) => pub.status === 'available' || pub.status === 'planned',
+        );
+        const results: Array<{ publicationId: string; ok: boolean; detail?: string }> = [];
+        for (const pub of pending) {
+          try {
+            const result = await publishDeliverableToTarget(ctx, deliverable, pub.id);
+            results.push({ publicationId: pub.id, ok: result.ok, detail: result.detail });
+          } catch (err) {
+            results.push({ publicationId: pub.id, ok: false, detail: String(err) });
+          }
+        }
+        return { id, result: { deliverableId, results, total: pending.length } };
       }
 
       case 'memory.search': {

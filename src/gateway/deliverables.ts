@@ -915,4 +915,33 @@ export class DeliverableStore {
     await writeFile(deliverablesFile(this.dataDir), JSON.stringify(updated, null, 2), 'utf-8');
     return record;
   }
+
+  async update(
+    id: string,
+    updates: Partial<Pick<DeliverableRecord, 'title' | 'summary'>>,
+  ): Promise<DeliverableRecord | null> {
+    const current = await this.readAll();
+    const index = current.findIndex((record) => record.id === id);
+    if (index < 0) return null;
+    const existing = current[index]!;
+    const updated: DeliverableRecord = { ...existing, ...updates, updatedAt: Date.now() };
+    const next = current.map((record, i) => (i === index ? updated : record));
+    await writeFile(deliverablesFile(this.dataDir), JSON.stringify(next, null, 2), 'utf-8');
+    return updated;
+  }
+
+  async attachArtifact(id: string, artifact: ArtifactRef): Promise<DeliverableRecord | null> {
+    const current = await this.readAll();
+    const index = current.findIndex((record) => record.id === id);
+    if (index < 0) return null;
+    const existing = current[index]!;
+    const updated: DeliverableRecord = {
+      ...existing,
+      artifacts: [...existing.artifacts, artifact],
+      updatedAt: Date.now(),
+    };
+    const next = current.map((record, i) => (i === index ? updated : record));
+    await writeFile(deliverablesFile(this.dataDir), JSON.stringify(next, null, 2), 'utf-8');
+    return updated;
+  }
 }
