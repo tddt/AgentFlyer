@@ -376,5 +376,178 @@ describe('MemoryStore', () => {
       }
       expect(store.listRecent(undefined, 3)).toHaveLength(3);
     });
+
+    it('filters by partition', () => {
+      store.insert({
+        key: 'p1',
+        agentId: 'main',
+        partition: 'shared',
+        content: 'in shared',
+        tags: [],
+        source: 'test',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        accessedAt: Date.now(),
+        accessCount: 0,
+      });
+      store.insert({
+        key: 'p2',
+        agentId: 'main',
+        partition: 'per-agent:x',
+        content: 'in agent',
+        tags: [],
+        source: 'test',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        accessedAt: Date.now(),
+        accessCount: 0,
+      });
+      const shared = store.listRecent('shared');
+      expect(shared.every((e) => e.partition === 'shared')).toBe(true);
+    });
+  });
+
+  // ─── Embedding ───────────────────────────────────────────────────────────
+  describe('saveEmbedding / loadEmbedding / listEmbeddedIds', () => {
+    it('stores and retrieves a Float32Array embedding', () => {
+      const e = store.insert({
+        key: 'emb',
+        agentId: 'main',
+        partition: 'shared',
+        content: 'embedding content',
+        tags: [],
+        source: 'test',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        accessedAt: Date.now(),
+        accessCount: 0,
+      });
+      const vec = new Float32Array([0.1, 0.2, 0.3]);
+      store.saveEmbedding(e.id, vec, 'test-model');
+
+      const loaded = store.loadEmbedding(e.id);
+      expect(loaded).not.toBeNull();
+      expect(loaded?.length).toBe(3);
+      expect(loaded?.[0]).toBeCloseTo(0.1, 4);
+    });
+
+    it('returns null for an entry with no embedding', () => {
+      const e = store.insert({
+        key: 'no-emb',
+        agentId: 'main',
+        partition: 'shared',
+        content: 'no embedding',
+        tags: [],
+        source: 'test',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        accessedAt: Date.now(),
+        accessCount: 0,
+      });
+      expect(store.loadEmbedding(e.id)).toBeNull();
+    });
+
+    it('listEmbeddedIds includes ids that have embeddings', () => {
+      const a = store.insert({
+        key: 'a',
+        agentId: 'main',
+        partition: 'shared',
+        content: 'a',
+        tags: [],
+        source: 'test',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        accessedAt: Date.now(),
+        accessCount: 0,
+      });
+      const b = store.insert({
+        key: 'b',
+        agentId: 'main',
+        partition: 'shared',
+        content: 'b',
+        tags: [],
+        source: 'test',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        accessedAt: Date.now(),
+        accessCount: 0,
+      });
+      store.saveEmbedding(a.id, new Float32Array([1, 2]), 'm');
+
+      const ids = store.listEmbeddedIds();
+      expect(ids).toContain(a.id);
+      expect(ids).not.toContain(b.id);
+    });
+  });
+
+  // ─── Importance & Superseded ─────────────────────────────────────────────
+  describe('updateImportance / markSuperseded / listActive', () => {
+    function insertEntry(key: string, content: string) {
+      return store.insert({
+        key,
+        agentId: 'main',
+        partition: 'shared',
+        content,
+        tags: [],
+        source: 'test',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        accessedAt: Date.now(),
+        accessCount: 0,
+      });
+    }
+
+    it('updateImportance persists a new score', () => {
+      const e = insertEntry('imp', 'important');
+      store.updateImportance(e.id, 0.9);
+      expect(store.getById(e.id)?.importance).toBeCloseTo(0.9);
+    });
+
+    it('updateImportance clamps values above 1 to 1.0', () => {
+      const e = insertEntry('high', 'high');
+      store.updateImportance(e.id, 1.5);
+      expect(store.getById(e.id)?.importance).toBeCloseTo(1.0);
+    });
+
+    it('updateImportance clamps values below 0 to 0.0', () => {
+      const e = insertEntry('low', 'low');
+      store.updateImportance(e.id, -0.3);
+      expect(store.getById(e.id)?.importance).toBeCloseTo(0.0);
+    });
+
+    it('markSuperseded sets superseded flag to true', () => {
+      const e = insertEntry('old', 'old version');
+      store.markSuperseded(e.id);
+      expect(store.getById(e.id)?.superseded).toBe(true);
+    });
+
+    it('listActive excludes superseded entries', () => {
+      const active = insertEntry('active', 'active entry');
+      const old = insertEntry('old', 'old entry');
+      store.markSuperseded(old.id);
+
+      const results = store.listActive();
+      const ids = results.map((e) => e.id);
+      expect(ids).toContain(active.id);
+      expect(ids).not.toContain(old.id);
+    });
+
+    it('listActive filters by partition', () => {
+      insertEntry('s1', 'shared entry');
+      store.insert({
+        key: 'a1',
+        agentId: 'main',
+        partition: 'per-agent:z',
+        content: 'agent entry',
+        tags: [],
+        source: 'test',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        accessedAt: Date.now(),
+        accessCount: 0,
+      });
+      const results = store.listActive('shared');
+      expect(results.every((e) => e.partition === 'shared')).toBe(true);
+    });
   });
 });

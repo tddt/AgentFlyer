@@ -177,3 +177,44 @@ export interface ToolCallResult {
   isError: boolean;
   content: string;
 }
+
+// ─── Standardised error codes ─────────────────────────────────────────────────
+export type ErrorCode =
+  // core
+  | 'CORE_INVALID_ARG'
+  | 'CORE_IO_ERROR'
+  | 'CORE_NOT_FOUND'
+  // agent
+  | 'AGENT_RUN_FAILED'
+  | 'AGENT_TOOL_DENIED'
+  | 'AGENT_TOOL_TIMEOUT'
+  | 'AGENT_LLM_ERROR'
+  // gateway
+  | 'GATEWAY_AUTH_FAILED'
+  | 'GATEWAY_RATE_LIMITED'
+  | 'GATEWAY_RPC_UNKNOWN'
+  // mcp
+  | 'MCP_CONNECT_FAILED'
+  | 'MCP_TOOL_CALL_ERROR'
+  // mesh
+  | 'MESH_DELEGATE_FAILED'
+  // federation
+  | 'FED_PEER_UNREACHABLE';
+
+export interface AppError {
+  code: ErrorCode;
+  message: string;
+  details?: unknown;
+}
+
+// ─── Result<T, E> ─────────────────────────────────────────────────────────────
+// Use this pattern instead of bare throws at agent/runner and gateway/rpc boundaries.
+export type Result<T, E = AppError> = { ok: true; value: T } | { ok: false; error: E };
+
+export function ok<T>(value: T): Result<T, never> {
+  return { ok: true, value };
+}
+
+export function err<E = AppError>(error: E): Result<never, E> {
+  return { ok: false, error };
+}

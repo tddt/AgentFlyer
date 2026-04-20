@@ -216,7 +216,43 @@ export async function routeRequest(
 
   // ── Health check (no auth) ─────────────────────────────────────────────
   if (url === '/health' && method === 'GET') {
-    json(res, 200, { ok: true });
+    const uptime = opts.rpcContext.startedAt
+      ? Math.floor((Date.now() - opts.rpcContext.startedAt) / 1000)
+      : undefined;
+    json(res, 200, {
+      ok: true,
+      version: opts.rpcContext.gatewayVersion,
+      uptime,
+      timestamp: Date.now(),
+    });
+    return true;
+  }
+
+  // ── Readiness check (no auth) — checks component health ───────────────
+  if (url === '/ready' && method === 'GET') {
+    const ctx = opts.rpcContext;
+    const uptime = ctx.startedAt ? Math.floor((Date.now() - ctx.startedAt) / 1000) : undefined;
+
+    const mcpStatus = ctx.getMcpStatus?.();
+    const mcpServers = mcpStatus ?? [];
+    const mcpConnected = mcpServers.filter((s) => s.status === 'connected').length;
+
+    const channelCount = ctx.channels?.size ?? 0;
+    const agentCount = ctx.runners?.size ?? 0;
+    const dbOk = ctx.memoryStore != null;
+
+    const allOk = dbOk;
+    json(res, allOk ? 200 : 503, {
+      ready: allOk,
+      version: ctx.gatewayVersion,
+      uptime,
+      components: {
+        db: { ok: dbOk },
+        mcp: { ok: true, serversConnected: mcpConnected, serversTotal: mcpServers.length },
+        channels: { ok: true, count: channelCount },
+        agents: { ok: true, count: agentCount },
+      },
+    });
     return true;
   }
 

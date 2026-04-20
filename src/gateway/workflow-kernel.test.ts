@@ -154,11 +154,15 @@ function createHungRunner(): AgentRunner {
   } as unknown as AgentRunner;
 }
 
-function createQueuedRunner(): { runner: AgentRunner; release: () => void } {
+function createQueuedRunner(): { runner: AgentRunner; release: () => void; waitForNextTurn: () => Promise<void> } {
   let threadKey = 'default';
   let activeRunId: string | null = null;
   let releaseCurrent!: () => void;
   let currentGate = Promise.resolve();
+  // Resolves when the next beginKernelTurn begins — used to eliminate
+  // timing races under V8 coverage where async queuing is slower.
+  let nextTurnResolve: (() => void) | null = null;
+  let nextTurnPromise: Promise<void> = new Promise((resolve) => { nextTurnResolve = resolve; });
 
   const runner = {
     setThread(nextThreadKey: string) {
@@ -196,6 +200,9 @@ function createQueuedRunner(): { runner: AgentRunner; release: () => void } {
       currentGate = new Promise<void>((resolve) => {
         releaseCurrent = resolve;
       });
+      // Signal any waiter that a new turn has started, then reset for the next one.
+      nextTurnResolve?.();
+      nextTurnPromise = new Promise((resolve) => { nextTurnResolve = resolve; });
       return {
         runId,
         userMessage: message,
@@ -246,6 +253,7 @@ function createQueuedRunner(): { runner: AgentRunner; release: () => void } {
   return {
     runner,
     release: () => releaseCurrent(),
+    waitForNextTurn: () => nextTurnPromise,
   };
 }
 
@@ -364,7 +372,7 @@ describe('WorkflowKernelService archived completion', () => {
     );
   });
 
-  it('serializes concurrent workflow turns for the same agent instead of failing busy', async () => {
+  it('serializes concurrent workflow turns for the same agent instead of failing busy', { timeout: 15_000 }, async () => {
     const dataDir = await createTempDir();
     const workflow = createWorkflow();
     const queued = createQueuedRunner();
@@ -392,11 +400,14 @@ describe('WorkflowKernelService archived completion', () => {
     const firstCompletion = service.waitForCompletion(firstStarted.runId);
     const secondCompletion = service.waitForCompletion(secondStarted.runId);
 
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    // Wait for workflow 1's turn to begin before releasing, then wait for workflow
+    // 2's turn to begin before releasing. This avoids V8-coverage-induced races
+    // where release() fires before beginKernelTurn() has set up the current gate.
+    await queued.waitForNextTurn();
     queued.release();
     await firstCompletion;
 
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await queued.waitForNextTurn();
     queued.release();
     const secondCompleted = await secondCompletion;
 

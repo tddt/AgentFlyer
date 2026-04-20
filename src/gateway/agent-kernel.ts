@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ulid } from 'ulid';
 import { drainWaitingAgentSyscalls } from '../agent/kernel-syscall-broker.js';
@@ -64,9 +65,9 @@ class AgentKernelRunRecordStore {
     }
   }
 
-  save(records: Iterable<AgentKernelRunRecord>): void {
+  async save(records: Iterable<AgentKernelRunRecord>): Promise<void> {
     try {
-      writeFileSync(this.filePath, JSON.stringify(Array.from(records), null, 2), 'utf-8');
+      await writeFile(this.filePath, JSON.stringify(Array.from(records), null, 2), 'utf-8');
     } catch (error) {
       logger.error('Failed to save agent-run-records.json', {
         error: error instanceof Error ? error.message : String(error),
@@ -155,7 +156,7 @@ export class AgentKernelService {
       this.rememberRunRecord(record, false);
     }
     if (prunedLegacyLiveRecord) {
-      this.runRecordStore.save(this.runRecords.values());
+      void this.runRecordStore.save(this.runRecords.values());
     }
     this.kernel = new AgentKernel({
       checkpointStore: new ScopedCheckpointStore(
@@ -582,7 +583,10 @@ export class AgentKernelService {
         result: state.result,
         sessionKey: state.result?.sessionKey,
         error: state.error,
-      });
+      }, false);
+      // RATIONALE: await the save before firing completion waiters so that tests
+      // reading the persisted file after waitForArchivedRun always find the record.
+      await this.runRecordStore.save(this.runRecords.values());
       if (state.phase === 'done' && state.result) {
         this.completeRun(runId, { ok: true, result: state.result });
       } else {
@@ -702,7 +706,7 @@ export class AgentKernelService {
       this.runRecords.delete(oldest);
     }
     if (persist && isArchivedRunRecord(record)) {
-      this.runRecordStore.save(this.runRecords.values());
+      void this.runRecordStore.save(this.runRecords.values());
     }
     return record;
   }

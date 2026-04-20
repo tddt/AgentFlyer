@@ -152,3 +152,109 @@ describe('createMeshTools persistence', () => {
     expect(typeof entry?.doneAt).toBe('number');
   });
 });
+
+describe('mesh_send end-to-end routing', () => {
+  it('routes a task to a worker agent and returns the worker response', async () => {
+    const dataDir = await createTempDir();
+    const runners = new Map([
+      ['coordinator', createRunner(dataDir, 'coordinator')],
+      ['worker-1', createRunner(dataDir, 'worker-1')],
+    ]);
+    const send = getToolHandler('mesh_send', dataDir, runners);
+
+    const result = await send({ agent_id: 'worker-1', message: 'compute something' });
+
+    expect(result.isError).toBe(false);
+    expect(result.content).toContain('mesh task finished');
+  });
+
+  it('returns error immediately when target agent is not found', async () => {
+    const dataDir = await createTempDir();
+    const runners = new Map<string, import('../runner.js').AgentRunner>();
+    const send = getToolHandler('mesh_send', dataDir, runners);
+
+    const result = await send({ agent_id: 'nonexistent', message: 'hello' });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('nonexistent');
+  });
+
+  it('returns error immediately when target agent is busy', async () => {
+    const dataDir = await createTempDir();
+
+    class HangingProvider implements LLMProvider {
+      readonly id = 'hanging';
+      supports(): boolean { return true; }
+      async countTokens(): Promise<number> { return 0; }
+      async *run(_params: RunParams): AsyncIterable<StreamChunk> {
+        await new Promise(() => undefined);
+        yield { type: 'done', inputTokens: 0, outputTokens: 0, stopReason: 'end_turn' };
+      }
+    }
+
+    const busyRunner = new AgentRunner(
+      {
+        id: 'busy-agent', name: 'Busy', skills: [],
+        mesh: { role: 'worker', capabilities: [], accepts: ['task'], visibility: 'public', triggers: [] },
+        owners: [], tools: { deny: [], approval: [] },
+        persona: { language: 'zh-CN', outputDir: 'output' },
+      },
+      {
+        provider: new HangingProvider(),
+        toolRegistry: new ToolRegistry(),
+        sessionStore: new SessionStore(join(dataDir, 'sessions')),
+        metaStore: new SessionMetaStore(join(dataDir, 'sessions')),
+        skillsText: '',
+      },
+    );
+
+    // Start a turn without awaiting — runner becomes busy
+    void busyRunner.runTurn('busy work');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const runners = new Map([['busy-agent', busyRunner]]);
+    const send = getToolHandler('mesh_send', dataDir, runners);
+
+    const result = await send({ agent_id: 'busy-agent', message: 'hello' });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('busy');
+
+    busyRunner.forceReset();
+  });
+});
+
+describe('mesh_plan parallel orchestration', () => {
+  it('dispatches sub-tasks to multiple agents in parallel and reports outcomes', async () => {
+    const dataDir = await createTempDir();
+    const runners = new Map([
+      ['agent-a', createRunner(dataDir, 'agent-a')],
+      ['agent-b', createRunner(dataDir, 'agent-b')],
+    ]);
+    const plan = getToolHandler('mesh_plan', dataDir, runners);
+
+    const result = await plan({
+      goal: 'gather information',
+      tasks: [
+        { agent_id: 'agent-a', instruction: 'do task A' },
+        { agent_id: 'agent-b', instruction: 'do task B' },
+      ],
+      parallel: true,
+    });
+
+    expect(result.isError).toBe(false);
+    expect(result.content).toContain('agent-a');
+    expect(result.content).toContain('agent-b');
+    expect(result.content).toContain('mesh task finished');
+  });
+
+  it('returns error when tasks array is empty', async () => {
+    const dataDir = await createTempDir();
+    const plan = getToolHandler('mesh_plan', dataDir);
+
+    const result = await plan({ goal: 'empty', tasks: [] });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('at least one task');
+  });
+});
