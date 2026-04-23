@@ -320,6 +320,7 @@ export type RpcMethod =
   | 'agent.run'
   | 'agent.chat'
   | 'agent.cancel'
+  | 'agent.forceKill'
   | 'agent.runStatus'
   | 'agent.resume'
   | 'agent.reload'
@@ -1036,15 +1037,28 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         }
         try {
           const agentKernel = await getAgentKernelService(ctx);
-          const execute = async () =>
-            await agentKernel.executeTurn({
+          // RATIONALE: Only queue `startTurn` (fast, milliseconds) — not the full
+          // `waitForCompletion`. This releases the per-agent queue immediately after
+          // the kernel process is created, so a second message to the same agent
+          // can be enqueued and started without waiting for the LLM to finish.
+          // `waitForCompletion` (the slow LLM part) runs concurrently outside the
+          // queue, which is safe because per-agent state isolation is now handled
+          // inside the kernel process, not in the AgentRunner instance.
+          let runId: string;
+          if (ctx.agentQueues) {
+            const started = await ctx.agentQueues.for(agentId).enqueue(() =>
+              agentKernel.startTurn({ agentId, userMessage: message, threadKey: thread }),
+            );
+            runId = started.runId;
+          } else {
+            const started = await agentKernel.startTurn({
               agentId,
               userMessage: message,
               threadKey: thread,
             });
-          const result = ctx.agentQueues
-            ? await ctx.agentQueues.for(agentId).enqueue(execute)
-            : await execute();
+            runId = started.runId;
+          }
+          const result = await agentKernel.waitForRun(runId);
           return { id, result: { reply: result.text.trim() } };
         } catch (err) {
           return buildErrorResponse(id, -32603, `Agent error: ${String(err)}`);
@@ -1127,6 +1141,20 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
             reason: 'Only queued runs can be cancelled currently.',
           },
         };
+      }
+
+      case 'agent.forceKill': {
+        const { runId } = (params ?? {}) as { runId?: string };
+        if (!runId) {
+          return buildErrorResponse(id, -32602, 'runId is required');
+        }
+        const agentKernel = await getAgentKernelService(ctx);
+        const current = agentKernel.getRun(runId);
+        if (!current) {
+          return buildErrorResponse(id, 404, `Run not found: ${runId}`);
+        }
+        agentKernel.forceTimeoutRun(runId);
+        return { id, result: { killed: true, runId } };
       }
 
       case 'agent.runStatus': {

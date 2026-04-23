@@ -145,6 +145,10 @@ export class AgentKernelService {
   // re-fire the same syscall a second time if the pump runs again while the
   // first background task is still awaiting a response.
   private readonly activeSyscalls = new Set<ProcessId>();
+  // RATIONALE: Tracks the active promises of background syscall workers so that
+  // dispose() can await them all before clearing the tempDir, preventing ENOENT
+  // errors when checkpoint files are written after cleanup.
+  private readonly activeSyscallPromises = new Set<Promise<void>>();
   private readonly queuedRuns = new Map<string, AgentKernelRunRecord>();
   private readonly runRecords = new Map<string, AgentKernelRunRecord>();
 
@@ -259,10 +263,92 @@ export class AgentKernelService {
 
   async executeTurn(input: AgentKernelTurnInput): Promise<TurnResult> {
     const started = await this.startTurn(input);
-    return await this.waitForCompletion(started.runId);
+    return await this.waitForRun(started.runId);
+  }
+
+  /**
+   * Wait for a run to complete, with an automatic timeout that force-kills
+   * stuck processes. Default timeout is 5 minutes.
+   */
+  async waitForRun(runId: string, timeoutMs = 5 * 60_000): Promise<TurnResult> {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const completionPromise = this.waitForCompletion(runId).finally(() => {
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+    });
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      timeoutId = setTimeout(() => {
+        timeoutId = null;
+        this.forceTimeoutRun(runId);
+        reject(new Error(`Agent run timed out after ${timeoutMs / 1000}s (runId: ${runId})`));
+      }, timeoutMs);
+    });
+    return await Promise.race([completionPromise, timeoutPromise]);
+  }
+
+  /**
+   * Force-complete a stuck run with a timeout error, releasing all waiters
+   * and unblocking the per-agent queue.
+   */
+  forceTimeoutRun(runId: string): void {
+    const pid = asProcessId(runId);
+    const snapshot = this.kernel.getSnapshot(pid);
+    if (snapshot) {
+      // Mark as error in runRecords so future waiters see it immediately
+      const errorRecord: AgentKernelRunRecord = {
+        runId,
+        agentId: snapshot.metadata.agentId ?? '',
+        threadKey: '',
+        processStatus: 'error',
+        phase: 'error',
+        createdAt: snapshot.createdAt,
+        updatedAt: Date.now(),
+        error: {
+          code: 'AGENT_TURN_TIMEOUT',
+          message: 'Agent run timed out and was force-killed.',
+          retryable: true,
+        },
+      };
+      this.rememberRunRecord(errorRecord);
+      // Delete the kernel process so the pump doesn't keep it alive
+      void this.kernel.deleteProcess(pid).catch(() => {});
+    }
+    // Resolve all completion waiters with the error
+    this.completeRun(runId, {
+      ok: false,
+      message: 'Agent run timed out and was force-killed.',
+    });
+    this.activeSyscalls.delete(pid);
+    logger.warn('Force-killed timed-out agent run', { runId });
   }
 
   async dispose(): Promise<void> {
+    // RATIONALE: Do NOT set disposed=true immediately. Background syscall workers
+    // (LLM / tool calls) run through multiple pump rounds; if disposed=true is set
+    // first, schedulePump() becomes a no-op and those workers stall mid-flight.
+    // Instead, wait for every live kernel process to reach a terminal state
+    // (done / error / suspended all call completeRun, which resolves waiters), then
+    // mark disposed and cancel any remaining timer.
+    //
+    // A 5-second per-run timeout is used so that a hung process in tests never
+    // blocks afterEach indefinitely.
+    const liveRunIds = this.kernel
+      .listSnapshots()
+      .filter((s) => s.processType === this.runtime.type)
+      .map((s) => String(s.pid));
+    if (liveRunIds.length > 0) {
+      const DRAIN_TIMEOUT_MS = 5_000;
+      await Promise.allSettled(
+        liveRunIds.map((runId) =>
+          Promise.race([
+            this.waitForCompletion(runId).catch(() => undefined),
+            new Promise<void>((resolve) => setTimeout(resolve, DRAIN_TIMEOUT_MS)),
+          ]),
+        ),
+      );
+    }
     this.disposed = true;
     if (this.pumpTimer) {
       clearTimeout(this.pumpTimer);
@@ -553,7 +639,10 @@ export class AgentKernelService {
       );
     for (const snapshot of waitingSnapshots) {
       this.activeSyscalls.add(snapshot.pid);
-      void this.runSyscallBackground(snapshot);
+      const p = this.runSyscallBackground(snapshot).finally(() => {
+        this.activeSyscallPromises.delete(p);
+      });
+      this.activeSyscallPromises.add(p);
     }
   }
 

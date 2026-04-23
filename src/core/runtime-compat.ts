@@ -54,29 +54,35 @@ export async function writeFileText(path: string, content: string): Promise<void
  */
 export async function atomicWriteFile(path: string, content: string | Buffer): Promise<void> {
   const tmp = `${path}.tmp`;
-  if (typeof content === 'string') {
-    await fsWriteFile(tmp, content, 'utf-8');
-  } else {
-    await fsWriteFile(tmp, content);
+  try {
+    if (typeof content === 'string') {
+      await fsWriteFile(tmp, content, 'utf-8');
+    } else {
+      await fsWriteFile(tmp, content);
+    }
+  } catch (err) {
+    // RATIONALE: The parent directory may have been removed concurrently (e.g.
+    // during test teardown). Checkpoints are best-effort; silently drop the write.
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'EPERM' || code === 'EACCES') {
+      return;
+    }
+    throw err;
   }
   try {
     await rename(tmp, path);
   } catch (err) {
     // RATIONALE: On Windows, rename() can fail with EPERM/EACCES when the target
     // file is locked or the directory is being concurrently deleted (e.g. during
-    // test teardown). Fall back to a direct overwrite; checkpoints are best-effort
-    // for recovery and a non-atomic write is still better than crashing.
+    // test teardown). ENOENT occurs when the .tmp file (or its directory) has
+    // already been removed by a concurrent rm -rf. All of these are best-effort
+    // checkpoint failures — silently discard rather than crashing the kernel process.
     const code = (err as NodeJS.ErrnoException).code;
-    if (code === 'EPERM' || code === 'EACCES') {
-      try {
-        await fsWriteFile(path, content);
-      } catch {
-        // Directory may already be removed; silently drop the checkpoint write.
-      }
+    if (code === 'ENOENT' || code === 'EPERM' || code === 'EACCES') {
       await unlink(tmp).catch(() => undefined);
-    } else {
-      throw err;
+      return;
     }
+    throw err;
   }
 }
 

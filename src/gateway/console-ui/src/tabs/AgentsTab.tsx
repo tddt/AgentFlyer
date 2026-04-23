@@ -18,6 +18,13 @@ import type {
   StatsResult,
 } from '../types.js';
 
+function formatElapsed(createdAt: number): string {
+  const sec = Math.floor((Date.now() - createdAt) / 1000);
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ${sec % 60}s`;
+  return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
+}
+
 function agentStateBadgeVariant(activity?: AgentActivityInfo): 'green' | 'yellow' | 'gray' {
   if (activity?.state === 'suspended') {
     return 'yellow';
@@ -510,6 +517,19 @@ export function AgentsTab({
     [toast, refetch, t],
   );
 
+  const handleForceKill = useCallback(
+    async (agentId: string, runId: string) => {
+      try {
+        await rpc<{ killed: boolean }>('agent.forceKill', { runId });
+        toast(`Agent ${agentId} run force-killed`, 'success');
+        refetch();
+      } catch (e) {
+        toast(e instanceof Error ? e.message : 'Force kill failed', 'error');
+      }
+    },
+    [toast, refetch],
+  );
+
   if (loading && !agentsResult) return <div className="text-slate-400 text-sm p-8">{t('common.loading')}</div>;
   if (error) return <div className="text-red-400 text-sm p-8">{t('common.error')}{error}</div>;
 
@@ -663,6 +683,34 @@ export function AgentsTab({
                             ))}
                           </div>
                         ) : null}
+                      </div>
+                    ) : null}
+
+                    {activity?.activeRun && activity.state === 'running' ? (
+                      <div className="rounded-lg bg-emerald-950/15 ring-1 ring-emerald-500/20 px-3 py-2 text-[11px] text-emerald-100/80 flex items-center justify-between gap-2">
+                        <div className="flex flex-col gap-0.5 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="inline-flex items-center gap-1 font-medium text-emerald-300">
+                              <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                              执行中
+                            </span>
+                            <span className="text-emerald-100/50 font-mono">{formatElapsed(activity.activeRun.createdAt)}</span>
+                            {activity.activeRun.threadKey ? (
+                              <span className="text-emerald-100/50">· {activity.activeRun.threadKey}</span>
+                            ) : null}
+                          </div>
+                          <div className="truncate font-mono text-emerald-200/40 text-[10px]">{activity.activeRun.runId}</div>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleForceKill(a.agentId, activity.activeRun!.runId);
+                          }}
+                        >
+                          强制终止
+                        </Button>
                       </div>
                     ) : null}
 

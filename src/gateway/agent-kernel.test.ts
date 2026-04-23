@@ -767,7 +767,7 @@ describe('AgentKernelService', () => {
     expect((afterResume.result as { processStatus?: string } | null)?.processStatus).toBe('ready');
   });
 
-  it('queues agent.chat behind an already running turn when agentQueues are configured', async () => {
+  it('runs agent.chat concurrently — second chat completes before first is released', async () => {
     const dataDir = await createTempDir();
     let releaseFirstRun!: () => void;
     const firstRunReleased = new Promise<void>((resolve) => {
@@ -781,40 +781,57 @@ describe('AgentKernelService', () => {
     const service = await getAgentKernelService(ctx);
     services.push(service);
 
+    // Start the first turn directly (outside queue) — this blocks on BlockingProvider.
     const started = await service.startTurn({
       agentId: 'agent-main',
       userMessage: 'block the runner first',
-      threadKey: 'rpc-chat-queue-blocking-thread',
+      threadKey: 'rpc-chat-concurrent-blocking-thread',
     });
+    const firstDone = service.waitForRun(started.runId);
 
-    let settled = false;
-    const queuedChat = dispatchRpc(
+    // Dispatch a second chat via RPC — with the new concurrent design the queue
+    // only holds startTurn (fast), then waitForRun runs outside the queue.
+    // The BlockingProvider's second call (runCount=2) returns immediately, so the
+    // second chat should complete WITHOUT needing to release the first run.
+    const secondChat = dispatchRpc(
       {
         id: 2,
         method: 'agent.chat',
         params: {
           agentId: 'agent-main',
-          message: 'queued rpc message',
-          thread: 'rpc-chat-queue-thread',
+          message: 'concurrent rpc message',
+          thread: 'rpc-chat-concurrent-thread',
         },
       },
       ctx,
-    ).then((response) => {
-      settled = true;
-      return response;
-    });
+    );
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(settled).toBe(false);
+    // The second chat must complete on its own — no releaseFirstRun() called yet.
+    // Race with a timeout: the second chat must win (old design would have hung here).
+    const TIMEOUT_MS = 3000;
+    let timedOut = false;
+    const winner = await Promise.race([
+      secondChat.then((r) => ({ tag: 'second' as const, response: r })),
+      new Promise<{ tag: 'timeout' }>((resolve) =>
+        setTimeout(() => {
+          timedOut = true;
+          resolve({ tag: 'timeout' });
+        }, TIMEOUT_MS),
+      ),
+    ]);
 
+    expect(timedOut).toBe(false);
+    expect(winner.tag).toBe('second');
+    if (winner.tag === 'second') {
+      expect((winner.response.result as { reply: string }).reply).toContain('queued rpc reply');
+    }
+
+    // Now release the first run and let it finish.
     releaseFirstRun();
-    await waitForArchivedRun(service, started.runId);
-
-    const response = await queuedChat;
-    expect((response.result as { reply: string }).reply).toContain('queued rpc reply');
+    await firstDone;
   });
 
-  it('reports active run and pending queue state through agent.status and agent.list', async () => {
+  it('reports active run and concurrent execution state through agent.status and agent.list', async () => {
     const dataDir = await createTempDir();
     let releaseFirstRun!: () => void;
     const firstRunReleased = new Promise<void>((resolve) => {
@@ -849,8 +866,8 @@ describe('AgentKernelService', () => {
         method: 'agent.chat',
         params: {
           agentId: 'agent-main',
-          message: 'queued status message',
-          thread: 'status-queued-thread',
+          message: 'concurrent status message',
+          thread: 'status-concurrent-thread',
         },
       },
       ctx,
@@ -866,14 +883,14 @@ describe('AgentKernelService', () => {
       },
       ctx,
     );
+    // Both chats start immediately (concurrent), so pendingCount=0 and state=running.
+    // activeRun shows whichever kernel process was most recently updated.
     expect(statusResponse.result).toMatchObject({
       agentId: 'agent-main',
       activity: {
         state: 'running',
-        pendingCount: 1,
-        activeRun: {
-          threadKey: 'status-blocking-thread',
-        },
+        pendingCount: 0,
+        activeRun: expect.objectContaining({ runId: expect.any(String) }),
       },
     });
 
@@ -895,7 +912,7 @@ describe('AgentKernelService', () => {
         agentId: 'agent-main',
         activity: expect.objectContaining({
           state: 'running',
-          pendingCount: 1,
+          pendingCount: 0,
         }),
       }),
     );
