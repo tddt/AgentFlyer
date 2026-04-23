@@ -18,8 +18,10 @@
     "vite": "^6.2.0"
   },
   "dependencies": {
+    "docx-preview": "^0.3.7",
     "marked": "^17.0.4",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "xlsx-js-style": "^1.2.0"
   }
 }

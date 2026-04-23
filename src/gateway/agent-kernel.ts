@@ -652,6 +652,23 @@ export class AgentKernelService {
       if (!pendingSyscall) {
         return;
       }
+      // Emit progress chunk so channels / UIs can show which tool is running.
+      if (pendingSyscall.kind === 'tool.call') {
+        const rawCalls = pendingSyscall.payload['toolCalls'];
+        if (Array.isArray(rawCalls)) {
+          const toolNames = rawCalls
+            .map((t: unknown) =>
+              t !== null && typeof t === 'object' && 'name' in t ? String((t as { name: unknown }).name) : '',
+            )
+            .filter(Boolean);
+          if (toolNames.length > 0) {
+            this.publishChunk(String(snapshot.pid), {
+              type: 'progress',
+              message: `🔧 执行工具：${toolNames.join(', ')}`,
+            });
+          }
+        }
+      }
       const state = this.runtime.deserialize(snapshot.state);
       const resolution = await this.runtime.executePendingSyscall(
         state,
@@ -719,14 +736,10 @@ export class AgentKernelService {
       return;
     }
     const state = this.snapshotToState(snapshot);
-    this.publishChunk(runId, {
-      type: 'error',
-      message: state?.error?.message ?? 'Agent turn suspended',
-    });
-    this.completeRun(runId, {
-      ok: false,
-      message: state?.error?.message ?? 'Agent turn suspended',
-    });
+    const suspendMsg = state?.error?.message ?? 'Agent turn suspended';
+    this.publishChunk(runId, { type: 'text_delta', text: `⚠️ ${suspendMsg}` });
+    this.publishChunk(runId, { type: 'error', message: suspendMsg });
+    this.completeRun(runId, { ok: false, message: suspendMsg });
   }
 
   private async finalizeSnapshot(
@@ -762,14 +775,12 @@ export class AgentKernelService {
       if (state.phase === 'done' && state.result) {
         this.completeRun(runId, { ok: true, result: state.result });
       } else {
-        this.publishChunk(runId, {
-          type: 'error',
-          message: state.error?.message ?? 'Agent turn failed',
-        });
-        this.completeRun(runId, {
-          ok: false,
-          message: state.error?.message ?? 'Agent turn failed',
-        });
+        const failMsg = state.error?.message ?? 'Agent turn failed';
+        const displayMsg =
+          failMsg.length > 300 ? `${failMsg.slice(0, 300)}…` : failMsg;
+        this.publishChunk(runId, { type: 'text_delta', text: `⚠️ 任务执行失败：${displayMsg}` });
+        this.publishChunk(runId, { type: 'error', message: failMsg });
+        this.completeRun(runId, { ok: false, message: failMsg });
       }
       await this.kernel.deleteProcess(snapshot.pid);
     } finally {

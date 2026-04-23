@@ -11,7 +11,11 @@ const OPENAI_PREFIXES = ['gpt-', 'o1', 'o3', 'o4', 'text-davinci'];
 const COMPAT_PREFIXES = ['gemini-', 'llama', 'mistral', 'mixtral', 'qwen'];
 
 function toOpenAIMessages(messages: Message[]): OpenAI.ChatCompletionMessageParam[] {
-  return messages.map((m): OpenAI.ChatCompletionMessageParam => {
+  // RATIONALE: Use flatMap so a single user message with N tool_result parts
+  // expands into N separate OpenAI `tool` messages. OpenAI requires one `tool`
+  // message per tool_call_id; sending only the first result causes 400 errors
+  // when the assistant invoked multiple tools in one turn.
+  return messages.flatMap((m): OpenAI.ChatCompletionMessageParam | OpenAI.ChatCompletionMessageParam[] => {
     if (m.role === 'system') {
       return {
         role: 'system',
@@ -23,20 +27,19 @@ function toOpenAIMessages(messages: Message[]): OpenAI.ChatCompletionMessagePara
     }
     const parts = m.content as MessageContent[];
     if (m.role === 'user') {
-      // Check for tool_result parts
-      const toolResults = parts.filter((p) => p.type === 'tool_result');
+      // Expand each tool_result into its own OpenAI `tool` message.
+      const toolResults = parts.filter((p) => p.type === 'tool_result') as {
+        type: 'tool_result';
+        tool_use_id: string;
+        content: unknown;
+      }[];
       if (toolResults.length > 0) {
-        // Convert to tool role messages (OpenAI format)
-        // We'll handle this at the top level by splitting
-        return {
+        return toolResults.map((tr): OpenAI.ChatCompletionToolMessageParam => ({
           role: 'tool',
-          tool_call_id: (toolResults[0] as { type: 'tool_result'; tool_use_id: string })
-            .tool_use_id,
+          tool_call_id: tr.tool_use_id,
           content:
-            typeof (toolResults[0] as { content: unknown }).content === 'string'
-              ? (toolResults[0] as { content: string }).content
-              : JSON.stringify((toolResults[0] as { content: unknown }).content),
-        };
+            typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content),
+        }));
       }
       const textParts = parts.filter((p) => p.type === 'text');
       return {

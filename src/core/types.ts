@@ -162,7 +162,12 @@ export interface StreamError {
   message: string;
 }
 
-export type StreamChunk = TextDelta | ToolUseDelta | StreamDone | StreamError;
+export interface ProgressChunk {
+  type: 'progress';
+  message: string;
+}
+
+export type StreamChunk = TextDelta | ToolUseDelta | StreamDone | StreamError | ProgressChunk;
 
 // ─── Tool types ───────────────────────────────────────────────────────────────
 export interface ToolDefinition {

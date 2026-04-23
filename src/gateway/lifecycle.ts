@@ -850,6 +850,7 @@ export async function startGateway(
     agentId: string;
     threadKey: string;
     channelId: string;
+    onProgress?: (message: string) => void;
   }): Promise<void> {
     let replyText = '';
     const startedAt = Date.now();
@@ -857,6 +858,8 @@ export async function startGateway(
       for await (const chunk of options.stream) {
         if (chunk.type === 'text_delta' && chunk.text) {
           replyText += chunk.text;
+        } else if (chunk.type === 'progress' && options.onProgress) {
+          options.onProgress(chunk.message);
         }
         yield chunk;
       }
@@ -937,6 +940,12 @@ export async function startGateway(
                 agentId: msg.agentId,
                 threadKey: msg.threadKey,
                 channelId: msg.channelId,
+                onProgress: (progressMsg) => {
+                  const chatId = msg.meta?.chatId as number | undefined;
+                  if (chatId) {
+                    void tg.sendToChat(chatId, progressMsg).catch(() => undefined);
+                  }
+                },
               });
             } catch (err: unknown) {
               logger.error('Telegram agent run error', { error: String(err) });
@@ -1007,6 +1016,12 @@ export async function startGateway(
                 agentId: msg.agentId,
                 threadKey: msg.threadKey,
                 channelId: msg.channelId,
+                onProgress: (progressMsg) => {
+                  const dcChannelId = msg.meta?.discordChannelId as string | undefined;
+                  if (dcChannelId) {
+                    void dc.sendToChannel(dcChannelId, progressMsg).catch(() => undefined);
+                  }
+                },
               });
             } catch (err: unknown) {
               logger.error('Discord agent run error', { error: String(err) });
@@ -1079,6 +1094,9 @@ export async function startGateway(
                 agentId: msg.agentId,
                 threadKey: msg.threadKey,
                 channelId: msg.channelId,
+                onProgress: (progressMsg) => {
+                  void feishu.sendToChat(msg.threadKey, progressMsg).catch(() => undefined);
+                },
               });
             } catch (err: unknown) {
               logger.error('Feishu agent run error', { error: String(err) });
@@ -1145,6 +1163,9 @@ export async function startGateway(
                 agentId: msg.agentId,
                 threadKey: msg.threadKey,
                 channelId: msg.channelId,
+                onProgress: (progressMsg) => {
+                  void qq.sendToThread(msg.threadKey, progressMsg).catch(() => undefined);
+                },
               });
             } catch (err: unknown) {
               logger.error('QQ agent run error', { error: String(err) });

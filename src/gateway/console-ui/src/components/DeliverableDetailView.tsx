@@ -1,5 +1,6 @@
 import type { KeyboardEvent as ReactKeyboardEvent, ReactElement } from 'react';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { CellObject as XlsxCellObject } from 'xlsx-js-style';
 import { Badge } from './Badge.js';
 import { CopyButton } from './CopyButton.js';
 import { MarkdownView } from './MarkdownView.js';
@@ -17,15 +18,16 @@ import type {
 const CONTENT_BASE = window.location.origin;
 const CONTENT_TOKEN = encodeURIComponent(window.__AF_TOKEN__);
 const MAX_TEXT_PREVIEW_BYTES = 1024 * 1024;
-const BROWSER_PREVIEW_MIME_TYPES = new Set([
-  'application/pdf',
-  'application/msword',
-  'application/vnd.ms-excel',
-  'application/vnd.ms-powerpoint',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-]);
+type OfficePreviewKind = 'docx' | 'xlsx' | 'pptx';
+
+const OFFICE_MIME_KINDS: Record<string, OfficePreviewKind> = {
+  'application/msword': 'docx',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.ms-excel': 'xlsx',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/vnd.ms-powerpoint': 'pptx',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+};
 
 function formatBytes(size?: number): string | null {
   if (!size || size <= 0) return null;
@@ -48,7 +50,12 @@ function canFetchTextPreview(artifact: ArtifactRef): boolean {
 
 function canEmbedBrowserPreview(artifact: ArtifactRef): boolean {
   if (!artifact.contentItemId || !artifact.mimeType) return false;
-  return artifact.mimeType === 'text/html' || BROWSER_PREVIEW_MIME_TYPES.has(artifact.mimeType);
+  return artifact.mimeType === 'text/html' || artifact.mimeType === 'application/pdf';
+}
+
+function getOfficeKind(artifact: ArtifactRef): OfficePreviewKind | null {
+  if (!artifact.contentItemId || !artifact.mimeType) return null;
+  return OFFICE_MIME_KINDS[artifact.mimeType] ?? null;
 }
 
 function sourceLabel(
@@ -191,6 +198,365 @@ function renderMediaPreview(
   return null;
 }
 
+type XlsxModule = typeof import('xlsx-js-style');
+type XlsxSheets = ReturnType<XlsxModule['read']>['Sheets'];
+
+interface XlsxCellStyle {
+  font?: {
+    bold?: boolean;
+    italic?: boolean;
+    strike?: boolean;
+    u?: boolean | string;
+    sz?: number;
+    name?: string;
+    color?: { rgb?: string; indexed?: number };
+  };
+  fill?: {
+    patternType?: string;
+    fgColor?: { rgb?: string; indexed?: number };
+  };
+  alignment?: {
+    horizontal?: string;
+    vertical?: string;
+    wrapText?: boolean;
+  };
+}
+
+function colorToHex(c: { rgb?: string; indexed?: number } | undefined): string | null {
+  if (!c || c.indexed === 64) return null; // 64 = 'no color' slot in xlsx spec
+  if (!c.rgb || c.rgb.length < 6) return null;
+  if (c.rgb.length === 8 && c.rgb.slice(0, 2).toLowerCase() === '00') return null; // fully transparent
+  return `#${c.rgb.length === 8 ? c.rgb.slice(2) : c.rgb}`;
+}
+
+function renderXlsxSheet(XLSX: XlsxModule, sheet: XlsxSheets[string]): string {
+  if (!sheet['!ref']) {
+    return '<html><body style="padding:16px;color:#888;font-family:sans-serif">Empty sheet</body></html>';
+  }
+
+  const range = XLSX.utils.decode_range(sheet['!ref']!);
+  const merges =
+    (sheet['!merges'] as Array<{ s: { r: number; c: number }; e: { r: number; c: number } }>) ?? [];
+  const colInfos =
+    (sheet['!cols'] as Array<{ wch?: number; width?: number; wpx?: number }> | undefined) ?? [];
+  const rowInfos =
+    (sheet['!rows'] as Array<{ hpt?: number; hpx?: number } | undefined> | undefined) ?? [];
+
+  // Build merge map: top-left cell → span; covered cells in skipSet
+  const skipSet = new Set<string>();
+  const spanMap = new Map<string, { cs: number; rs: number }>();
+  for (const m of merges) {
+    const topLeft = XLSX.utils.encode_cell(m.s);
+    spanMap.set(topLeft, { cs: m.e.c - m.s.c + 1, rs: m.e.r - m.s.r + 1 });
+    for (let r = m.s.r; r <= m.e.r; r++) {
+      for (let c = m.s.c; c <= m.e.c; c++) {
+        if (r !== m.s.r || c !== m.s.c) skipSet.add(XLSX.utils.encode_cell({ r, c }));
+      }
+    }
+  }
+
+  const parts: string[] = [
+    '<html><head><meta charset="utf-8"><style>',
+    'body{margin:0;padding:8px;font-family:Calibri,Arial,sans-serif;font-size:11pt;background:#fff}',
+    'table{border-collapse:collapse;width:100%}',
+    'td{border:1px solid #d0d7de;padding:2px 6px;overflow:hidden;white-space:nowrap;vertical-align:bottom}',
+    '</style></head><body><table>',
+  ];
+
+  for (let C = range.s.c; C <= range.e.c; C++) {
+    const ci = colInfos[C];
+    const w = ci?.wpx
+      ? `${ci.wpx}px`
+      : ci?.width
+        ? `${Math.round(ci.width * 7)}px`
+        : ci?.wch
+          ? `${Math.round(ci.wch * 8)}px`
+          : '80px';
+    parts.push(`<col style="width:${w}">`);
+  }
+
+  const H_ALIGN: Record<string, string> = {
+    center: 'center',
+    right: 'right',
+    left: 'left',
+    justify: 'justify',
+    distributed: 'justify',
+  };
+  const V_ALIGN: Record<string, string> = {
+    center: 'middle',
+    top: 'top',
+    bottom: 'bottom',
+    distributed: 'middle',
+    justify: 'middle',
+  };
+
+  for (let R = range.s.r; R <= range.e.r; R++) {
+    const ri = rowInfos[R];
+    const rh = ri?.hpx
+      ? ` style="height:${ri.hpx}px"`
+      : ri?.hpt
+        ? ` style="height:${ri.hpt}pt"`
+        : '';
+    parts.push(`<tr${rh}>`);
+
+    for (let C = range.s.c; C <= range.e.c; C++) {
+      const addr = XLSX.utils.encode_cell({ r: R, c: C });
+      if (skipSet.has(addr)) continue;
+
+      const cell = sheet[addr] as XlsxCellObject | undefined;
+      const s = (cell?.s as XlsxCellStyle | undefined) ?? {};
+      const span = spanMap.get(addr);
+      const attrs: string[] = [];
+      if (span && span.cs > 1) attrs.push(`colspan="${span.cs}"`);
+      if (span && span.rs > 1) attrs.push(`rowspan="${span.rs}"`);
+
+      const css: string[] = [];
+
+      // Background fill
+      if (s.fill?.patternType !== 'none') {
+        const bg = colorToHex(s.fill?.fgColor);
+        if (bg) css.push(`background-color:${bg}`);
+      }
+
+      // Font
+      const f = s.font;
+      if (f) {
+        const fc = colorToHex(f.color);
+        if (fc) css.push(`color:${fc}`);
+        if (f.bold) css.push('font-weight:bold');
+        if (f.italic) css.push('font-style:italic');
+        if (f.sz) css.push(`font-size:${f.sz}pt`);
+        if (f.name) css.push(`font-family:"${f.name}",sans-serif`);
+        const decors: string[] = [];
+        if (f.u) decors.push('underline');
+        if (f.strike) decors.push('line-through');
+        if (decors.length) css.push(`text-decoration:${decors.join(' ')}`);
+      }
+
+      // Alignment
+      const ha = s.alignment?.horizontal;
+      const va = s.alignment?.vertical;
+      if (ha) css.push(`text-align:${H_ALIGN[ha] ?? 'left'}`);
+      if (va) css.push(`vertical-align:${V_ALIGN[va] ?? 'bottom'}`);
+      if (s.alignment?.wrapText) css.push('white-space:pre-wrap');
+
+      const styleAttr = css.length ? ` style="${css.join(';')}"` : '';
+      // Use cell.w (Excel's pre-formatted display string) as the authoritative source.
+      // An empty cell.w means Excel itself displays nothing — respect that and do NOT
+      // fall back to cell.v, which would turn hidden-zero cells into "0".
+      // Only fall back when cell.w is absent (undefined) entirely.
+      let value = '';
+      if (cell) {
+        if (typeof cell.w === 'string') {
+          // cell.w defined (even ''); trust Excel's own formatted display
+          value = cell.w;
+        } else if (cell.t === 'b') {
+          value = cell.v ? 'TRUE' : 'FALSE';
+        } else if (cell.t === 'e') {
+          value = '#ERROR';
+        } else if (cell.v !== undefined && cell.v !== null) {
+          value = String(cell.v);
+        }
+      }
+      const safe = value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\n/g, '<br>');
+
+      parts.push(`<td${attrs.length ? ` ${attrs.join(' ')}` : ''}${styleAttr}>${safe}</td>`);
+    }
+
+    parts.push('</tr>');
+  }
+
+  parts.push('</table></body></html>');
+  return parts.join('');
+}
+
+function OfficePreviewContent({
+  artifact,
+  url,
+  kind,
+  t,
+}: {
+  artifact: ArtifactRef;
+  url: string;
+  kind: OfficePreviewKind;
+  t: (key: string, vars?: Record<string, string>) => string;
+}): ReactElement {
+  const docContainerRef = useRef<HTMLDivElement>(null);
+  const xlsxModuleRef = useRef<XlsxModule | null>(null);
+  const xlsxSheetsRef = useRef<XlsxSheets | null>(null);
+  const sheetHtmlsRef = useRef<Map<string, string>>(new Map());
+  const [status, setStatus] = useState<'loading' | 'done' | 'error'>('loading');
+  const [sheetNames, setSheetNames] = useState<string[]>([]);
+  const [activeSheet, setActiveSheet] = useState('');
+  const [activeHtml, setActiveHtml] = useState<string | null>(null);
+
+  useEffect(() => {
+    setStatus('loading');
+    sheetHtmlsRef.current.clear();
+    xlsxModuleRef.current = null;
+    xlsxSheetsRef.current = null;
+    setSheetNames([]);
+    setActiveSheet('');
+    setActiveHtml(null);
+
+    if (kind === 'pptx') {
+      setStatus('done');
+      return;
+    }
+
+    const controller = new AbortController();
+
+    void (async (): Promise<void> => {
+      try {
+        const response = await fetch(url, { signal: controller.signal });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const buffer = await response.arrayBuffer();
+        if (controller.signal.aborted) return;
+
+        if (kind === 'docx') {
+          const { renderAsync } = await import('docx-preview');
+          if (controller.signal.aborted || !docContainerRef.current) return;
+          await renderAsync(buffer, docContainerRef.current, undefined, {
+            className: 'docx-preview-body',
+            ignoreWidth: true,
+            ignoreHeight: true,
+          });
+        } else if (kind === 'xlsx') {
+          const XLSX = await import('xlsx-js-style');
+          if (controller.signal.aborted) return;
+          const wb = XLSX.read(new Uint8Array(buffer), { type: 'array', cellStyles: true });
+          if (controller.signal.aborted) return;
+
+          const names = wb.SheetNames;
+          if (names.length === 0) throw new Error('Empty workbook');
+
+          xlsxModuleRef.current = XLSX;
+          xlsxSheetsRef.current = wb.Sheets;
+
+          const firstName = names[0];
+          const firstHtml = renderXlsxSheet(XLSX, wb.Sheets[firstName]);
+          sheetHtmlsRef.current.set(firstName, firstHtml);
+
+          if (!controller.signal.aborted) {
+            setSheetNames(names);
+            setActiveSheet(firstName);
+            setActiveHtml(firstHtml);
+          }
+        }
+
+        if (!controller.signal.aborted) setStatus('done');
+      } catch {
+        if (!controller.signal.aborted) setStatus('error');
+      }
+    })();
+
+    return () => controller.abort();
+  }, [artifact.contentItemId, url, kind]);
+
+  const handleSheetSwitch = useCallback(
+    (name: string): void => {
+      if (!xlsxModuleRef.current || !xlsxSheetsRef.current) return;
+      setActiveSheet(name);
+      const cached = sheetHtmlsRef.current.get(name);
+      if (cached !== undefined) {
+        setActiveHtml(cached);
+        return;
+      }
+      const html = renderXlsxSheet(xlsxModuleRef.current, xlsxSheetsRef.current[name]);
+      sheetHtmlsRef.current.set(name, html);
+      setActiveHtml(html);
+    },
+    [],
+  );
+
+  if (kind === 'pptx') {
+    return (
+      <div className="flex flex-col items-center gap-4 rounded-2xl border border-white/8 bg-slate-950/70 p-8 text-sm text-slate-400">
+        <svg
+          className="h-12 w-12 text-slate-600"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={1}
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+          />
+        </svg>
+        <div className="text-center">
+          <div className="mb-1 font-medium text-slate-300">
+            {t('deliverables.artifact.pptxNoPreview')}
+          </div>
+          <div>{t('deliverables.artifact.pptxDownloadHint')}</div>
+        </div>
+      </div>
+    );
+  }
+
+  const label =
+    kind === 'docx'
+      ? t('deliverables.artifact.docxPreview')
+      : t('deliverables.artifact.xlsxPreview');
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-white/8 bg-slate-950/70">
+      <div className="flex flex-wrap items-center gap-2 border-b border-white/8 px-4 py-2">
+        <span className="text-xs text-slate-400">{label}</span>
+        {sheetNames.length > 1 &&
+          sheetNames.map((name) => (
+            <button
+              key={name}
+              type="button"
+              onClick={() => handleSheetSwitch(name)}
+              className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                name === activeSheet
+                  ? 'bg-indigo-600 text-white'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              {name}
+            </button>
+          ))}
+      </div>
+
+      {status === 'loading' && (
+        <div className="p-5 text-sm text-slate-500">
+          {t('deliverables.artifact.officePreviewLoading')}
+        </div>
+      )}
+
+      {status === 'error' && (
+        <div className="p-5 text-sm text-amber-300">
+          {t('deliverables.artifact.officePreviewFailed')}
+        </div>
+      )}
+
+      {kind === 'docx' && (
+        <div
+          ref={docContainerRef}
+          className="max-h-[720px] overflow-auto bg-white p-4"
+          style={{ display: status === 'done' ? 'block' : 'none' }}
+        />
+      )}
+
+      {kind === 'xlsx' && activeHtml !== null && (
+        <iframe
+          srcDoc={activeHtml}
+          sandbox=""
+          title={artifact.name}
+          className="h-[720px] w-full bg-white"
+        />
+      )}
+    </div>
+  );
+}
+
 function ArtifactPreviewContent({
   artifact,
   t,
@@ -253,6 +619,11 @@ function ArtifactPreviewContent({
         {t('deliverables.artifact.loadingPreview')}
       </div>
     );
+  }
+
+  const officeKind = getOfficeKind(artifact);
+  if (url && officeKind) {
+    return <OfficePreviewContent artifact={artifact} url={url} kind={officeKind} t={t} />;
   }
 
   if (url && canEmbedBrowserPreview(artifact)) {

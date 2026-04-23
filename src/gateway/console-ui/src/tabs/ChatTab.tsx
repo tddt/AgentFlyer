@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Badge } from '../components/Badge.js';
 import { Button } from '../components/Button.js';
 import { CopyButton } from '../components/CopyButton.js';
@@ -1296,33 +1296,52 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
     });
   };
 
-  const recoveryEvidence = getRecoveryEvidenceContext(messages);
-  const recoveryPatterns = detectToolResultPatterns(messages);
-  const recoveryPatternMetas = recoveryPatterns
-    .map((pattern) => getToolResultPatternMeta(pattern, t))
-    .filter(
-      (
-        meta,
-      ): meta is { label: string; variant: 'green' | 'blue' | 'yellow' | 'red' | 'purple' | 'gray' } => Boolean(meta),
-    );
-  const inputPlaceholder = getRecoveryInputPlaceholder(visibleRecoveryContext, t);
-  const suggestedRecoveryMessage = visibleRecoveryContext
-    ? getRecoverySuggestedMessage(visibleRecoveryContext, messages, t)
-    : '';
-  const structuredRecoveryMessage = visibleRecoveryContext
-    ? getStructuredRecoverySuggestion(
-        recoveryEvidence.userContext,
-        suggestedRecoveryMessage,
-        recoveryEvidence.toolResultContext,
-        recoveryPatterns,
-        t,
-      )
-    : '';
-  const structuredRecoveryVariants = visibleRecoveryContext
-    ? getStructuredRecoveryVariants(recoveryEvidence.userContext, recoveryPatterns, t)
-    : [];
-  const recoveryEvidenceEntries = buildRecoveryEvidenceEntries(messages, t);
-  const participantAliases = agent.mentionAliases?.slice(0, 3) ?? [];
+  // RATIONALE: Memoize all expensive message-scanning computations so they only
+  // recompute when messages/visibleRecoveryContext change, not on every keystroke.
+  const recoveryEvidence = useMemo(() => getRecoveryEvidenceContext(messages), [messages]);
+  const recoveryPatterns = useMemo(() => detectToolResultPatterns(messages), [messages]);
+  const recoveryPatternMetas = useMemo(
+    () =>
+      recoveryPatterns
+        .map((pattern) => getToolResultPatternMeta(pattern, t))
+        .filter(
+          (
+            meta,
+          ): meta is { label: string; variant: 'green' | 'blue' | 'yellow' | 'red' | 'purple' | 'gray' } =>
+            Boolean(meta),
+        ),
+    [recoveryPatterns, t],
+  );
+  const inputPlaceholder = useMemo(
+    () => getRecoveryInputPlaceholder(visibleRecoveryContext, t),
+    [visibleRecoveryContext, t],
+  );
+  const suggestedRecoveryMessage = useMemo(
+    () => (visibleRecoveryContext ? getRecoverySuggestedMessage(visibleRecoveryContext, messages, t) : ''),
+    [visibleRecoveryContext, messages, t],
+  );
+  const structuredRecoveryMessage = useMemo(
+    () =>
+      visibleRecoveryContext
+        ? getStructuredRecoverySuggestion(
+            recoveryEvidence.userContext,
+            suggestedRecoveryMessage,
+            recoveryEvidence.toolResultContext,
+            recoveryPatterns,
+            t,
+          )
+        : '',
+    [visibleRecoveryContext, recoveryEvidence, suggestedRecoveryMessage, recoveryPatterns, t],
+  );
+  const structuredRecoveryVariants = useMemo(
+    () =>
+      visibleRecoveryContext
+        ? getStructuredRecoveryVariants(recoveryEvidence.userContext, recoveryPatterns, t)
+        : [],
+    [visibleRecoveryContext, recoveryEvidence.userContext, recoveryPatterns, t],
+  );
+  const recoveryEvidenceEntries = useMemo(() => buildRecoveryEvidenceEntries(messages, t), [messages, t]);
+  const participantAliases = useMemo(() => agent.mentionAliases?.slice(0, 3) ?? [], [agent.mentionAliases]);
   const showRecoveryPanel = Boolean(visibleRecoveryContext);
   const showHubContextPanel = Boolean(hubFocusTarget);
 
