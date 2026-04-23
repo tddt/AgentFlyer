@@ -407,6 +407,38 @@ const LogConfigSchema = z.object({
   format: z.enum(['json', 'pretty']).default('json'),
 });
 
+// ─── RBAC (multi-user access control) ────────────────────────────────────────
+
+/**
+ * User role hierarchy:
+ * - admin    — full access to all RPC methods and config
+ * - operator — can trigger agent runs and workflows; cannot change config or RBAC
+ * - viewer   — read-only access (status, metrics, session history)
+ */
+export const UserRoleSchema = z.enum(['admin', 'operator', 'viewer']);
+export type UserRole = z.infer<typeof UserRoleSchema>;
+
+const UserSchema = z.object({
+  /** Unique user identifier (lower-kebab-case). */
+  id: z.string().min(1),
+  /** Display name shown in audit logs. */
+  name: z.string().optional(),
+  /** Access role. */
+  role: UserRoleSchema.default('viewer'),
+  /**
+   * Hashed Bearer token for this user.
+   * Store a SHA-256 hex digest of the actual token; the gateway verifies by hashing the
+   * presented token and comparing. Leave empty to disable this user without removing the entry.
+   * For development convenience, a plaintext token is also accepted (32+ chars).
+   */
+  apiKey: z.string().min(1),
+  /**
+   * When set, this operator/viewer can only trigger the listed agent IDs.
+   * Ignored for admin role.
+   */
+  allowedAgents: z.array(z.string()).optional(),
+});
+
 // ─── Routing (E6 intent-aware routing) ───────────────────────────────────────
 
 const RoutingRuleSchema = z.object({
@@ -581,6 +613,12 @@ export const ConfigSchema = z.object({
   channels: ChannelsConfigSchema.default({}),
   routing: RoutingConfigSchema.default({}),
   log: LogConfigSchema.default({}),
+  /**
+   * Optional additional API users with RBAC roles.
+   * When empty, the single gateway.auth.token (admin) is the only credential.
+   * Each entry's apiKey is a Bearer token (plaintext for dev; SHA-256 hex for prod).
+   */
+  users: z.array(UserSchema).default([]),
 });
 
 // ─── Exported types ───────────────────────────────────────────────────────────
@@ -604,3 +642,4 @@ export type McpConfig = z.infer<typeof McpConfigSchema>;
 export type ChannelsConfig = z.infer<typeof ChannelsConfigSchema>;
 export type RoutingConfig = z.infer<typeof RoutingConfigSchema>;
 export type LogConfig = z.infer<typeof LogConfigSchema>;
+export type User = z.infer<typeof UserSchema>;

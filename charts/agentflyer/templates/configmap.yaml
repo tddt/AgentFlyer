@@ -1,0 +1,11 @@
+{{- if .Values.config.content }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agentflyer.fullname" . }}-config
+  labels:
+    {{- include "agentflyer.labels" . | nindent 4 }}
+data:
+  agentflyer.json: |
+    {{ .Values.config.content | nindent 4 }}
+{{- end }}

@@ -64,6 +64,94 @@ interface EditForm {
   workspace: string;
 }
 
+// ─── Mesh topology ─────────────────────────────────────────────────────────
+
+interface MeshAgentEntry {
+  agentId: string;
+  name: string;
+  capabilities: string[];
+  model: string;
+  role: string;
+  status: 'idle' | 'busy' | 'offline';
+  registeredAt: number;
+  lastSeenAt: number;
+}
+
+const MESH_STATUS_COLORS: Record<string, string> = {
+  idle: 'text-emerald-400',
+  busy: 'text-amber-400',
+  offline: 'text-slate-500',
+};
+
+function MeshTopologyPanel() {
+  const { data, refetch } = useQuery<{ agents: MeshAgentEntry[] }>(
+    () => rpc<{ agents: MeshAgentEntry[] }>('mesh.status'),
+    10_000,
+  );
+  const agents = data?.agents ?? [];
+
+  if (agents.length === 0) return null;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-200">Mesh 节点</h2>
+          <p className="text-[11px] text-slate-500 mt-0.5">已注册到本地 mesh 的 agent 列表</p>
+        </div>
+        <button
+          onClick={refetch}
+          className="text-[11px] text-slate-500 hover:text-slate-300 transition-colors"
+        >
+          刷新
+        </button>
+      </div>
+      <div
+        className="rounded-xl overflow-hidden"
+        style={{ border: '1px solid rgba(255,255,255,0.07)' }}
+      >
+        <table className="w-full text-[12px]">
+          <thead>
+            <tr style={{ background: 'rgba(255,255,255,0.03)' }}>
+              {['Agent ID', '名称', '角色', '状态', '模型', '能力'].map((h) => (
+                <th
+                  key={h}
+                  className="px-3 py-2 text-left text-[11px] font-medium text-slate-500 uppercase tracking-wide"
+                >
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {agents.map((agent, i) => (
+              <tr
+                key={agent.agentId}
+                style={{
+                  borderTop: i > 0 ? '1px solid rgba(255,255,255,0.04)' : undefined,
+                  background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)',
+                }}
+              >
+                <td className="px-3 py-2 font-mono text-indigo-300/80">{agent.agentId}</td>
+                <td className="px-3 py-2 text-slate-300">{agent.name || '—'}</td>
+                <td className="px-3 py-2 text-slate-400">{agent.role}</td>
+                <td className={`px-3 py-2 font-medium ${MESH_STATUS_COLORS[agent.status] ?? 'text-slate-400'}`}>
+                  {agent.status}
+                </td>
+                <td className="px-3 py-2 text-slate-400 font-mono text-[11px]">{agent.model}</td>
+                <td className="px-3 py-2 text-slate-500">
+                  {agent.capabilities.length > 0 ? agent.capabilities.join(', ') : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ─── Edit form ─────────────────────────────────────────────────────────────
 function EditModal({
   agentId,
   current,
@@ -703,6 +791,9 @@ export function AgentsTab({
       ))}
 
       {list.length === 0 && <p className="text-slate-500 text-sm py-4">{t('agents.noAgents')}</p>}
+
+      {/* Mesh topology — only rendered when mesh agents are registered */}
+      <MeshTopologyPanel />
     </div>
   );
 }

@@ -227,3 +227,34 @@ select {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   margin: 1.5em 0;
 }
+
+/* ─── Theme tokens ────────────────────────────────────────── */
+/* Dark (default) */
+:root {
+  --af-bg: #07090f;
+  --af-sidebar-from: #0c0f1a;
+  --af-sidebar-to: #07090f;
+  --af-border: rgba(255, 255, 255, 0.055);
+  --af-surface: rgba(255, 255, 255, 0.04);
+  --af-text-base: #cbd5e1;
+  --af-text-muted: #64748b;
+  --af-text-heading: #e2e8f0;
+}
+
+/* Light */
+html[data-theme="light"] {
+  --af-bg: #f0f2f8;
+  --af-sidebar-from: #ffffff;
+  --af-sidebar-to: #e8ecf4;
+  --af-border: rgba(0, 0, 0, 0.09);
+  --af-surface: rgba(0, 0, 0, 0.04);
+  --af-text-base: #334155;
+  --af-text-muted: #64748b;
+  --af-text-heading: #0f172a;
+
+  /* Invert Tailwind dark-bg utility classes via filter is fragile — instead
+     override the key hardcoded component backgrounds using the CSS variables
+     that App.tsx and Sidebar.tsx now read. The rest of the UI uses Tailwind
+     slate-* classes which are light-enough in practice. */
+  color-scheme: light;
+}

@@ -1,0 +1,74 @@
+# Default values for agentflyer chart.
+# Override by creating your own values.yaml and passing with -f flag.
+
+replicaCount: 1
+
+image:
+  repository: agentflyer/agentflyer
+  pullPolicy: IfNotPresent
+  tag: ""  # Defaults to .Chart.AppVersion
+
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  type: ClusterIP
+  port: 19789
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: agentflyer.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 2Gi
+  # Existing PVC name; if set, a new PVC is NOT created:
+  existingClaim: ""
+
+config:
+  # Inline JSON config. If set, this is written to /data/agentflyer.json.
+  # If empty, an existing mounted config is used.
+  content: ""
+
+env: {}
+  # OPENAI_API_KEY: "sk-..."
+  # ANTHROPIC_API_KEY: "..."
+
+envFrom: []
+  # - secretRef:
+  #     name: agentflyer-api-keys
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 19789
+  initialDelaySeconds: 10
+  periodSeconds: 30
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 19789
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

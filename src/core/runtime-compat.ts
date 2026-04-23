@@ -2,7 +2,7 @@
 // All Bun-specific API calls should go through this module.
 
 import { createHash } from 'node:crypto';
-import { readFile as fsReadFile, writeFile as fsWriteFile, rename } from 'node:fs/promises';
+import { readFile as fsReadFile, unlink, writeFile as fsWriteFile, rename } from 'node:fs/promises';
 
 /** True when running inside Bun runtime (main thread or worker threads) */
 export const isBun: boolean =
@@ -59,7 +59,25 @@ export async function atomicWriteFile(path: string, content: string | Buffer): P
   } else {
     await fsWriteFile(tmp, content);
   }
-  await rename(tmp, path);
+  try {
+    await rename(tmp, path);
+  } catch (err) {
+    // RATIONALE: On Windows, rename() can fail with EPERM/EACCES when the target
+    // file is locked or the directory is being concurrently deleted (e.g. during
+    // test teardown). Fall back to a direct overwrite; checkpoints are best-effort
+    // for recovery and a non-atomic write is still better than crashing.
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'EPERM' || code === 'EACCES') {
+      try {
+        await fsWriteFile(path, content);
+      } catch {
+        // Directory may already be removed; silently drop the checkpoint write.
+      }
+      await unlink(tmp).catch(() => undefined);
+    } else {
+      throw err;
+    }
+  }
 }
 
 // ─── SQLite factory ───────────────────────────────────────────────────────────

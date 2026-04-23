@@ -22,10 +22,14 @@ export default defineConfig({
         //        workflow-kernel timeout fix (P1-1 iteration 3).
         // Added: mesh_send/mesh_plan orchestration e2e tests + workflow-kernel
         //        race fix (P2-1 mesh E2E).
-        lines: 36,
-        branches: 68,
-        functions: 74,
-        statements: 36,
+        // Added: agent/stats, skills/filter/format/cache, scheduler/cron/timer/heartbeat,
+        //        memory/decay/search, skills/skill-tools (P1-1 iteration 4).
+        // Added: config/loader, config/migrate, memory/partition+version+organizer,
+        //        skills/registry (scanSkillsDir, parseSkillFile) (P1-1 iteration 5).
+        lines: 40,
+        branches: 70,
+        functions: 79,
+        statements: 40,
       },
       reporter: ['text', 'lcov', 'html'],
     },

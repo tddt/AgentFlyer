@@ -7,7 +7,7 @@ import { SessionStore } from '../../core/session/store.js';
 import type { StreamChunk } from '../../core/types.js';
 import type { LLMProvider, RunParams } from '../llm/provider.js';
 import { AgentRunner } from '../runner.js';
-import { createMeshTools } from './mesh-tools.js';
+import { createMeshTools, waitForMeshDrain, waitForMeshInit } from './mesh-tools.js';
 import { ToolRegistry } from './registry.js';
 
 const tempDirs: string[] = [];
@@ -74,11 +74,12 @@ function createRunner(dataDir: string, agentId = 'agent-main'): AgentRunner {
   );
 }
 
-function getToolHandler(name: string, dataDir: string, runners?: Map<string, AgentRunner>) {
+async function getToolHandler(name: string, dataDir: string, runners?: Map<string, AgentRunner>) {
   const tools = createMeshTools(
     runners ?? new Map([['agent-main', createRunner(dataDir)]]),
     dataDir,
   );
+  await waitForMeshInit(dataDir);
   const tool = tools.find((entry) => entry.definition.name === name);
   if (!tool) {
     throw new Error(`Tool not found: ${name}`);
@@ -89,8 +90,8 @@ function getToolHandler(name: string, dataDir: string, runners?: Map<string, Age
 describe('createMeshTools persistence', () => {
   it('persists spawned tasks to mesh-tasks.json', async () => {
     const dataDir = await createTempDir();
-    const spawn = getToolHandler('mesh_spawn', dataDir);
-    const status = getToolHandler('mesh_status', dataDir);
+    const spawn = await getToolHandler('mesh_spawn', dataDir);
+    const status = await getToolHandler('mesh_status', dataDir);
 
     const spawned = await spawn({ agent_id: 'agent-main', message: 'do work' });
     expect(spawned.isError).toBe(false);
@@ -105,6 +106,8 @@ describe('createMeshTools persistence', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
 
+    // Drain write-behind queue before reading the persisted file.
+    await waitForMeshDrain(dataDir);
     const raw = await readFile(join(dataDir, 'mesh-tasks.json'), 'utf-8');
     const parsed = JSON.parse(raw) as Array<{ taskId: string; status: string; result?: string }>;
     expect(parsed.some((entry) => entry.taskId === taskId && entry.status === 'done')).toBe(true);
@@ -133,7 +136,7 @@ describe('createMeshTools persistence', () => {
       'utf-8',
     );
 
-    const status = getToolHandler('mesh_status', dataDir);
+    const status = await getToolHandler('mesh_status', dataDir);
     const result = await status({ task_id: 'task-restart' });
 
     expect(result.isError).toBe(true);
@@ -160,7 +163,7 @@ describe('mesh_send end-to-end routing', () => {
       ['coordinator', createRunner(dataDir, 'coordinator')],
       ['worker-1', createRunner(dataDir, 'worker-1')],
     ]);
-    const send = getToolHandler('mesh_send', dataDir, runners);
+    const send = await getToolHandler('mesh_send', dataDir, runners);
 
     const result = await send({ agent_id: 'worker-1', message: 'compute something' });
 
@@ -171,7 +174,7 @@ describe('mesh_send end-to-end routing', () => {
   it('returns error immediately when target agent is not found', async () => {
     const dataDir = await createTempDir();
     const runners = new Map<string, import('../runner.js').AgentRunner>();
-    const send = getToolHandler('mesh_send', dataDir, runners);
+    const send = await getToolHandler('mesh_send', dataDir, runners);
 
     const result = await send({ agent_id: 'nonexistent', message: 'hello' });
 
@@ -194,9 +197,10 @@ describe('mesh_send end-to-end routing', () => {
 
     const busyRunner = new AgentRunner(
       {
-        id: 'busy-agent', name: 'Busy', skills: [],
+        id: 'busy-agent', name: 'Busy', mentionAliases: [], workspace: dataDir,
+        skills: [], model: 'fake-model',
         mesh: { role: 'worker', capabilities: [], accepts: ['task'], visibility: 'public', triggers: [] },
-        owners: [], tools: { deny: [], approval: [] },
+        owners: [], tools: { allow: [], deny: [], approval: [], maxRounds: 10 },
         persona: { language: 'zh-CN', outputDir: 'output' },
       },
       {
@@ -213,7 +217,7 @@ describe('mesh_send end-to-end routing', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     const runners = new Map([['busy-agent', busyRunner]]);
-    const send = getToolHandler('mesh_send', dataDir, runners);
+    const send = await getToolHandler('mesh_send', dataDir, runners);
 
     const result = await send({ agent_id: 'busy-agent', message: 'hello' });
 
@@ -231,7 +235,7 @@ describe('mesh_plan parallel orchestration', () => {
       ['agent-a', createRunner(dataDir, 'agent-a')],
       ['agent-b', createRunner(dataDir, 'agent-b')],
     ]);
-    const plan = getToolHandler('mesh_plan', dataDir, runners);
+    const plan = await getToolHandler('mesh_plan', dataDir, runners);
 
     const result = await plan({
       goal: 'gather information',
@@ -250,7 +254,7 @@ describe('mesh_plan parallel orchestration', () => {
 
   it('returns error when tasks array is empty', async () => {
     const dataDir = await createTempDir();
-    const plan = getToolHandler('mesh_plan', dataDir);
+    const plan = await getToolHandler('mesh_plan', dataDir);
 
     const result = await plan({ goal: 'empty', tasks: [] });
 

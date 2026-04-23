@@ -348,4 +348,126 @@ describe('docker sandbox runtime', () => {
     expect(result.stderr).toContain('Conflicting sandbox mounts target the same container path');
     expect(commandRunner).not.toHaveBeenCalled();
   });
+
+  it('uses --network agentflyer-sandbox when egress-allowlist profile and network exists', async () => {
+    const commandRunner = vi
+      .fn<DockerCommandRunner>()
+      .mockResolvedValueOnce({ stdout: '27.0.0', stderr: '' }) // version probe
+      .mockResolvedValueOnce({ stdout: '[{"Id":"sha256:test"}]', stderr: '' }) // image inspect
+      .mockResolvedValueOnce({ stdout: '[{}]', stderr: '' }) // network inspect — exists
+      .mockResolvedValueOnce({ stdout: 'egress-stdout', stderr: '' }); // docker run
+    const runtime = createDockerSandboxRuntime({
+      image: 'node:22-bookworm-slim',
+      profile: {
+        name: 'egress-profile',
+        network: 'egress-allowlist',
+        cpu: 1,
+        memoryMb: 512,
+        timeoutMs: 30_000,
+        writableMounts: ['workspace:/workspace'],
+        readOnlyMounts: [],
+      },
+      commandRunner,
+    });
+
+    const result = await runtime.execute({
+      command: 'echo hello',
+      cwd: process.cwd(),
+      timeoutMs: 10_000,
+      workspaceDir: process.cwd(),
+    });
+
+    expect(result.ok).toBe(true);
+    // Verify the network inspect was called for agentflyer-sandbox
+    expect(commandRunner).toHaveBeenCalledWith(
+      'docker',
+      ['network', 'inspect', 'agentflyer-sandbox'],
+      expect.objectContaining({ timeout: 5_000 }),
+    );
+    // Verify the docker run uses the named bridge, not the default bridge
+    expect(commandRunner).toHaveBeenCalledWith(
+      'docker',
+      expect.arrayContaining(['--network', 'agentflyer-sandbox']),
+      expect.anything(),
+    );
+  });
+
+  it('creates egress network when it does not exist yet', async () => {
+    const commandRunner = vi
+      .fn<DockerCommandRunner>()
+      .mockResolvedValueOnce({ stdout: '27.0.0', stderr: '' }) // version probe
+      .mockResolvedValueOnce({ stdout: '[{"Id":"sha256:test"}]', stderr: '' }) // image inspect
+      .mockRejectedValueOnce(new Error('No such network')) // network inspect — not found
+      .mockResolvedValueOnce({ stdout: 'agentflyer-sandbox', stderr: '' }) // network create
+      .mockResolvedValueOnce({ stdout: 'created-stdout', stderr: '' }); // docker run
+
+    const runtime = createDockerSandboxRuntime({
+      image: 'node:22-bookworm-slim',
+      profile: {
+        name: 'egress-profile',
+        network: 'egress-allowlist',
+        cpu: 1,
+        memoryMb: 512,
+        timeoutMs: 30_000,
+        writableMounts: ['workspace:/workspace'],
+        readOnlyMounts: [],
+      },
+      commandRunner,
+    });
+
+    const result = await runtime.execute({
+      command: 'echo hello',
+      cwd: process.cwd(),
+      timeoutMs: 10_000,
+      workspaceDir: process.cwd(),
+    });
+
+    expect(result.ok).toBe(true);
+    // Verify network create was called with the stable bridge name
+    expect(commandRunner).toHaveBeenCalledWith(
+      'docker',
+      expect.arrayContaining(['network', 'create', '--opt', 'com.docker.network.bridge.name=af_sandbox0', 'agentflyer-sandbox']),
+      expect.anything(),
+    );
+  });
+
+  it('captures docker run execution errors into result', async () => {
+    const commandRunner = vi
+      .fn<DockerCommandRunner>()
+      .mockResolvedValueOnce({ stdout: '27.0.0', stderr: '' })
+      .mockResolvedValueOnce({ stdout: '[{"Id":"sha256:test"}]', stderr: '' })
+      .mockRejectedValueOnce({
+        stdout: Buffer.from('partial output'),
+        stderr: Buffer.from('command not found'),
+        message: 'Process exited with code 127',
+        code: 127,
+        killed: false,
+      });
+
+    const runtime = createDockerSandboxRuntime({
+      image: 'node:22-bookworm-slim',
+      profile: {
+        name: 'restricted',
+        network: 'none',
+        cpu: 1,
+        memoryMb: 512,
+        timeoutMs: 30_000,
+        writableMounts: ['workspace:/workspace'],
+        readOnlyMounts: [],
+      },
+      commandRunner,
+    });
+
+    const result = await runtime.execute({
+      command: 'bad-command',
+      cwd: process.cwd(),
+      timeoutMs: 10_000,
+      workspaceDir: process.cwd(),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain('command not found');
+    expect(result.stdout).toContain('partial output');
+    expect(result.errorMessage).toBe('Process exited with code 127');
+  });
 });

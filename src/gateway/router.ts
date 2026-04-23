@@ -1,7 +1,9 @@
 import { createReadStream } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { loadStats } from '../agent/stats.js';
+import { withRequestContext } from '../core/logger.js';
 import { createLogger } from '../core/logger.js';
 import { summarizeSessionErrors } from '../core/session/error-stats.js';
 import { type StreamChunk, asAgentId, parseSessionKey } from '../core/types.js';
@@ -13,6 +15,8 @@ import { buildConsoleHtml } from './console/index.js';
 import type { InboxBroadcaster } from './inbox-broadcaster.js';
 import type { IntentRouter } from './intent-router.js';
 import type { LogBroadcaster } from './log-buffer.js';
+import { renderPrometheus } from './metrics-store.js';
+import { isMethodAllowed, resolveUser } from './rbac.js';
 import { type RpcContext, dispatchRpc } from './rpc.js';
 import { getWorkflowKernelService } from './workflow-backend.js';
 import type { RunStreamEvent } from './workflow-kernel.js';
@@ -113,6 +117,7 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, {
     'Content-Type': 'application/json',
     'Content-Length': Buffer.byteLength(payload),
+    'X-Content-Type-Options': 'nosniff',
   });
   res.end(payload);
 }
@@ -195,6 +200,19 @@ export async function routeRequest(
   res: ServerResponse,
   opts: RouterOptions,
 ): Promise<boolean> {
+  // Assign a unique requestId for structured log correlation.
+  const requestId = randomBytes(8).toString('hex');
+  // RATIONALE: wrap entire handler in AsyncLocalStorage context so every
+  // log line emitted during this request automatically carries requestId.
+  return withRequestContext({ requestId }, () => _routeRequest(req, res, opts, requestId));
+}
+
+async function _routeRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  opts: RouterOptions,
+  requestId: string,
+): Promise<boolean> {
   const url = req.url ?? '/';
   const method = req.method?.toUpperCase() ?? 'GET';
 
@@ -256,6 +274,79 @@ export async function routeRequest(
     return true;
   }
 
+  // ── Runtime metrics (requires auth) ─────────────────────────────────────
+  // GET /metrics                — returns runtime stats in JSON (default)
+  // GET /metrics?format=prometheus — returns Prometheus text format
+  if (url.startsWith('/metrics') && method === 'GET') {
+    const authResult = validateToken(req.headers.authorization, opts.authToken);
+    if (!authResult.ok) {
+      json(res, 401, { error: authResult.reason });
+      return true;
+    }
+    const ctx = opts.rpcContext;
+    const uptime = ctx.startedAt ? Math.floor((Date.now() - ctx.startedAt) / 1000) : 0;
+    const agentIds = Array.from(ctx.runners.keys());
+    const runningTasks = ctx.runningTasks ? Array.from(ctx.runningTasks.values()) : [];
+    const mcpStatus = ctx.getMcpStatus?.() ?? [];
+    const mcpConnected = mcpStatus.filter((s) => s.status === 'connected').length;
+
+    // Prometheus text format if requested
+    const qs = url.includes('?') ? url.slice(url.indexOf('?') + 1) : '';
+    const formatParam = new URLSearchParams(qs).get('format');
+    if (formatParam === 'prometheus' || req.headers.accept?.includes('text/plain')) {
+      const body = renderPrometheus();
+      res.writeHead(200, {
+        'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
+        'Content-Length': Buffer.byteLength(body),
+      });
+      res.end(body);
+      return true;
+    }
+
+    // Load today's token stats (non-blocking; fall back to empty on error)
+    const todayStats = await loadStats(ctx.dataDir, undefined, 1).catch(() => []);
+    const totalTokensToday = todayStats.reduce((sum, s) => sum + s.totalTokens, 0);
+    const totalTurnsToday = todayStats.reduce((sum, s) => sum + s.turns, 0);
+
+    json(res, 200, {
+      uptime,
+      version: ctx.gatewayVersion,
+      agents: {
+        total: agentIds.length,
+        ids: agentIds,
+      },
+      tasks: {
+        running: runningTasks.length,
+        entries: runningTasks.map((t) => ({
+          taskId: t.taskId,
+          taskName: t.taskName,
+          agentId: t.agentId,
+          runningForSeconds: Math.floor((Date.now() - t.startedAt) / 1000),
+        })),
+      },
+      mcp: {
+        connected: mcpConnected,
+        total: mcpStatus.length,
+      },
+      channels: {
+        total: ctx.channels?.size ?? 0,
+      },
+      tokenUsageToday: {
+        turns: totalTurnsToday,
+        totalTokens: totalTokensToday,
+        byModel: todayStats.map((s) => ({
+          model: s.model,
+          agentId: s.agentId,
+          turns: s.turns,
+          totalTokens: s.totalTokens,
+          inputTokens: s.inputTokens,
+          outputTokens: s.outputTokens,
+        })),
+      },
+    });
+    return true;
+  }
+
   // Browsers request favicon.ico automatically; do not require auth for this.
   if (url === '/favicon.ico' && method === 'GET') {
     res.writeHead(204, {
@@ -288,6 +379,13 @@ export async function routeRequest(
     res.writeHead(200, {
       'Content-Type': 'text/html; charset=utf-8',
       'Cache-Control': 'no-store',
+      'X-Frame-Options': 'DENY',
+      'X-Content-Type-Options': 'nosniff',
+      'X-XSS-Protection': '1; mode=block',
+      'Referrer-Policy': 'strict-origin-when-cross-origin',
+      'Content-Security-Policy':
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https://img.shields.io; connect-src 'self' ws: wss:; font-src 'self' data: https://fonts.gstatic.com;",
+      'X-Request-Id': requestId,
     });
     res.end(html);
     return true;
@@ -579,6 +677,27 @@ export async function routeRequest(
       json(res, 400, { error: 'Missing method' });
       return true;
     }
+    // ── RBAC: check caller role against method requirements ────────────
+    const rpcAuthHeader = req.headers.authorization;
+    const rpcToken = rpcAuthHeader?.startsWith('Bearer ') ? rpcAuthHeader.slice(7) : '';
+    const configUsers = opts.rpcContext.getConfig().users ?? [];
+    if (configUsers.length > 0) {
+      const callerUser = resolveUser(configUsers, rpcToken);
+      if (!callerUser) {
+        // Fall back to root admin token check
+        const rootAuth = validateToken(rpcAuthHeader, opts.authToken);
+        if (!rootAuth.ok) {
+          json(res, 401, { error: 'Unauthorized' });
+          return true;
+        }
+        // Root admin — all methods allowed
+      } else if (!isMethodAllowed(rpcReq.method, callerUser.role)) {
+        json(res, 403, {
+          error: `Role '${callerUser.role}' is not permitted to call '${rpcReq.method}'`,
+        });
+        return true;
+      }
+    }
     const response = await dispatchRpc(
       {
         id: rpcReq.id ?? 0,
@@ -590,8 +709,6 @@ export async function routeRequest(
     json(res, 200, response);
     return true;
   }
-
-  // ── OpenAI-compatible model list ──────────────────────────────────────
   // GET /v1/models
   if (url === '/v1/models' && method === 'GET') {
     const models = Array.from(opts.rpcContext.runners.keys()).map((agentId) => ({

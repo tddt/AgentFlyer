@@ -1,0 +1,16 @@
+apiVersion: v2
+name: agentflyer
+description: Decentralized federated AI Agent framework
+type: application
+version: 0.1.0
+appVersion: "0.9.0"
+keywords:
+  - ai
+  - agents
+  - llm
+  - mcp
+home: https://github.com/agentflyer/agentflyer
+sources:
+  - https://github.com/agentflyer/agentflyer
+maintainers:
+  - name: AgentFlyer Team

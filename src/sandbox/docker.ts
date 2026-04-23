@@ -360,6 +360,63 @@ async function probeDockerImage(options: {
   }
 }
 
+// RATIONALE: Use a dedicated user-defined bridge for egress-allowlist containers.
+// This isolates them from the default Docker bridge and provides a stable interface
+// name (af_sandbox0) that operators can target with iptables rules to restrict
+// outbound traffic to specific subnets/hosts at the host level.
+const EGRESS_SANDBOX_NETWORK = 'agentflyer-sandbox';
+
+async function ensureDockerEgressNetwork(options: {
+  binary: string;
+  cwd: string;
+  commandRunner: DockerCommandRunner;
+}): Promise<void> {
+  const { binary, cwd, commandRunner } = options;
+  try {
+    // Check if the network already exists
+    await commandRunner(binary, ['network', 'inspect', EGRESS_SANDBOX_NETWORK], {
+      cwd,
+      timeout: 5_000,
+      maxBuffer: 64 * 1024,
+      env: process.env,
+      encoding: 'buffer',
+    });
+  } catch {
+    // Network does not exist — create it with a stable bridge name for iptables targeting
+    logger.info('Creating sandbox egress network', { network: EGRESS_SANDBOX_NETWORK });
+    try {
+      await commandRunner(
+        binary,
+        [
+          'network',
+          'create',
+          '--driver',
+          'bridge',
+          '--opt',
+          'com.docker.network.bridge.name=af_sandbox0',
+          EGRESS_SANDBOX_NETWORK,
+        ],
+        {
+          cwd,
+          timeout: 15_000,
+          maxBuffer: 64 * 1024,
+          env: process.env,
+          encoding: 'buffer',
+        },
+      );
+      logger.info(
+        'Sandbox egress network ready. To restrict outbound traffic add iptables rules on bridge af_sandbox0.',
+        { network: EGRESS_SANDBOX_NETWORK },
+      );
+    } catch (createError) {
+      logger.warn('Failed to create sandbox egress network; container will use host bridge', {
+        network: EGRESS_SANDBOX_NETWORK,
+        error: createError instanceof Error ? createError.message : String(createError),
+      });
+    }
+  }
+}
+
 function buildDockerRunArgs(options: {
   image: string;
   profile: ResolvedSandboxProfile;
@@ -374,13 +431,9 @@ function buildDockerRunArgs(options: {
   if (profile.network === 'none') {
     args.push('--network', 'none');
   } else if (profile.network === 'egress-allowlist') {
-    logger.warn(
-      'Sandbox profile requests egress-allowlist; docker runtime currently degrades to bridge networking',
-      {
-        profile: profile.name,
-      },
-    );
-    args.push('--network', 'bridge');
+    // Uses the dedicated agentflyer-sandbox bridge (ensured before container run).
+    // Operators can apply iptables rules on bridge af_sandbox0 to restrict egress.
+    args.push('--network', EGRESS_SANDBOX_NETWORK);
   }
 
   args.push('--cpus', String(profile.cpu));
@@ -503,6 +556,11 @@ export function createDockerSandboxRuntime(options: DockerSandboxRuntimeOptions)
       }
 
       const mirrorState = await captureMirrorState(request.mirrorDirs ?? []);
+
+      if (profile.network === 'egress-allowlist') {
+        await ensureDockerEgressNetwork({ binary, cwd: request.cwd, commandRunner });
+      }
+
       const env = { ...(request.env ?? {}) };
       const { mounts, containerCwd } = mountPlan;
       const dockerArgs = buildDockerRunArgs({

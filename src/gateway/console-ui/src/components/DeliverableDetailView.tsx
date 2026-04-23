@@ -14,7 +14,7 @@ import type {
   WorkflowStepResult,
 } from '../types.js';
 
-const CONTENT_BASE = `http://127.0.0.1:${window.__AF_PORT__}`;
+const CONTENT_BASE = window.location.origin;
 const CONTENT_TOKEN = encodeURIComponent(window.__AF_TOKEN__);
 const MAX_TEXT_PREVIEW_BYTES = 1024 * 1024;
 const BROWSER_PREVIEW_MIME_TYPES = new Set([

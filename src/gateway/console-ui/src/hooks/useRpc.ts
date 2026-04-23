@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-const BASE = `http://127.0.0.1:${window.__AF_PORT__}`;
+const BASE = window.location.origin;
 const TOKEN = window.__AF_TOKEN__;
 
 export async function rpc<T = unknown>(
@@ -25,8 +25,12 @@ export async function rpc<T = unknown>(
 
 export function useQuery<T>(
   fn: () => Promise<T>,
-  deps: unknown[],
+  // accepts either a dependency array or a polling interval in ms
+  depsOrPollMs: unknown[] | number = [],
 ): { data: T | null; loading: boolean; error: string | null; refetch: () => void } {
+  const deps = typeof depsOrPollMs === 'number' ? [] : depsOrPollMs;
+  const pollMs = typeof depsOrPollMs === 'number' ? depsOrPollMs : 0;
+
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -51,6 +55,10 @@ export function useQuery<T>(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     run();
+    if (pollMs > 0) {
+      const id = setInterval(run, pollMs);
+      return () => clearInterval(id);
+    }
   }, [...deps, run]);
 
   return { data, loading, error, refetch: run };

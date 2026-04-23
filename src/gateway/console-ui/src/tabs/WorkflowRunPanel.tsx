@@ -241,9 +241,8 @@ export function WorkflowRunPanel({
       return;
     }
     const TOKEN = window.__AF_TOKEN__;
-    const PORT = window.__AF_PORT__;
     const es = new EventSource(
-      `http://127.0.0.1:${PORT}/api/workflow-stream?runId=${encodeURIComponent(runId)}&token=${TOKEN}`,
+      `${window.location.origin}/api/workflow-stream?runId=${encodeURIComponent(runId)}&token=${TOKEN}`,
     );
     eventSourceRef.current = es;
 

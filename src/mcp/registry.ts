@@ -118,7 +118,21 @@ export class McpRegistry {
       };
     }
 
-    return await client.callTool(binding.originalName, input);
+    const timeoutMs = this.statuses.get(binding.serverId)?.timeoutMs ?? 20_000;
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`MCP tool call timed out after ${timeoutMs}ms: ${prefixedName}`)),
+        timeoutMs,
+      ),
+    );
+
+    try {
+      return await Promise.race([client.callTool(binding.originalName, input), timeoutPromise]);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn('MCP tool call failed', { prefixedName, error: msg });
+      return { isError: true, content: msg };
+    }
   }
 
   async close(): Promise<void> {

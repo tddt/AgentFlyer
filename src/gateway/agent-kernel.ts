@@ -2,7 +2,6 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ulid } from 'ulid';
-import { drainWaitingAgentSyscalls } from '../agent/kernel-syscall-broker.js';
 import {
   type AgentTurnProcessInput,
   AgentTurnProcessRuntime,
@@ -13,11 +12,12 @@ import type { AgentRunner } from '../agent/runner.js';
 import {
   AgentKernel,
   JsonFileCheckpointStore,
+  type KernelProcessSnapshot,
   ScopedCheckpointStore,
 } from '../core/kernel/index.js';
 import type { ProcessStatus } from '../core/kernel/types.js';
 import { createLogger } from '../core/logger.js';
-import type { StreamChunk } from '../core/types.js';
+import type { ProcessId, StreamChunk } from '../core/types.js';
 import { asProcessId } from '../core/types.js';
 
 const logger = createLogger('gateway:agent-kernel');
@@ -140,6 +140,11 @@ export class AgentKernelService {
     Array<{ resolve: (result: TurnResult) => void; reject: (error: Error) => void }>
   >();
   private readonly finalizing = new Set<string>();
+  // RATIONALE: Tracks PIDs of processes whose syscall (LLM/tool call) is
+  // currently executing as a background task, so firePendingSyscalls() does not
+  // re-fire the same syscall a second time if the pump runs again while the
+  // first background task is still awaiting a response.
+  private readonly activeSyscalls = new Set<ProcessId>();
   private readonly queuedRuns = new Map<string, AgentKernelRunRecord>();
   private readonly runRecords = new Map<string, AgentKernelRunRecord>();
 
@@ -468,12 +473,20 @@ export class AgentKernelService {
     if (this.pumpPromise) {
       return;
     }
-    const waitingSnapshots = this.kernel
+    // Only schedule for waiting processes that don't already have an active
+    // background syscall worker. Those already tracked in activeSyscalls will
+    // call schedulePump(0) themselves once their LLM/tool call completes.
+    // Without this guard, scheduleNextPump would spin in a rapid no-op loop
+    // while background syscalls are in flight.
+    const waitingSnapshotNeedsFiring = this.kernel
       .listSnapshots()
-      .filter(
-        (snapshot) => snapshot.processType === this.runtime.type && snapshot.status === 'waiting',
+      .some(
+        (snapshot) =>
+          snapshot.processType === this.runtime.type &&
+          snapshot.status === 'waiting' &&
+          !this.activeSyscalls.has(snapshot.pid),
       );
-    if (waitingSnapshots.length > 0) {
+    if (waitingSnapshotNeedsFiring) {
       this.schedulePump(0);
       return;
     }
@@ -508,11 +521,81 @@ export class AgentKernelService {
 
   private async runPump(): Promise<void> {
     await this.reconcileSnapshots();
-    const resolvedSyscalls = await drainWaitingAgentSyscalls(this.kernel, this.runtime);
-    if (!resolvedSyscalls) {
-      await this.kernel.tick();
-    }
+    // RATIONALE: Fire pending syscalls (LLM calls, tool calls) as background
+    // workers so they run independently of the pump gate. The pump then ticks all
+    // currently ready processes and exits immediately, releasing pumpPromise.
+    // This means:
+    //  (a) Multiple agents' LLM calls run fully in parallel.
+    //  (b) A new agent that starts while an LLM is in flight gets its own tick
+    //      pump started immediately (pumpPromise is null between tick cycles),
+    //      rather than waiting up to 30 seconds for the slow LLM to finish.
+    this.firePendingSyscalls();
+    await this.tickAllReady();
     await this.reconcileSnapshots();
+  }
+
+  /**
+   * Fire each waiting process's pending syscall as an independent background
+   * task. Skips processes already tracked in activeSyscalls to avoid duplicate
+   * executions when the pump cycles while a slow LLM call is still in-flight.
+   * Each task schedules a new tick pump when it completes so the resolved
+   * process is advanced without delay.
+   */
+  private firePendingSyscalls(): void {
+    const waitingSnapshots = this.kernel
+      .listSnapshots()
+      .filter(
+        (snapshot) =>
+          snapshot.processType === this.runtime.type &&
+          snapshot.status === 'waiting' &&
+          snapshot.pendingSyscall &&
+          !this.activeSyscalls.has(snapshot.pid),
+      );
+    for (const snapshot of waitingSnapshots) {
+      this.activeSyscalls.add(snapshot.pid);
+      void this.runSyscallBackground(snapshot);
+    }
+  }
+
+  private async runSyscallBackground(snapshot: KernelProcessSnapshot): Promise<void> {
+    try {
+      const pendingSyscall = snapshot.pendingSyscall;
+      if (!pendingSyscall) {
+        return;
+      }
+      const state = this.runtime.deserialize(snapshot.state);
+      const resolution = await this.runtime.executePendingSyscall(
+        state,
+        pendingSyscall,
+        Date.now(),
+      );
+      if (!this.kernel.getSnapshot(snapshot.pid)) {
+        return;
+      }
+      await this.kernel.resolveSyscall(snapshot.pid, resolution);
+    } catch (error) {
+      logger.error('Background syscall execution failed', {
+        pid: snapshot.pid,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      this.activeSyscalls.delete(snapshot.pid);
+      // Wake up a tick pump to advance the now-resolved process.
+      this.schedulePump(0);
+    }
+  }
+
+  /**
+   * Advance all currently ready processes one step each until the scheduler
+   * reports idle. The pump gate (pumpPromise) is held only for this fast
+   * synchronous phase, not for slow I/O — those are handled by background
+   * syscall workers (see firePendingSyscalls / runSyscallBackground).
+   */
+  private async tickAllReady(): Promise<void> {
+    let result = await this.kernel.tick();
+    while (result.kind === 'executed') {
+      result = await this.kernel.tick();
+    }
   }
 
   private async reconcileSnapshots(): Promise<void> {

@@ -60,8 +60,7 @@ export function LogsTab() {
 
   useEffect(() => {
     const TOKEN = window.__AF_TOKEN__;
-    const PORT = window.__AF_PORT__;
-    const es = new EventSource(`http://127.0.0.1:${PORT}/api/logs?token=${TOKEN}`);
+    const es = new EventSource(`${window.location.origin}/api/logs?token=${TOKEN}`);
 
     es.onmessage = (e: MessageEvent<string>) => {
       if (pausedRef.current) return;

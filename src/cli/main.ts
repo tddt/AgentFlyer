@@ -11,6 +11,7 @@ import { agentCommand } from './commands/agent.js';
 import { chatCommand } from './commands/chat.js';
 import { configCommand } from './commands/config.js';
 import { federationCommand } from './commands/federation.js';
+import { pluginCommand } from './commands/plugin.js';
 import { gatewayCommand, gatewayStatus, gatewayStop } from './commands/gateway.js';
 import { memoryCommand } from './commands/memory.js';
 import { messageCommand } from './commands/message.js';
@@ -45,6 +46,7 @@ const main = defineCommand({
     memory: memoryCommand,
     federation: federationCommand,
     stats: statsCommand,
+    plugin: pluginCommand,
   },
   run() {
     process.stdout.write(
@@ -65,6 +67,7 @@ const main = defineCommand({
         '  agentflyer memory              — Manage agent memory',
         '  agentflyer federation          — Federation status',
         '  agentflyer stats               — Token usage statistics',
+        '  agentflyer plugin              — Manage plugins',
         '',
         '  Shortcuts: agentflyer start | stop | status | reload | web | chat',
         '',

@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ulid } from 'ulid';
 import type { AgentConfig } from '../../core/config/schema.js';
@@ -80,6 +81,10 @@ interface TaskEntry {
 class MeshTaskStore {
   private readonly filePath: string;
   private tasks = new Map<string, TaskEntry>();
+  // RATIONALE: write-behind debounce — serial write chain prevents concurrent
+  // writeFile calls; drain() lets tests await all pending writes.
+  private pendingWrite = false;
+  private writeChain: Promise<void> = Promise.resolve();
 
   constructor(dataDir: string) {
     mkdirSync(dataDir, { recursive: true });
@@ -102,15 +107,34 @@ class MeshTaskStore {
   }
 
   private save(): void {
-    try {
-      writeFileSync(
-        this.filePath,
-        JSON.stringify(Array.from(this.tasks.values()), null, 2),
-        'utf-8',
-      );
-    } catch (err) {
-      logger.error('Failed to save mesh-tasks.json', { error: String(err) });
-    }
+    // Debounce: coalesce rapid successive mutations into one write per tick.
+    if (this.pendingWrite) return;
+    this.pendingWrite = true;
+    // Chain onto writeChain so writes are serial and drain() is reliable.
+    this.writeChain = this.writeChain.then(async () => {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      this.pendingWrite = false;
+      const data = JSON.stringify(Array.from(this.tasks.values()), null, 2);
+      await writeFile(this.filePath, data, 'utf-8').catch((err: unknown) => {
+        logger.error('Failed to save mesh-tasks.json', { error: String(err) });
+      });
+    });
+  }
+
+  /** Flush in-memory state to disk immediately. Used for startup migration. */
+  flush(): Promise<void> {
+    this.pendingWrite = false; // cancel any queued debounced write
+    const data = JSON.stringify(Array.from(this.tasks.values()), null, 2);
+    const p = writeFile(this.filePath, data, 'utf-8').catch((err: unknown) => {
+      logger.error('Failed to flush mesh-tasks.json', { error: String(err) });
+    });
+    this.writeChain = p; // reset chain so drain() waits for this write
+    return p;
+  }
+
+  /** Wait for all pending deferred saves. Use in tests and graceful shutdown. */
+  drain(): Promise<void> {
+    return this.writeChain;
   }
 
   get(taskId: string): TaskEntry | undefined {
@@ -133,7 +157,7 @@ class MeshTaskStore {
     return Array.from(this.tasks.values());
   }
 
-  normalizeInterrupted(now = Date.now()): void {
+  normalizeInterrupted(now = Date.now()): Promise<void> {
     let mutated = false;
     for (const entry of this.tasks.values()) {
       if (entry.status === 'pending' || entry.status === 'running') {
@@ -144,13 +168,30 @@ class MeshTaskStore {
       }
     }
     if (mutated) {
-      this.save();
+      // RATIONALE: startup recovery must persist synchronously so the next
+      // process load immediately sees the corrected state.
+      return this.flush();
     }
+    return Promise.resolve();
   }
 }
 
 const sharedTaskStores = new Map<string, MeshTaskStore>();
 const restoredTaskStores = new Set<string>();
+// RATIONALE: startup normalisation is async (flush to disk). Callers that need
+// to read the persisted state immediately after createMeshTools() can await the
+// promise stored here before they proceed.
+const meshInitPromises = new Map<string, Promise<void>>();
+
+/** Await the async startup flush for the given dataDir, if any. */
+export function waitForMeshInit(dataDir: string): Promise<void> {
+  return meshInitPromises.get(dataDir) ?? Promise.resolve();
+}
+
+/** Await all pending deferred writes for a given dataDir. Use in tests. */
+export function waitForMeshDrain(dataDir: string): Promise<void> {
+  return sharedTaskStores.get(dataDir)?.drain() ?? Promise.resolve();
+}
 
 // ── Tool factory ────────────────────────────────────────────────────────────
 
@@ -172,7 +213,8 @@ export function createMeshTools(
   const taskStore = store;
   if (!restoredTaskStores.has(dataDir)) {
     restoredTaskStores.add(dataDir);
-    taskStore.normalizeInterrupted();
+    const initPromise = taskStore.normalizeInterrupted();
+    meshInitPromises.set(dataDir, initPromise);
   }
 
   // Build a quick lookup for names/roles
@@ -851,6 +893,48 @@ export function createMeshTools(
     },
   };
 
+  // ── mesh_ping ───────────────────────────────────────────────────────────
+  const meshPing: RegisteredTool = {
+    category: 'mesh',
+    definition: {
+      name: 'mesh_ping',
+      description:
+        'Ping a target agent to verify it is reachable and measure round-trip latency. ' +
+        'Returns a PONG with the agent status (idle/busy) and latency in milliseconds. ' +
+        'Does not start a new LLM turn.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          agent_id: {
+            type: 'string',
+            description: 'ID of the agent to ping.',
+          },
+        },
+        required: ['agent_id'],
+      },
+    },
+    async handler(input) {
+      const { agent_id } = input as { agent_id: string };
+      const t0 = Date.now();
+      const runner = runners.get(agent_id);
+      if (!runner) {
+        const available = Array.from(runners.keys()).join(', ') || 'none';
+        return {
+          isError: true,
+          content: `Agent '${agent_id}' not found. Available agents: ${available}`,
+        };
+      }
+      const cfg = configMap.get(agent_id);
+      const name = cfg?.name ? ` (${cfg.name})` : '';
+      const status = runner.isRunning ? 'busy' : 'idle';
+      const latencyMs = Date.now() - t0;
+      return {
+        isError: false,
+        content: `PONG ${agent_id}${name} — status: ${status}, latency: ${latencyMs}ms`,
+      };
+    },
+  };
+
   return [
     meshList,
     meshSend,
@@ -860,6 +944,7 @@ export function createMeshTools(
     meshDiscuss,
     meshCancel,
     meshPlan,
+    meshPing,
   ];
 }
 

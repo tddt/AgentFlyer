@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { Sidebar } from './components/Sidebar.js';
 import { Toast } from './components/Toast.js';
 import { LocaleProvider } from './context/i18n.js';
@@ -84,6 +84,8 @@ export function App() {
   const [chatAgentId, setChatAgentId] = useState('');
   const [chatThreadKey, setChatThreadKey] = useState('');
   const [chatRecoveryContext, setChatRecoveryContext] = useState<ChatRecoveryContext | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const overlayRef = useRef<HTMLDivElement>(null);
   const toastState = useToastState();
   const ActiveTab = TAB_MAP[activeTab];
 
@@ -153,16 +155,49 @@ export function App() {
         ) : (
           <div
             className="flex min-h-screen text-slate-200"
-            style={{ backgroundColor: '#07090f', fontFamily: "'Outfit', system-ui, sans-serif" }}
+            style={{ backgroundColor: 'var(--af-bg)', fontFamily: "'Outfit', system-ui, sans-serif" }}
           >
-            <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
+            {/* Mobile overlay backdrop */}
+            {sidebarOpen && (
+              <div
+                ref={overlayRef}
+                className="fixed inset-0 z-20 bg-black/50 md:hidden"
+                onClick={() => setSidebarOpen(false)}
+              />
+            )}
+            {/* Sidebar — always visible on md+, slide-in overlay on mobile */}
+            <div
+              className={`fixed md:static z-30 h-full md:h-auto transform transition-transform duration-300 md:translate-x-0 ${
+                sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+              }`}
+            >
+              <Sidebar
+                activeTab={activeTab}
+                setActiveTab={(tab) => { setActiveTab(tab); setSidebarOpen(false); }}
+              />
+            </div>
             <main
-              className="flex-1 p-6 overflow-auto"
+              className="flex-1 p-4 md:p-6 overflow-auto min-w-0"
               style={{
                 background:
                   'radial-gradient(ellipse 80% 50% at 20% -10%, rgba(99,102,241,0.06) 0%, transparent 60%), radial-gradient(ellipse 60% 40% at 80% 100%, rgba(139,92,246,0.04) 0%, transparent 55%)',
               }}
             >
+              {/* Mobile top bar */}
+              <div className="flex items-center gap-3 mb-4 md:hidden">
+                <button
+                  onClick={() => setSidebarOpen(true)}
+                  className="p-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-white/[0.06] transition-colors"
+                  aria-label="Open sidebar"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="3" y1="6" x2="21" y2="6" />
+                    <line x1="3" y1="12" x2="21" y2="12" />
+                    <line x1="3" y1="18" x2="21" y2="18" />
+                  </svg>
+                </button>
+                <span className="text-[14px] font-semibold text-slate-100">AgentFlyer</span>
+              </div>
               <Suspense fallback={<Spinner />}>
                 {activeTab === 'overview' ? (
                   <OverviewTab onNavigate={handleNavigate} />

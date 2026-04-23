@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useTheme } from '../hooks/useTheme.js';
 type TabId =
   | 'overview'
   | 'agents'
@@ -282,13 +283,14 @@ interface Props {
 export function Sidebar({ activeTab, setActiveTab }: Props) {
   const { activeRun, cancel } = useWorkflowRun();
   const { t, locale, setLocale } = useLocale();
+  const [theme, toggleTheme] = useTheme();
   const isRunning = activeRun?.run.status === 'running';
   return (
     <aside
       className="flex flex-col w-52 shrink-0 h-screen sticky top-0"
       style={{
-        background: 'linear-gradient(180deg, #0c0f1a 0%, #07090f 100%)',
-        borderRight: '1px solid rgba(255,255,255,0.055)',
+        background: 'linear-gradient(180deg, var(--af-sidebar-from) 0%, var(--af-sidebar-to) 100%)',
+        borderRight: '1px solid var(--af-border)',
       }}
     >
       {/* ── Logo ─────────────────────────────────────────────────── */}
@@ -399,7 +401,7 @@ export function Sidebar({ activeTab, setActiveTab }: Props) {
       {/* ── Gateway status ────────────────────────────────────────── */}
       <div
         className="px-5 py-4 flex items-center gap-2.5"
-        style={{ borderTop: '1px solid rgba(255,255,255,0.055)' }}
+        style={{ borderTop: '1px solid var(--af-border)' }}
       >
         <span className="relative flex h-2 w-2 shrink-0">
           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-50" />
@@ -407,7 +409,7 @@ export function Sidebar({ activeTab, setActiveTab }: Props) {
         </span>
         <span className="text-[11px] text-slate-600">{t('sidebar.gatewayConnected')}</span>
       </div>
-      {/* ── Language toggle ───────────────────────────────────────── */}
+      {/* ── Language + Theme toggles ─────────────────────────────── */}
       <div
         className="px-5 pb-4 flex items-center gap-1"
       >
@@ -431,6 +433,33 @@ export function Sidebar({ activeTab, setActiveTab }: Props) {
           }`}
         >
           中文
+        </button>
+        <span className="flex-1" />
+        {/* Theme toggle */}
+        <button
+          onClick={toggleTheme}
+          className="p-1 rounded text-slate-600 hover:text-slate-400 transition-colors"
+          title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+        >
+          {theme === 'dark' ? (
+            /* Sun icon */
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="5" />
+              <line x1="12" y1="1" x2="12" y2="3" />
+              <line x1="12" y1="21" x2="12" y2="23" />
+              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+              <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+              <line x1="1" y1="12" x2="3" y2="12" />
+              <line x1="21" y1="12" x2="23" y2="12" />
+              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+              <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+            </svg>
+          ) : (
+            /* Moon icon */
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+            </svg>
+          )}
         </button>
       </div>
     </aside>

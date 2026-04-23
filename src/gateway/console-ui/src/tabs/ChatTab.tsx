@@ -1413,11 +1413,10 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
     setBusy(true);
 
     const TOKEN = window.__AF_TOKEN__;
-    const PORT = window.__AF_PORT__;
 
     try {
       const targetAgentId = resolveMentionTarget(text, agents, agent.agentId);
-      const res = await fetch(`http://127.0.0.1:${PORT}/chat`, {
+      const res = await fetch(`${window.location.origin}/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2070,8 +2069,7 @@ export function ChatTab({
 
   useEffect(() => {
     const token = window.__AF_TOKEN__;
-    const port = window.__AF_PORT__;
-    const es = new EventSource(`http://127.0.0.1:${port}/api/inbox?token=${token}`);
+    const es = new EventSource(`${window.location.origin}/api/inbox?token=${token}`);
     es.onmessage = (event: MessageEvent<string>) => {
       try {
         const data = JSON.parse(event.data) as InboxEvent;

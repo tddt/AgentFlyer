@@ -670,17 +670,44 @@ export async function startGateway(
    * omit (or pass undefined) to reload all agents and sync additions/removals.
    */
   async function reloadAgents(agentId?: string): Promise<{ reloaded: string[] }> {
+    const prevConfig = state.config;
     const newConfig = loadConfig(configFilePath);
-    await hooks.emit('before:reload', { runners });
-    const newMcpRegistry = await McpRegistry.create(newConfig.mcp?.servers ?? [], {
-      retryPolicy: resolveGatewayMcpReconnectPolicy(newConfig),
-      historyRecorder: mcpHistoryRecorder,
-      historyTrigger: 'reload',
-    });
 
-    await state.mcpRegistry?.close().catch(() => undefined);
+    // ── Config diff detection: only rebuild the subsystems that changed ──
+    const mcpChanged =
+      JSON.stringify(prevConfig.mcp) !== JSON.stringify(newConfig.mcp);
+    const agentChanged = (id: string) => {
+      const prev = prevConfig.agents.find((a) => a.id === id);
+      const next = newConfig.agents.find((a) => a.id === id);
+      return JSON.stringify(prev) !== JSON.stringify(next);
+    };
+    const agentsChanged =
+      !agentId &&
+      (prevConfig.agents.length !== newConfig.agents.length ||
+        newConfig.agents.some((a) => agentChanged(a.id)));
+    const shouldRebuildMcp = mcpChanged || agentsChanged || !!agentId;
+    const shouldRebuildAgents = agentsChanged || !!agentId || agentChanged(agentId ?? '');
+
+    if (!shouldRebuildMcp && !shouldRebuildAgents) {
+      // Non-agent, non-MCP changes (log level, routing, channels…) — update state and return
+      state.config = newConfig;
+      logger.info('Config diff: no agent/MCP changes — hot-updating state only');
+      return { reloaded: [] };
+    }
+
+    await hooks.emit('before:reload', { runners });
+
+    if (shouldRebuildMcp) {
+      const newMcpRegistry = await McpRegistry.create(newConfig.mcp?.servers ?? [], {
+        retryPolicy: resolveGatewayMcpReconnectPolicy(newConfig),
+        historyRecorder: mcpHistoryRecorder,
+        historyTrigger: 'reload',
+      });
+      await state.mcpRegistry?.close().catch(() => undefined);
+      state.mcpRegistry = newMcpRegistry;
+    }
+
     state.config = newConfig;
-    state.mcpRegistry = newMcpRegistry;
     const result = await rebuildConfiguredAgents({
       nextConfig: newConfig,
       agentId,
@@ -689,7 +716,7 @@ export async function startGateway(
     });
 
     await hooks.emit('after:reload', { runners });
-    logger.info('Reload complete', result);
+    logger.info('Reload complete', { ...result, mcpRebuilt: shouldRebuildMcp });
     return result;
   }
 
