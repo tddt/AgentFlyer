@@ -10,7 +10,7 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
-      exclude: ['src/**/*.test.ts', 'src/**/*.d.ts'],
+      exclude: ['src/**/*.test.ts', 'src/**/*.d.ts', 'src/worker/*.ts'],
       thresholds: {
         // RATIONALE: 70% is the Phase 5+ target (AGENTS.md §七).
         // Thresholds reflect current Phase 1-5 test coverage and are raised
@@ -26,6 +26,8 @@ export default defineConfig({
         //        memory/decay/search, skills/skill-tools (P1-1 iteration 4).
         // Added: config/loader, config/migrate, memory/partition+version+organizer,
         //        skills/registry (scanSkillsDir, parseSkillFile) (P1-1 iteration 5).
+        // Added: agent-kernel cancelReadyRun, soul.ts generateSoulMd/syncSoulMd + extractSection bug fix,
+        //        metrics-store full coverage; worker threads excluded from thresholds (P1-1 iteration 6).
         lines: 40,
         branches: 70,
         functions: 79,

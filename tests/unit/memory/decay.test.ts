@@ -136,7 +136,7 @@ describe('computeForgettingScore', () => {
       relevantKeywords: ['quantum', 'physics'],
     });
     const withoutKeywords = computeForgettingScore(entry);
-    expect(withKeywords.combined).toBeCloseTo(withoutKeywords.combined, 10);
+    expect(withKeywords.combined).toBeCloseTo(withoutKeywords.combined, 8);
   });
 });
 

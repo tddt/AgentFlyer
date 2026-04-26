@@ -66,6 +66,7 @@ const mockKernel = {
   resumeTurn: vi.fn(),
   reserveQueuedTurn: vi.fn(),
   startTurn: vi.fn(),
+  waitForRun: vi.fn(),
   initialize: vi.fn(),
 };
 
@@ -128,6 +129,7 @@ describe('dispatchRpc', () => {
     mockKernel.resumeTurn.mockResolvedValue({ runId: 'run-1', phase: 'done' });
     mockKernel.reserveQueuedTurn.mockResolvedValue({ runId: 'run-queued-1' });
     mockKernel.startTurn.mockResolvedValue({ runId: 'run-1', phase: 'pending' });
+    mockKernel.waitForRun.mockResolvedValue({ text: 'mock reply', inputTokens: 10, outputTokens: 5 });
   });
 
   // ── gateway.ping ──────────────────────────────────────────────────────────
@@ -270,7 +272,8 @@ describe('dispatchRpc', () => {
   // ── agent.chat ────────────────────────────────────────────────────────────
 
   it('agent.chat returns reply from kernel executeTurn', async () => {
-    mockKernel.executeTurn.mockResolvedValue({ text: ' Hello! ' });
+    mockKernel.startTurn.mockResolvedValue({ runId: 'run-chat-1' });
+    mockKernel.waitForRun.mockResolvedValue({ text: ' Hello! ' });
     const ctx = makeCtx({
       runners: new Map([['main', makeRunner() as never]]),
     });

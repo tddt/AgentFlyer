@@ -1133,6 +1133,13 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
           const cancelled = await agentKernel.cancelQueuedTurn(runId);
           return { id, result: { cancelled: Boolean(cancelled), runId } };
         }
+        if (current.processStatus === 'ready') {
+          // RATIONALE: startTurn may have been called before agent.cancel arrived
+          // (the queue snapshot.set is synchronous), so the run is 'ready' but not
+          // yet pumped. Cancel it here before any LLM call can happen.
+          const cancelled = agentKernel.cancelReadyRun(runId);
+          return { id, result: { cancelled: Boolean(cancelled), runId } };
+        }
         return {
           id,
           result: {

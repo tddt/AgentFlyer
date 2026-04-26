@@ -229,6 +229,221 @@ function colorToHex(c: { rgb?: string; indexed?: number } | undefined): string |
   return `#${c.rgb.length === 8 ? c.rgb.slice(2) : c.rgb}`;
 }
 
+type FormulaVal = number | string | boolean | null;
+
+// Minimal recursive-descent formula evaluator.
+// Supports arithmetic, comparisons, string literals, cell references,
+// and common functions: IF, SUM, ROUND, INT, ABS, MAX, MIN, AND, OR, NOT,
+// IFERROR, CONCAT/CONCATENATE, LEN, TRIM, UPPER, LOWER, LEFT.
+function evalXlsxFormula(
+  formula: string,
+  getCellVal: (addr: string) => FormulaVal,
+): FormulaVal {
+  const src = formula.trim();
+  let pos = 0;
+
+  function skipWs(): void {
+    while (pos < src.length && src[pos] === ' ') pos++;
+  }
+
+  function parseExpr(): FormulaVal {
+    return parseConcat();
+  }
+
+  function parseConcat(): FormulaVal {
+    let left = parseCompare();
+    while (true) {
+      skipWs();
+      if (src[pos] !== '&') break;
+      pos++;
+      const right = parseCompare();
+      left = String(left ?? '') + String(right ?? '');
+    }
+    return left;
+  }
+
+  function parseCompare(): FormulaVal {
+    const left = parseAddSub();
+    skipWs();
+    const two = src.slice(pos, pos + 2);
+    if (two === '>=' || two === '<=' || two === '<>') {
+      pos += 2;
+      const right = parseAddSub();
+      if (two === '>=') return Number(left) >= Number(right);
+      if (two === '<=') return Number(left) <= Number(right);
+      return left !== right;
+    }
+    const one = src[pos];
+    if (one === '>') { pos++; const r = parseAddSub(); return Number(left) > Number(r); }
+    if (one === '<') { pos++; const r = parseAddSub(); return Number(left) < Number(r); }
+    if (one === '=') { pos++; const r = parseAddSub(); return left == r; }
+    return left;
+  }
+
+  function parseAddSub(): FormulaVal {
+    let result = parseMulDiv();
+    while (true) {
+      skipWs();
+      const op = src[pos];
+      if (op !== '+' && op !== '-') break;
+      pos++;
+      const right = parseMulDiv();
+      result = op === '+' ? Number(result) + Number(right) : Number(result) - Number(right);
+    }
+    return result;
+  }
+
+  function parseMulDiv(): FormulaVal {
+    let result = parseUnary();
+    while (true) {
+      skipWs();
+      const op = src[pos];
+      if (op !== '*' && op !== '/') break;
+      pos++;
+      const right = parseUnary();
+      if (op === '/') {
+        const r = Number(right);
+        result = r === 0 ? null : Number(result) / r;
+      } else {
+        result = Number(result) * Number(right);
+      }
+    }
+    return result;
+  }
+
+  function parseUnary(): FormulaVal {
+    skipWs();
+    if (src[pos] === '-') { pos++; return -Number(parseAtom()); }
+    if (src[pos] === '+') { pos++; return Number(parseAtom()); }
+    return parseAtom();
+  }
+
+  function parseAtom(): FormulaVal {
+    skipWs();
+    // Parenthesised expression
+    if (src[pos] === '(') {
+      pos++;
+      const v = parseExpr();
+      skipWs();
+      if (src[pos] === ')') pos++;
+      return v;
+    }
+    // String literal
+    if (src[pos] === '"') {
+      pos++;
+      let s = '';
+      while (pos < src.length) {
+        if (src[pos] === '"') {
+          pos++;
+          if (src[pos] === '"') { s += '"'; pos++; } // escaped quote
+          else break;
+        } else {
+          s += src[pos++];
+        }
+      }
+      return s;
+    }
+    // Number literal
+    if (/[0-9]/.test(src[pos] ?? '')) {
+      let n = '';
+      while (pos < src.length && /[0-9.]/.test(src[pos])) n += src[pos++];
+      if (src[pos] === 'E' || src[pos] === 'e') {
+        n += src[pos++];
+        if (src[pos] === '+' || src[pos] === '-') n += src[pos++];
+        while (/[0-9]/.test(src[pos] ?? '')) n += src[pos++];
+      }
+      return parseFloat(n);
+    }
+    // Identifier: cell reference, function call, or keyword
+    if (/[A-Za-z_]/.test(src[pos] ?? '')) {
+      const start = pos;
+      while (pos < src.length && /[A-Za-z_]/.test(src[pos])) pos++;
+      const lettersEnd = pos;
+      while (pos < src.length && /[0-9]/.test(src[pos])) pos++;
+      const token = src.slice(start, pos);
+      skipWs();
+      // Cell reference: letters followed by digits, no opening paren
+      if (src[pos] !== '(' && /^[A-Z]+[0-9]+$/i.test(token)) {
+        // Handle range reference (e.g. A1:B10) — skip past the end-cell; ranges are not evaluatable here
+        if (src[pos] === ':') {
+          pos++; // skip ':'
+          while (pos < src.length && /[A-Za-z]/.test(src[pos])) pos++; // skip end col letters
+          while (pos < src.length && /[0-9]/.test(src[pos])) pos++; // skip end row digits
+          return null;
+        }
+        return getCellVal(token.toUpperCase());
+      }
+      // Function call
+      if (src[pos] === '(') {
+        pos++;
+        const args: FormulaVal[] = [];
+        while (pos < src.length) {
+          skipWs();
+          if (src[pos] === ')') { pos++; break; }
+          const prevPos = pos;
+          args.push(parseExpr());
+          skipWs();
+          if (src[pos] === ',') { pos++; continue; }
+          // Safety: if parseExpr made no progress and we're not at ')' or ',',
+          // advance one char to prevent an infinite loop on unexpected chars (e.g. ':')
+          if (pos === prevPos) pos++;
+        }
+        const fname = token.toUpperCase();
+        if (fname === 'IF') return args[0] ? (args[1] ?? null) : (args[2] ?? null);
+        if (fname === 'SUM') return args.reduce<number>((a, v) => a + Number(v), 0);
+        if (fname === 'ROUND') {
+          const digits = Number(args[1] ?? 0);
+          return Math.round(Number(args[0]) * 10 ** digits) / 10 ** digits;
+        }
+        if (fname === 'INT') return Math.floor(Number(args[0]));
+        if (fname === 'ABS') return Math.abs(Number(args[0]));
+        if (fname === 'MAX') return Math.max(...args.map(Number));
+        if (fname === 'MIN') return Math.min(...args.map(Number));
+        if (fname === 'AND') return args.every(Boolean);
+        if (fname === 'OR') return args.some(Boolean);
+        if (fname === 'NOT') return !args[0];
+        if (fname === 'IFERROR') return args[0] !== null ? args[0] : (args[1] ?? null);
+        if (fname === 'CONCATENATE' || fname === 'CONCAT') return args.map(v => String(v ?? '')).join('');
+        if (fname === 'LEN') return String(args[0] ?? '').length;
+        if (fname === 'TRIM') return String(args[0] ?? '').trim();
+        if (fname === 'UPPER') return String(args[0] ?? '').toUpperCase();
+        if (fname === 'LOWER') return String(args[0] ?? '').toLowerCase();
+        if (fname === 'LEFT') return String(args[0] ?? '').slice(0, Number(args[1] ?? 1));
+        if (fname === 'RIGHT') return String(args[0] ?? '').slice(-Number(args[1] ?? 1));
+        if (fname === 'MID') return String(args[0] ?? '').slice(Number(args[1] ?? 1) - 1, Number(args[1] ?? 1) - 1 + Number(args[2] ?? 1));
+        if (fname === 'TEXT') return String(args[0] ?? '');
+        if (fname === 'VALUE') return Number(args[0]);
+        if (fname === 'SQRT') return Math.sqrt(Number(args[0]));
+        if (fname === 'POWER') return Math.pow(Number(args[0]), Number(args[1]));
+        if (fname === 'MOD') return Number(args[0]) % Number(args[1]);
+        if (fname === 'COUNTA') return args.filter(v => v !== null && v !== '').length;
+        if (fname === 'COUNT') return args.filter(v => typeof v === 'number').length;
+        if (fname === 'AVERAGE') {
+          const nums = args.filter(v => typeof v === 'number') as number[];
+          return nums.length ? nums.reduce((a, v) => a + v, 0) / nums.length : null;
+        }
+        // Unknown function — return null rather than crash
+        return null;
+      }
+      // Reset to just letters if digits were consumed but it's not a cell ref or function
+      pos = lettersEnd;
+      const kw = token.slice(0, lettersEnd - start).toUpperCase();
+      if (kw === 'TRUE') return true;
+      if (kw === 'FALSE') return false;
+      return null;
+    }
+    // Unrecognized character — advance to prevent infinite loops in outer loops
+    pos++;
+    return null;
+  }
+
+  try {
+    return parseExpr();
+  } catch {
+    return null;
+  }
+}
+
 function renderXlsxSheet(XLSX: XlsxModule, sheet: XlsxSheets[string]): string {
   if (!sheet['!ref']) {
     return '<html><body style="padding:16px;color:#888;font-family:sans-serif">Empty sheet</body></html>';
@@ -241,6 +456,46 @@ function renderXlsxSheet(XLSX: XlsxModule, sheet: XlsxSheets[string]): string {
     (sheet['!cols'] as Array<{ wch?: number; width?: number; wpx?: number }> | undefined) ?? [];
   const rowInfos =
     (sheet['!rows'] as Array<{ hpt?: number; hpx?: number } | undefined> | undefined) ?? [];
+
+  // Pre-compute formula cells (t='z' = uncalculated stub; file stores v=0 as default cached value)
+  // We do a multi-pass evaluation so formulas that reference other formula cells resolve correctly.
+  const formulaComputed = new Map<string, FormulaVal>();
+  const getCellVal = (addr: string): FormulaVal => {
+    const computed = formulaComputed.get(addr);
+    if (computed !== undefined) return computed;
+    const c = sheet[addr] as XlsxCellObject | undefined;
+    if (!c) return null;
+    // Prefer Excel's pre-formatted string for non-formula cells
+    if (typeof c.w === 'string' && c.w !== '') {
+      const n = Number(c.w.replace(/,/g, ''));
+      return isNaN(n) ? c.w : n;
+    }
+    if (typeof c.v === 'number') return c.v;
+    if (typeof c.v === 'string') return c.v;
+    if (typeof c.v === 'boolean') return c.v;
+    return null;
+  };
+  // Collect all formula cells in range order
+  const allFormulaCells: string[] = [];
+  {
+    const r = XLSX.utils.decode_range(sheet['!ref']!);
+    for (let R = r.s.r; R <= r.e.r; R++) {
+      for (let C = r.s.c; C <= r.e.c; C++) {
+        const a = XLSX.utils.encode_cell({ r: R, c: C });
+        const ce = sheet[a] as XlsxCellObject | undefined;
+        if (ce?.f) allFormulaCells.push(a);
+      }
+    }
+  }
+  // Three passes handle chains of dependent formulas
+  for (let pass = 0; pass < 3; pass++) {
+    for (const addr of allFormulaCells) {
+      const ce = sheet[addr] as XlsxCellObject;
+      if (!ce.f) continue;
+      const result = evalXlsxFormula(ce.f, getCellVal);
+      if (result !== null) formulaComputed.set(addr, result);
+    }
+  }
 
   // Build merge map: top-left cell → span; covered cells in skipSet
   const skipSet = new Set<string>();
@@ -347,7 +602,16 @@ function renderXlsxSheet(XLSX: XlsxModule, sheet: XlsxSheets[string]): string {
       // Only fall back when cell.w is absent (undefined) entirely.
       let value = '';
       if (cell) {
-        if (typeof cell.w === 'string') {
+        // For formula cells (t='z'), use our client-side evaluated result first
+        const computed = formulaComputed.get(addr);
+        if (computed !== undefined && computed !== null) {
+          if (typeof computed === 'number') {
+            // Trim trailing zeros but keep up to 4 decimal places
+            value = Number.isInteger(computed) ? String(computed) : parseFloat(computed.toFixed(4)).toString();
+          } else {
+            value = String(computed);
+          }
+        } else if (typeof cell.w === 'string') {
           // cell.w defined (even ''); trust Excel's own formatted display
           value = cell.w;
         } else if (cell.t === 'b') {

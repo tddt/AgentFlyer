@@ -20,7 +20,11 @@ import type { AgentConfig } from '../../core/config/schema.js';
  */
 function extractSection(md: string, header: string): string | null {
   const escaped = header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const pattern = new RegExp(`^## ${escaped}[ \t]*\r?\n([\\s\\S]*?)(?=\n## |$)`, 'm');
+  // RATIONALE: Do NOT use the 'm' flag — with 'm', '$' matches end-of-line
+  // (before every '\n'), causing the lazy capture to stop at the first blank
+  // line. Without 'm', '$' only matches end-of-string, so the capture runs
+  // until the next '## ' header or the actual end of the document.
+  const pattern = new RegExp(`(?:^|\\n)## ${escaped}[ \\t]*\\r?\\n([\\s\\S]*?)(?=\\n## |$)`);
   const match = md.match(pattern);
   // match[1] is the capture group; present whenever match is non-null
   return match ? (match[1] ?? '').trimEnd() : null;

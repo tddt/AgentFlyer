@@ -289,6 +289,40 @@ export class AgentKernelService {
   }
 
   /**
+   * Cancel a kernel process that is in 'ready' state (created by startTurn but
+   * not yet pumped). Marks the run as AGENT_TURN_CANCELLED and deletes the
+   * kernel process so the pump never executes it.
+   *
+   * Returns the cancelled record, or null if the run is not in 'ready' state.
+   */
+  cancelReadyRun(runId: string): AgentKernelRunRecord | null {
+    const pid = asProcessId(runId);
+    const snapshot = this.kernel.getSnapshot(pid);
+    if (!snapshot || snapshot.status !== 'ready') {
+      return null;
+    }
+    const cancelledRecord: AgentKernelRunRecord = {
+      runId,
+      agentId: snapshot.metadata.agentId ?? '',
+      threadKey: '',
+      processStatus: 'error',
+      phase: 'error',
+      createdAt: snapshot.createdAt,
+      updatedAt: Date.now(),
+      error: {
+        code: 'AGENT_TURN_CANCELLED',
+        message: 'Queued run was cancelled before kernel start.',
+        retryable: false,
+      },
+    };
+    this.rememberRunRecord(cancelledRecord);
+    void this.kernel.deleteProcess(pid).catch(() => {});
+    this.completeRun(runId, { ok: false, message: 'Run cancelled before execution.' });
+    this.activeSyscalls.delete(pid);
+    return cancelledRecord;
+  }
+
+  /**
    * Force-complete a stuck run with a timeout error, releasing all waiters
    * and unblocking the per-agent queue.
    */
