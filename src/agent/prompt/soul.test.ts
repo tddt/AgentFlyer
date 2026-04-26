@@ -15,7 +15,8 @@ function baseCfg(overrides: Partial<AgentConfig> = {}): AgentConfig {
       triggers: [],
     },
     owners: [],
-    tools: { deny: [], approval: [] },
+    mentionAliases: [],
+    tools: { deny: [], approval: [], maxRounds: 60 },
     persona: { language: 'zh-CN', outputDir: 'output' },
     ...overrides,
   };
@@ -39,7 +40,7 @@ describe('buildPersonaContent', () => {
   });
 
   it('lists allowed tools when an allow list is provided', () => {
-    const cfg = baseCfg({ tools: { allow: ['bash', 'fs_read'], deny: [], approval: [] } });
+    const cfg = baseCfg({ tools: { allow: ['bash', 'fs_read'], deny: [], approval: [], maxRounds: 60 } });
     const content = buildPersonaContent(cfg);
     expect(content).toContain('bash');
     expect(content).toContain('fs_read');
@@ -48,7 +49,7 @@ describe('buildPersonaContent', () => {
   it('appends skill tools to allow list when skills are present', () => {
     const cfg = baseCfg({
       skills: ['summarise'],
-      tools: { allow: ['bash'], deny: [], approval: [] },
+      tools: { allow: ['bash'], deny: [], approval: [], maxRounds: 60 },
     });
     const content = buildPersonaContent(cfg);
     expect(content).toContain('skill_list');
@@ -75,7 +76,7 @@ describe('generateSoulMd', () => {
   it('includes mesh configuration', () => {
     const cfg = baseCfg({
       mesh: {
-        role: 'orchestrator',
+        role: 'coordinator',
         capabilities: ['planning'],
         accepts: ['query'],
         visibility: 'private',
@@ -83,7 +84,7 @@ describe('generateSoulMd', () => {
       },
     });
     const md = generateSoulMd(cfg);
-    expect(md).toContain('orchestrator');
+    expect(md).toContain('coordinator');
     expect(md).toContain('planning');
     expect(md).toContain('分析');
   });
@@ -94,7 +95,7 @@ describe('generateSoulMd', () => {
   });
 
   it('includes deny list when configured', () => {
-    const cfg = baseCfg({ tools: { deny: ['dangerous_tool'], approval: [] } });
+    const cfg = baseCfg({ tools: { deny: ['dangerous_tool'], approval: [], maxRounds: 60 } });
     const md = generateSoulMd(cfg);
     expect(md).toContain('dangerous_tool');
   });
@@ -141,9 +142,9 @@ ignored
 
   it('regenerates machine-managed sections from new config', () => {
     const existing = `# OldName — Soul File\n## Description\nOld desc\n`;
-    const cfg = baseCfg({ name: 'NewName', mesh: { role: 'orchestrator', capabilities: [], accepts: [], visibility: 'public', triggers: [] } });
+    const cfg = baseCfg({ name: 'NewName', mesh: { role: 'coordinator', capabilities: [], accepts: [], visibility: 'public', triggers: [] } });
     const md = syncSoulMd(cfg, existing);
     expect(md).toContain('NewName');
-    expect(md).toContain('orchestrator');
+    expect(md).toContain('coordinator');
   });
 });

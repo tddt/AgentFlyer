@@ -2020,11 +2020,15 @@ function normalizeStepForType(step: WorkflowStep, nextType: StepType): WorkflowS
 const inputCls =
   'rounded-lg bg-slate-900/70 ring-1 ring-slate-700 px-2 py-1.5 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-indigo-500';
 
-function describeGraphDiagnostic(diagnostic: WorkflowGraphDiagnostic): string {
+function describeGraphDiagnostic(diagnostic: WorkflowGraphDiagnostic, locale: Locale = 'zh'): string {
   if (diagnostic.kind === 'cycle') {
-    return `检测到循环路径：${diagnostic.path.join(' → ')}`;
+    return locale === 'zh'
+      ? `检测到循环路径：${diagnostic.path.join(' → ')}`
+      : `Cycle detected: ${diagnostic.path.join(' → ')}`;
   }
-  return `存在不可达步骤：${diagnostic.stepIds.join(', ')}`;
+  return locale === 'zh'
+    ? `存在不可达步骤：${diagnostic.stepIds.join(', ')}`
+    : `Unreachable steps: ${diagnostic.stepIds.join(', ')}`;
 }
 
 function getDiagnosticStepIds(
@@ -2044,6 +2048,7 @@ function getDiagnosticStepIds(
 
 function collectStepIssueMap(
   diagnosis: WorkflowDiagnoseResult | null,
+  locale: Locale = 'zh',
 ): Record<string, string[]> {
   if (!diagnosis) return {};
   const issueMap: Record<string, string[]> = {};
@@ -2063,7 +2068,7 @@ function collectStepIssueMap(
   }
 
   for (const diagnostic of diagnosis.graphDiagnostics) {
-    const summary = describeGraphDiagnostic(diagnostic);
+    const summary = describeGraphDiagnostic(diagnostic, locale);
     for (const stepId of getDiagnosticStepIds(diagnostic)) {
       addIssue(stepId, summary);
     }
@@ -3182,6 +3187,26 @@ export function WorkflowEditor({
           issuePending: '{count} issues pending',
           currentStepEmpty: 'This step is not configured enough yet. Continue filling fields below.',
         };
+  const diagnosisText =
+    locale === 'zh'
+      ? {
+          title: '工作流诊断',
+          subtitle: '保存路径不受影响，这里展示的是实时预诊断结果。',
+          loading: '诊断中…',
+          stepPrefix: '步骤',
+          healthy: '当前工作流结构诊断正常。',
+          save: '保存修改',
+          create: '创建工作流',
+        }
+      : {
+          title: 'Workflow Diagnostics',
+          subtitle: 'Save is not affected. This panel shows live pre-diagnostics.',
+          loading: 'Diagnosing…',
+          stepPrefix: 'Step',
+          healthy: 'Workflow structure looks healthy.',
+          save: 'Save Changes',
+          create: 'Create Workflow',
+        };
   const [name, setName] = useState(workflow?.name ?? '');
   const [description, setDescription] = useState(workflow?.description ?? '');
   const [steps, setSteps] = useState<WorkflowStep[]>(
@@ -3245,7 +3270,7 @@ export function WorkflowEditor({
   const graphZoomRef = useRef(graphZoom);
   graphZoomRef.current = graphZoom;
 
-  const stepIssueMap = useMemo(() => collectStepIssueMap(diagnosis), [diagnosis]);
+  const stepIssueMap = useMemo(() => collectStepIssueMap(diagnosis, locale), [diagnosis, locale]);
   const workflowIssueMessages = useMemo(() => collectWorkflowIssueMessages(diagnosis), [diagnosis]);
   const issueStepCount = Object.keys(stepIssueMap).length;
   const selectedStep = useMemo(
@@ -5363,13 +5388,13 @@ export function WorkflowEditor({
                   diagnosisError || diagnosis?.validationError ? 'text-red-300' : 'text-amber-300'
                 }`}
               >
-                工作流诊断
+                {diagnosisText.title}
               </div>
               <div className="text-xs text-slate-500 mt-0.5">
-                保存路径不受影响，这里展示的是实时预诊断结果。
+                {diagnosisText.subtitle}
               </div>
             </div>
-            {diagnosisLoading && <span className="text-xs text-slate-400">诊断中…</span>}
+            {diagnosisLoading && <span className="text-xs text-slate-400">{diagnosisText.loading}</span>}
           </div>
 
           {diagnosisError && <div className="text-xs text-red-400">{diagnosisError}</div>}
@@ -5409,7 +5434,7 @@ export function WorkflowEditor({
                       diagnostic.kind === 'step-validation' ? 'text-red-300' : 'text-amber-300'
                     }`}
                   >
-                    步骤 {diagnostic.stepId}
+                    {diagnosisText.stepPrefix} {diagnostic.stepId}
                   </span>
                   {diagnostic.message}
                 </button>
@@ -5421,7 +5446,7 @@ export function WorkflowEditor({
                   key={`${diagnostic.kind}:${index}`}
                   className="text-xs text-slate-300 rounded-lg bg-slate-900/40 px-3 py-2 flex flex-col gap-2"
                 >
-                  <div>{describeGraphDiagnostic(diagnostic)}</div>
+                  <div>{describeGraphDiagnostic(diagnostic, locale)}</div>
                   <div className="flex flex-wrap gap-2">
                     {getDiagnosticStepIds(diagnostic).map((stepId) => (
                       <button
@@ -5444,14 +5469,14 @@ export function WorkflowEditor({
             diagnosis.validationDiagnostics.length === 0 &&
             diagnosis.graphDiagnostics.length === 0 &&
             !diagnosisLoading && (
-            <div className="text-xs text-emerald-400">当前工作流结构诊断正常。</div>
+            <div className="text-xs text-emerald-400">{diagnosisText.healthy}</div>
           )}
         </div>
       )}
 
       <div className="flex justify-end">
         <Button size="sm" variant="primary" onClick={handleSave}>
-          {workflow ? '保存修改' : '创建工作流'}
+          {workflow ? diagnosisText.save : diagnosisText.create}
         </Button>
       </div>
     </div>

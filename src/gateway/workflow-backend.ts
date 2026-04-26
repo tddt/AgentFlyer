@@ -899,6 +899,25 @@ export function diagnoseWorkflowValidation(
         matchedTerminalBranch = true;
       }
     }
+
+    if (type === 'condition') {
+      const stepBranches = step.branches ?? [];
+      if (stepBranches.length === 0) {
+        diagnostics.push(
+          stepAdvisoryDiagnostic(
+            step.id,
+            `condition step '${step.id}' defines no branches; all executions will fall through to the next step`,
+          ),
+        );
+      } else if (!matchedTerminalBranch) {
+        diagnostics.push(
+          stepAdvisoryDiagnostic(
+            step.id,
+            `condition step '${step.id}' has no default fallback branch (guaranteed-match expression); if no branch matches at runtime, execution falls through to the next step`,
+          ),
+        );
+      }
+    }
   }
 
   const configuredAgents = options.agents ?? [];
