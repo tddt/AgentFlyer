@@ -355,6 +355,7 @@ export type RpcMethod =
   | 'deliverable.batchPublish'
   | 'memory.search'
   | 'memory.delete'
+  | 'memory.federated'
   | 'stats.get'
   | 'mesh.status'
   | 'mcp.status'
@@ -410,7 +411,7 @@ export interface RpcContext {
   memoryStore?: MemoryStore;
   /** Embed config — used by memory.search. */
   embedConfig?: EmbedConfig;
-  /** Federation node — used for federation.peers. */
+  /** Federation node — used for federation.peers and memory.federated. */
   federationNode?: {
     listPeers(): Array<{
       nodeId: string;
@@ -419,6 +420,16 @@ export interface RpcContext {
       status: string;
       latencyMs?: number;
       lastSeen?: number;
+    }>;
+    queryMemory(opts: {
+      query: string;
+      partition?: string;
+      limit?: number;
+      timeoutMs?: number;
+    }): Promise<{
+      entries: Array<{ id: string; content: string; partition?: string; createdAt: number; score?: number }>;
+      respondedPeers: string[];
+      timedOutPeers: string[];
     }>;
   };
   /** MCP registry status snapshot — used for mcp.status. */
@@ -1962,6 +1973,24 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         }
         const peers = ctx.federationNode.listPeers();
         return { id, result: { enabled: true, peers } };
+      }
+
+      case 'memory.federated': {
+        const cfg = ctx.getConfig();
+        if (!cfg.federation?.enabled || !ctx.federationNode) {
+          return { id, result: { entries: [], respondedPeers: [], timedOutPeers: [], enabled: false } };
+        }
+        const { query, partition, limit, timeoutMs } = (params ?? {}) as {
+          query?: string;
+          partition?: string;
+          limit?: number;
+          timeoutMs?: number;
+        };
+        if (!query) {
+          return buildErrorResponse(id, -32602, 'query is required for memory.federated');
+        }
+        const result = await ctx.federationNode.queryMemory({ query, partition, limit, timeoutMs });
+        return { id, result: { ...result, enabled: true } };
       }
 
       case 'docs.list': {

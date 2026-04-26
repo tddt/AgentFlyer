@@ -794,6 +794,11 @@ export async function startGateway(
 
   const inboxBroadcaster = new InboxBroadcaster();
 
+  // RATIONALE: gateway-level MemoryStore so the federation node can answer
+  // MEMORY_QUERY messages from remote peers and so RPC memory.search works
+  // without needing an agent-scoped runner.
+  const gatewayMemoryStore = new MemoryStore(dataDir);
+
   const rpcContext: RpcContext = {
     runners,
     agentQueues: undefined,
@@ -814,6 +819,7 @@ export async function startGateway(
     inboxBroadcaster,
     channels: sharedChannels,
     getMcpStatus: () => state.mcpRegistry?.listServerStatus() ?? [],
+    memoryStore: gatewayMemoryStore,
     runningTasks: new Map(),
   };
 
@@ -1250,6 +1256,7 @@ export async function startGateway(
         gatewayPort: config.gateway.port,
         dataDir,
         gatewayVersion: GATEWAY_VERSION,
+        memoryStore: gatewayMemoryStore,
       });
       await federationNode.start();
       rpcContext.federationNode = federationNode;

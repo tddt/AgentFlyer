@@ -296,13 +296,13 @@ export function Sidebar({ activeTab, setActiveTab }: Props) {
       {/* ── Logo ─────────────────────────────────────────────────── */}
       <div
         className="flex items-center gap-3 px-5 py-[18px]"
-        style={{ borderBottom: '1px solid rgba(255,255,255,0.055)' }}
+        style={{ borderBottom: '1px solid var(--af-border)' }}
       >
         <div
           className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
           style={{
-            background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
-            boxShadow: '0 4px 16px rgba(99,102,241,0.38)',
+            background: 'var(--af-logo-grad)',
+            boxShadow: '0 4px 16px var(--af-logo-glow)',
           }}
         >
           <svg
@@ -336,18 +336,21 @@ export function Sidebar({ activeTab, setActiveTab }: Props) {
               onClick={() => setActiveTab(id)}
               className={`
                 relative flex items-center gap-3 px-3 py-[9px] rounded-lg text-[13px] font-medium
-                w-full text-left transition-colors duration-150
-                ${
-                  active
-                    ? 'text-indigo-300 bg-indigo-500/10'
-                    : 'text-slate-500 hover:text-slate-200 hover:bg-white/[0.04]'
-                }
+                w-full text-left transition-all duration-150
+                ${active ? '' : 'text-slate-500 hover:text-slate-200 hover:bg-white/[0.04]'}
               `}
+              style={active ? { color: 'var(--af-accent-text)', background: 'var(--af-accent-soft)' } : undefined}
             >
               {active && (
-                <span className="absolute left-0 top-[7px] bottom-[7px] w-[2px] rounded-r-full bg-indigo-400" />
+                <span
+                  className="absolute left-0 top-[7px] bottom-[7px] w-[2px] rounded-r-full"
+                  style={{ background: 'var(--af-accent)' }}
+                />
               )}
-              <span className={`shrink-0 ${active ? 'text-indigo-400' : ''}`}>{Ico[id]}</span>
+              <span
+                className="shrink-0"
+                style={active ? { color: 'var(--af-accent)' } : undefined}
+              >{Ico[id]}</span>
               {t(`nav.${id}`)}
               {id === 'workflow' && isRunning && (
                 <span className="ml-auto w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
@@ -415,22 +418,20 @@ export function Sidebar({ activeTab, setActiveTab }: Props) {
       >
         <button
           onClick={() => setLocale('en')}
-          className={`text-[11px] px-2 py-0.5 rounded transition-colors ${
-            locale === 'en'
-              ? 'bg-indigo-500/20 text-indigo-300'
-              : 'text-slate-600 hover:text-slate-400'
+          className={`text-[11px] px-2 py-0.5 rounded transition-all ${
+            locale === 'en' ? '' : 'text-slate-600 hover:text-slate-400'
           }`}
+          style={locale === 'en' ? { background: 'var(--af-accent-soft)', color: 'var(--af-accent-text)' } : undefined}
         >
           EN
         </button>
         <span className="text-slate-700 text-[11px]">|</span>
         <button
           onClick={() => setLocale('zh')}
-          className={`text-[11px] px-2 py-0.5 rounded transition-colors ${
-            locale === 'zh'
-              ? 'bg-indigo-500/20 text-indigo-300'
-              : 'text-slate-600 hover:text-slate-400'
+          className={`text-[11px] px-2 py-0.5 rounded transition-all ${
+            locale === 'zh' ? '' : 'text-slate-600 hover:text-slate-400'
           }`}
+          style={locale === 'zh' ? { background: 'var(--af-accent-soft)', color: 'var(--af-accent-text)' } : undefined}
         >
           中文
         </button>
@@ -438,7 +439,8 @@ export function Sidebar({ activeTab, setActiveTab }: Props) {
         {/* Theme toggle */}
         <button
           onClick={toggleTheme}
-          className="p-1 rounded text-slate-600 hover:text-slate-400 transition-colors"
+          className="p-1.5 rounded-lg transition-all"
+          style={{ background: 'var(--af-accent-soft)', color: 'var(--af-accent)' }}
           title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
         >
           {theme === 'dark' ? (

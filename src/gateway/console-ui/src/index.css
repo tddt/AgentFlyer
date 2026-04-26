@@ -22,7 +22,7 @@ pre,
 /* ─── Scrollbar ───────────────────────────────────────────── */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(99, 102, 241, 0.22) transparent;
+  scrollbar-color: var(--af-scrollbar, rgba(139, 92, 246, 0.22)) transparent;
 }
 ::-webkit-scrollbar {
   width: 4px;
@@ -32,22 +32,22 @@ pre,
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(99, 102, 241, 0.28);
+  background: var(--af-scrollbar, rgba(139, 92, 246, 0.28));
   border-radius: 999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(99, 102, 241, 0.5);
+  background: var(--af-scrollbar-hover, rgba(139, 92, 246, 0.5));
 }
 
 /* ─── Selection ───────────────────────────────────────────── */
 ::selection {
-  background: rgba(99, 102, 241, 0.3);
-  color: #e2e8f0;
+  background: var(--af-selection-bg, rgba(139, 92, 246, 0.32));
+  color: var(--af-text-heading, #e2e8f0);
 }
 
 /* ─── Focus ───────────────────────────────────────────────── */
 :focus-visible {
-  outline: 2px solid rgba(99, 102, 241, 0.6);
+  outline: 2px solid var(--af-focus-ring, rgba(139, 92, 246, 0.6));
   outline-offset: 2px;
 }
 
@@ -229,32 +229,57 @@ select {
 }
 
 /* ─── Theme tokens ────────────────────────────────────────── */
-/* Dark (default) */
+/* Dark (default) — slate-blue bg · violet primary · pink secondary */
 :root {
-  --af-bg: #07090f;
-  --af-sidebar-from: #0c0f1a;
-  --af-sidebar-to: #07090f;
-  --af-border: rgba(255, 255, 255, 0.055);
-  --af-surface: rgba(255, 255, 255, 0.04);
+  --af-bg: #0c0e1c;
+  --af-sidebar-from: #111630;
+  --af-sidebar-to: #0c0e1c;
+  --af-border: rgba(139, 92, 246, 0.10);
+  --af-surface: rgba(139, 92, 246, 0.06);
   --af-text-base: #cbd5e1;
   --af-text-muted: #64748b;
   --af-text-heading: #e2e8f0;
+  /* Accent — violet + pink */
+  --af-accent:        #8b5cf6;              /* violet-500  */
+  --af-accent-2:      #ec4899;              /* pink-500    */
+  --af-accent-soft:   rgba(139, 92, 246, 0.10);
+  --af-accent-text:   #c4b5fd;              /* violet-300  */
+  --af-accent-text-2: #f9a8d4;              /* pink-300    */
+  --af-logo-grad:     linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%);
+  --af-logo-glow:     rgba(139, 92, 246, 0.45);
+  --af-bg-grad: radial-gradient(ellipse 80% 50% at 15% -10%, rgba(139,92,246,0.08) 0%, transparent 60%),
+               radial-gradient(ellipse 60% 40% at 82% 108%, rgba(236,72,153,0.06) 0%, transparent 55%);
+  /* Utilities */
+  --af-scrollbar:       rgba(139, 92, 246, 0.22);
+  --af-scrollbar-hover: rgba(139, 92, 246, 0.50);
+  --af-selection-bg:    rgba(139, 92, 246, 0.32);
+  --af-focus-ring:      rgba(139, 92, 246, 0.60);
 }
 
-/* Light */
+/* Light — warm-white bg · orange primary · blue secondary */
 html[data-theme="light"] {
-  --af-bg: #f0f2f8;
+  --af-bg: #fdfaf6;
   --af-sidebar-from: #ffffff;
-  --af-sidebar-to: #e8ecf4;
-  --af-border: rgba(0, 0, 0, 0.09);
-  --af-surface: rgba(0, 0, 0, 0.04);
+  --af-sidebar-to: #fef5ec;
+  --af-border: rgba(234, 88, 12, 0.12);
+  --af-surface: rgba(234, 88, 12, 0.05);
   --af-text-base: #334155;
-  --af-text-muted: #64748b;
+  --af-text-muted: #94a3b8;
   --af-text-heading: #0f172a;
-
-  /* Invert Tailwind dark-bg utility classes via filter is fragile — instead
-     override the key hardcoded component backgrounds using the CSS variables
-     that App.tsx and Sidebar.tsx now read. The rest of the UI uses Tailwind
-     slate-* classes which are light-enough in practice. */
+  /* Accent — orange + blue */
+  --af-accent:        #f97316;              /* orange-500  */
+  --af-accent-2:      #3b82f6;              /* blue-500    */
+  --af-accent-soft:   rgba(249, 115, 22, 0.09);
+  --af-accent-text:   #ea580c;              /* orange-600  */
+  --af-accent-text-2: #2563eb;              /* blue-600    */
+  --af-logo-grad:     linear-gradient(135deg, #f97316 0%, #3b82f6 100%);
+  --af-logo-glow:     rgba(249, 115, 22, 0.30);
+  --af-bg-grad: radial-gradient(ellipse 80% 50% at 15% -10%, rgba(249,115,22,0.05) 0%, transparent 60%),
+               radial-gradient(ellipse 60% 40% at 82% 108%, rgba(59,130,246,0.04) 0%, transparent 55%);
+  /* Utilities */
+  --af-scrollbar:       rgba(249, 115, 22, 0.22);
+  --af-scrollbar-hover: rgba(249, 115, 22, 0.50);
+  --af-selection-bg:    rgba(249, 115, 22, 0.22);
+  --af-focus-ring:      rgba(249, 115, 22, 0.55);
   color-scheme: light;
 }

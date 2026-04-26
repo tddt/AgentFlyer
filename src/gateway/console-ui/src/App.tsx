@@ -178,10 +178,7 @@ export function App() {
             </div>
             <main
               className="flex-1 p-4 md:p-6 overflow-auto min-w-0"
-              style={{
-                background:
-                  'radial-gradient(ellipse 80% 50% at 20% -10%, rgba(99,102,241,0.06) 0%, transparent 60%), radial-gradient(ellipse 60% 40% at 80% 100%, rgba(139,92,246,0.04) 0%, transparent 55%)',
-              }}
+              style={{ background: 'var(--af-bg-grad)' }}
             >
               {/* Mobile top bar */}
               <div className="flex items-center gap-3 mb-4 md:hidden">

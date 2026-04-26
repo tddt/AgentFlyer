@@ -21,6 +21,11 @@ import type { FederationConfig } from '../core/config/schema.js';
 import { createLogger } from '../core/logger.js';
 import type { MemoryStore } from '../memory/store.js';
 import { createMdnsDiscovery } from './discovery/mdns.js';
+import {
+  type FederatedQueryOptions,
+  type FederatedQueryResult,
+  queryFederatedMemory,
+} from './memory-sync.js';
 import { discoverTailscalePeers } from './discovery/tailscale.js';
 import { PeerRegistry } from './peer.js';
 import {
@@ -297,5 +302,19 @@ export class FederationNode {
 
   getNodeId(): string {
     return this.nodeId;
+  }
+
+  /**
+   * Query all connected federation peers for memory entries matching `opts.query`.
+   * Returns a merged result with per-peer response/timeout metadata.
+   */
+  async queryMemory(opts: FederatedQueryOptions): Promise<FederatedQueryResult> {
+    return queryFederatedMemory(
+      opts,
+      this.transport,
+      this.peers,
+      this.nodeId,
+      this.privateKeyPem,
+    );
   }
 }
