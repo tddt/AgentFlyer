@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
 import { Badge } from '../components/Badge.js';
 import { useLocale } from '../context/i18n.js';
 import type { LogEntry, LogLevel } from '../types.js';
@@ -13,17 +14,31 @@ const LEVEL_VARIANT: Record<LogLevel, string> = {
 };
 
 const LEVEL_TEXT: Record<LogLevel, string> = {
-  debug: 'text-slate-500',
-  info: 'text-slate-300',
+  debug: '',
+  info: '',
   warn: 'text-amber-300',
   error: 'text-red-300',
 };
 
+const LEVEL_TEXT_STYLE: Record<LogLevel, CSSProperties | undefined> = {
+  debug: { color: 'var(--af-text-faint)' },
+  info: { color: 'var(--af-text-muted)' },
+  warn: undefined,
+  error: undefined,
+};
+
 const LEVEL_CHIP_ACTIVE: Record<LogLevel, string> = {
-  debug: 'bg-slate-600/60 ring-slate-500/50 text-slate-300',
-  info: 'bg-indigo-600/30 ring-indigo-500/50 text-indigo-300',
+  debug: 'ring-slate-500/50',
+  info: 'ring-indigo-500/50',
   warn: 'bg-amber-600/30 ring-amber-500/50 text-amber-300',
   error: 'bg-red-600/30 ring-red-500/50 text-red-300',
+};
+
+const LEVEL_CHIP_ACTIVE_STYLE: Record<LogLevel, CSSProperties | undefined> = {
+  debug: { background: 'var(--af-surface-2)', color: 'var(--af-text-muted)' },
+  info: { background: 'var(--af-accent-soft-2)', color: 'var(--af-accent)' },
+  warn: undefined,
+  error: undefined,
 };
 
 const MAX_ENTRIES = 1000;
@@ -101,32 +116,36 @@ export function LogsTab() {
       <div className="flex flex-col gap-3 pb-4 shrink-0">
         <div className="flex items-center gap-3 flex-wrap">
           <div>
-            <h1 className="text-lg font-semibold text-slate-100">{t('logs.title')}</h1>
-            <p className="text-xs text-slate-500 mt-0.5">{t('logs.subtitle')}</p>
+            <h1 className="text-lg font-semibold" style={{ color: 'var(--af-text-heading)' }}>{t('logs.title')}</h1>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--af-text-faint)' }}>{t('logs.subtitle')}</p>
           </div>
           <div className="ml-auto flex items-center gap-2 flex-wrap">
             <input
               placeholder={t('logs.search')}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="bg-slate-700 border border-slate-600 text-slate-200 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-36"
+              className="text-xs rounded-lg px-2.5 py-1.5 focus:outline-none w-36"
+              style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
             />
             <button
               onClick={() => setPaused((p) => !p)}
-              className={`text-xs px-3 py-1.5 rounded-lg ring-1 transition-colors ${paused ? 'bg-amber-600/30 ring-amber-500/50 text-amber-300' : 'bg-slate-700 ring-slate-600 text-slate-300 hover:bg-slate-600'}`}
+              className={`text-xs px-3 py-1.5 rounded-lg ring-1 transition-colors ${paused ? 'bg-amber-600/30 ring-amber-500/50 text-amber-300' : 'ring-1'}`}
+              style={paused ? undefined : { background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-border)', color: 'var(--af-text-muted)' }}
             >
               {paused ? t('logs.resume') : t('logs.pause')}
             </button>
             <button
               onClick={() => exportAsText(filtered)}
               disabled={filtered.length === 0}
-              className="text-xs px-3 py-1.5 rounded-lg bg-slate-700 ring-1 ring-slate-600 text-slate-300 hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="text-xs px-3 py-1.5 rounded-lg ring-1 disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-border)', color: 'var(--af-text-muted)' }}
             >
               {t('logs.export')}
             </button>
             <button
               onClick={() => setEntries([])}
-              className="text-xs px-3 py-1.5 rounded-lg bg-slate-700 ring-1 ring-slate-600 text-slate-300 hover:bg-slate-600"
+              className="text-xs px-3 py-1.5 rounded-lg ring-1"
+              style={{ background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-border)', color: 'var(--af-text-muted)' }}
             >
               {t('logs.clear')}
             </button>
@@ -135,7 +154,7 @@ export function LogsTab() {
 
         {/* Per-level chip row — like OpenClaw's chip-row */}
         <div className="flex items-center gap-1.5 flex-wrap">
-          <span className="text-[10px] text-slate-600 uppercase tracking-wide mr-1">{t('logs.levels')}</span>
+          <span className="text-[10px] uppercase tracking-wide mr-1" style={{ color: 'var(--af-text-faint)' }}>{t('logs.levels')}</span>
           {ALL_LEVELS.map((level) => {
             const active = levelFilters[level];
             return (
@@ -145,27 +164,31 @@ export function LogsTab() {
                 className={`text-[11px] px-2.5 py-1 rounded-full ring-1 transition-all font-medium ${
                   active
                     ? LEVEL_CHIP_ACTIVE[level]
-                    : 'bg-transparent ring-slate-700/50 text-slate-600 hover:text-slate-400'
+                    : 'ring-1'
                 }`}
+                style={active
+                  ? LEVEL_CHIP_ACTIVE_STYLE[level]
+                  : { background: 'transparent', boxShadow: '0 0 0 1px var(--af-border)', color: 'var(--af-text-faint)' }}
               >
                 {level}
               </button>
             );
           })}
-          <span className="ml-auto text-[10px] text-slate-600 tabular-nums">
+          <span className="ml-auto text-[10px] tabular-nums" style={{ color: 'var(--af-text-faint)' }}>
             {filtered.length.toLocaleString()} / {entries.length.toLocaleString()}
           </span>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto bg-slate-900/60 rounded-xl ring-1 ring-slate-700/50 p-3 font-mono text-xs min-h-0">
-        {filtered.length === 0 && <p className="text-slate-500 text-center py-4">{t('logs.noEntries')}</p>}
+      <div className="flex-1 overflow-y-auto rounded-xl ring-1 p-3 font-mono text-xs min-h-0" style={{ background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-border)' }}>
+        {filtered.length === 0 && <p className="text-center py-4" style={{ color: 'var(--af-text-faint)' }}>{t('logs.noEntries')}</p>}
         {filtered.map((entry, i) => (
           <div
             key={i}
-            className={`flex gap-3 py-0.5 hover:bg-slate-800/40 rounded ${LEVEL_TEXT[entry.level ?? 'info']}`}
+            className={`flex gap-3 py-0.5 rounded ${LEVEL_TEXT[entry.level ?? 'info']}`}
+            style={LEVEL_TEXT_STYLE[entry.level ?? 'info']}
           >
-            <span className="text-slate-600 shrink-0 tabular-nums">
+            <span className="shrink-0 tabular-nums" style={{ color: 'var(--af-text-faint)' }}>
               {new Date(entry.ts).toLocaleTimeString()}
             </span>
             <span className="shrink-0 w-12">
@@ -173,7 +196,7 @@ export function LogsTab() {
                 {entry.level ?? 'info'}
               </Badge>
             </span>
-            {entry.name && <span className="text-indigo-400 shrink-0">{entry.name}</span>}
+            {entry.name && <span className="shrink-0" style={{ color: 'var(--af-accent)' }}>{entry.name}</span>}
             <span className="flex-1 break-all">{entry.msg}</span>
           </div>
         ))}

@@ -216,7 +216,7 @@ export function DeliverablesTab() {
             <div className="text-[10px] uppercase tracking-[0.28em] text-cyan-300/70">
               {t('deliverables.kicker')}
             </div>
-            <h1 className="mt-1 text-xl font-semibold tracking-tight text-slate-50">
+            <h1 className="mt-1 text-xl font-semibold tracking-tight" style={{ color: 'var(--af-text-heading)' }}>
               {t('deliverables.title')}
             </h1>
           </div>
@@ -238,13 +238,14 @@ export function DeliverablesTab() {
         </div>
       </div>
 
-      <div className="flex flex-col gap-4 rounded-xl border border-white/8 bg-slate-900/70 p-4 backdrop-blur-xl">
+      <div className="flex flex-col gap-4 rounded-xl border border-white/8 p-4 backdrop-blur-xl" style={{ background: 'var(--af-card-bg)' }}>
         <div className="flex flex-wrap items-center gap-3">
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={t('deliverables.searchPlaceholder')}
-            className="min-w-[220px] flex-1 rounded-lg border border-white/10 bg-slate-950/70 px-4 py-2.5 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-cyan-400/40"
+            className="min-w-[220px] flex-1 rounded-lg border border-white/10 px-4 py-2.5 text-sm outline-none focus:border-cyan-400/40"
+            style={{ background: 'var(--af-input-bg)', color: 'var(--af-text-base)' }}
           />
           <div className="flex flex-wrap gap-2">
             {(['all', 'workflow_run', 'scheduler_task_run', 'chat_turn'] as SourceFilter[]).map((value) => (
@@ -254,8 +255,9 @@ export function DeliverablesTab() {
                 className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
                   sourceFilter === value
                     ? 'bg-cyan-500/15 text-cyan-200 ring-1 ring-cyan-400/30'
-                    : 'bg-white/[0.04] text-slate-400 hover:text-slate-200'
+                    : 'bg-white/[0.04] hover:text-white'
                 }`}
+                style={sourceFilter !== value ? { color: 'var(--af-text-muted)' } : undefined}
               >
                 {t(`deliverables.source.${value}`)}
               </button>
@@ -269,8 +271,9 @@ export function DeliverablesTab() {
                 className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
                   statusFilter === value
                     ? 'bg-fuchsia-500/15 text-fuchsia-200 ring-1 ring-fuchsia-400/30'
-                    : 'bg-white/[0.04] text-slate-400 hover:text-slate-200'
+                    : 'bg-white/[0.04] hover:text-white'
                 }`}
+                style={statusFilter !== value ? { color: 'var(--af-text-muted)' } : undefined}
               >
                 {t(`deliverables.status.${value}`)}
               </button>
@@ -287,8 +290,9 @@ export function DeliverablesTab() {
                 className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
                   timeRange === value
                     ? 'bg-amber-500/15 text-amber-200 ring-1 ring-amber-400/30'
-                    : 'bg-white/[0.04] text-slate-400 hover:text-slate-200'
+                    : 'bg-white/[0.04] hover:text-white'
                 }`}
+                style={timeRange !== value ? { color: 'var(--af-text-muted)' } : undefined}
               >
                 {t(`deliverables.timeRange.${value}`)}
               </button>
@@ -302,8 +306,9 @@ export function DeliverablesTab() {
                 className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
                   highlightFilter === value
                     ? 'bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-400/30'
-                    : 'bg-white/[0.04] text-slate-400 hover:text-slate-200'
+                    : 'bg-white/[0.04] hover:text-white'
                 }`}
+                style={highlightFilter !== value ? { color: 'var(--af-text-muted)' } : undefined}
               >
                 {t(`deliverables.highlight.${value}`)}
               </button>
@@ -318,21 +323,21 @@ export function DeliverablesTab() {
             <span className="text-xl font-semibold text-cyan-50">{filteredItems.length}</span>
             <span className="text-[10px] uppercase tracking-[0.18em] text-cyan-200/70">{t('deliverables.spotlight.filtered')}</span>
           </div>
-          <div className="mt-0.5 text-xs text-slate-400">{t('deliverables.spotlight.filteredHint')}</div>
+          <div className="mt-0.5 text-xs" style={{ color: 'var(--af-text-muted)' }}>{t('deliverables.spotlight.filteredHint')}</div>
         </div>
         <div className="min-w-[140px] flex-1 rounded-lg border border-emerald-400/10 bg-[radial-gradient(circle_at_top_left,rgba(34,197,94,0.10),transparent_60%),rgba(2,6,23,0.82)] px-4 py-2.5">
           <div className="flex items-baseline gap-2">
             <span className="text-xl font-semibold text-emerald-50">{spotlight.media}</span>
             <span className="text-[10px] uppercase tracking-[0.18em] text-emerald-200/70">{t('deliverables.spotlight.media')}</span>
           </div>
-          <div className="mt-0.5 text-xs text-slate-400">{t('deliverables.spotlight.mediaHint')}</div>
+          <div className="mt-0.5 text-xs" style={{ color: 'var(--af-text-muted)' }}>{t('deliverables.spotlight.mediaHint')}</div>
         </div>
         <div className="min-w-[140px] flex-1 rounded-lg border border-rose-400/10 bg-[radial-gradient(circle_at_top_left,rgba(244,63,94,0.10),transparent_60%),rgba(2,6,23,0.82)] px-4 py-2.5">
           <div className="flex items-baseline gap-2">
             <span className="text-xl font-semibold text-rose-50">{spotlight.problems}</span>
             <span className="text-[10px] uppercase tracking-[0.18em] text-rose-200/70">{t('deliverables.spotlight.problems')}</span>
           </div>
-          <div className="mt-0.5 text-xs text-slate-400">{t('deliverables.spotlight.problemsHint')}</div>
+          <div className="mt-0.5 text-xs" style={{ color: 'var(--af-text-muted)' }}>{t('deliverables.spotlight.problemsHint')}</div>
         </div>
       </div>
 
@@ -343,21 +348,20 @@ export function DeliverablesTab() {
         <div className="flex flex-col gap-4">
 
           {/* Source groups (at most 3 entries, does not grow) */}
-          <div className="rounded-lg border border-white/8 bg-slate-900/70 p-4 backdrop-blur-xl">
+          <div className="rounded-lg border border-white/8 p-4 backdrop-blur-xl" style={{ background: 'var(--af-card-bg)' }}>
             <div className="mb-3 flex items-center justify-between gap-2">
-              <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">
-                {t('deliverables.group.title')}
+              <div className="text-[11px] uppercase tracking-[0.22em]" style={{ color: 'var(--af-text-faint)' }}>
               </div>
               <Badge variant="gray">{grouped.length}</Badge>
             </div>
             <div className="flex flex-col gap-2">
               {grouped.map((group) => (
-                <div key={group.kind} className="rounded-md border border-white/8 bg-slate-950/55 px-3 py-2.5">
+                <div key={group.kind} className="rounded-md border border-white/8 px-3 py-2.5" style={{ background: 'var(--af-surface-2)' }}>
                   <div className="flex items-center justify-between gap-2">
-                    <div className="truncate text-xs font-medium text-slate-100">{group.label}</div>
+                    <div className="truncate text-xs font-medium" style={{ color: 'var(--af-text-base)' }}>{group.label}</div>
                     <Badge variant={sourceBadgeVariant(group.kind)}>{group.items.length}</Badge>
                   </div>
-                  <div className="mt-1 text-[11px] text-slate-500">
+                  <div className="mt-1 text-[11px]" style={{ color: 'var(--af-text-faint)' }}>
                     {group.items[0] ? new Date(group.items[0].createdAt).toLocaleString() : ''}
                   </div>
                 </div>
@@ -383,13 +387,13 @@ export function DeliverablesTab() {
                 <button
                   key={item.id}
                   onClick={() => setSelectedId(item.id)}
-                  className="rounded-md border border-white/8 bg-slate-950/45 p-3 text-left hover:border-white/15"
+                  className="rounded-md border border-white/8 p-3 text-left hover:border-white/15" style={{ background: 'var(--af-surface-2)' }}
                 >
                   <div className="flex flex-wrap items-center gap-1.5">
                     <Badge variant={item.status === 'error' ? 'red' : 'gray'}>{item.status}</Badge>
-                    <span className="line-clamp-1 text-xs font-medium text-slate-100">{item.title}</span>
+                    <span className="line-clamp-1 text-xs font-medium" style={{ color: 'var(--af-text-base)' }}>{item.title}</span>
                   </div>
-                  <div className="mt-1.5 line-clamp-2 text-xs leading-4 text-slate-400">
+                  <div className="mt-1.5 line-clamp-2 text-xs leading-4" style={{ color: 'var(--af-text-muted)' }}>
                     {item.previewText || item.summary}
                   </div>
                 </button>
@@ -400,28 +404,27 @@ export function DeliverablesTab() {
 
         {/* Right area: list + detail always visible alongside the sidebar */}
         <div className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
-          <div className="rounded-xl border border-white/8 bg-slate-900/70 p-4 backdrop-blur-xl">
+          <div className="rounded-xl border border-white/8 p-4 backdrop-blur-xl" style={{ background: 'var(--af-card-bg)' }}>
             <div className="mb-3 flex items-center justify-between">
-              <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">
-                {t('deliverables.listTitle')}
+              <div className="text-[11px] uppercase tracking-[0.22em]" style={{ color: 'var(--af-text-faint)' }}>
               </div>
               <Badge variant="gray">{filteredItems.length}</Badge>
             </div>
 
-            {loading && data === null && <div className="py-6 text-sm text-slate-400">{t('deliverables.loading')}</div>}
+            {loading && data === null && <div className="py-6 text-sm" style={{ color: 'var(--af-text-muted)' }}>{t('deliverables.loading')}</div>}
 
             {!loading && filteredItems.length === 0 && (
-              <div className="rounded-md border border-dashed border-white/10 bg-slate-950/50 p-5 text-sm text-slate-500">
+              <div className="rounded-md border border-dashed border-white/10 p-5 text-sm" style={{ background: 'var(--af-surface-2)', color: 'var(--af-text-muted)' }}>
                 {t('deliverables.empty')}
               </div>
             )}
 
-            <div className="mb-3 rounded-md border border-white/8 bg-slate-950/60 px-4 py-3">
-              <div className="flex items-center justify-between gap-2 text-xs text-slate-400">
+            <div className="mb-3 rounded-md border border-white/8 px-4 py-3" style={{ background: 'var(--af-surface-2)' }}>
+              <div className="flex items-center justify-between gap-2 text-xs" style={{ color: 'var(--af-text-muted)' }}>
                 <span>{t('deliverables.listTitle')}</span>
                 <span>{filteredItems.length}</span>
               </div>
-              <div className="mt-2 text-[11px] leading-5 text-slate-500">
+              <div className="mt-2 text-[11px] leading-5" style={{ color: 'var(--af-text-faint)' }}>
                 {grouped
                   .filter((group) => group.items.length > 0)
                   .map((group) => `${group.label} ${group.items.length}`)
@@ -440,8 +443,9 @@ export function DeliverablesTab() {
                     className={`rounded-md border px-4 py-3 text-left transition-all ${
                       active
                         ? 'border-cyan-400/35 bg-cyan-500/10 shadow-[0_20px_50px_rgba(6,182,212,0.08)]'
-                        : 'border-white/8 bg-slate-950/55 hover:border-white/15 hover:bg-white/[0.03]'
+                        : 'border-white/8 hover:border-white/15 hover:bg-white/[0.03]'
                     }`}
+                    style={active ? undefined : { background: 'var(--af-surface-2)' }}
                   >
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge
@@ -462,13 +466,13 @@ export function DeliverablesTab() {
                         <Badge variant="green">{t('deliverables.card.mediaCount', { n: String(mediaCount) })}</Badge>
                       )}
                     </div>
-                    <div className="mt-3 line-clamp-2 text-sm font-semibold text-slate-100">
+                    <div className="mt-3 line-clamp-2 text-sm font-semibold" style={{ color: 'var(--af-text-heading)' }}>
                       {item.title}
                     </div>
-                    <div className="mt-2 line-clamp-2 text-xs leading-5 text-slate-400">
+                    <div className="mt-2 line-clamp-2 text-xs leading-5" style={{ color: 'var(--af-text-muted)' }}>
                       {item.previewText || item.summary}
                     </div>
-                    <div className="mt-3 flex items-center justify-between text-[11px] text-slate-500">
+                    <div className="mt-3 flex items-center justify-between text-[11px]" style={{ color: 'var(--af-text-faint)' }}>
                       <span>{new Date(item.createdAt).toLocaleString()}</span>
                       <span>{item.artifacts.length}</span>
                     </div>

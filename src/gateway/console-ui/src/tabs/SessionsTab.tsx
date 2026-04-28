@@ -80,12 +80,15 @@ function MsgBubble({ msg }: MsgBubbleProps) {
       <div
         className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm ${
           isUser
-            ? 'bg-indigo-600/30 ring-1 ring-indigo-500/40 text-slate-100'
-            : 'bg-slate-800/60 ring-1 ring-slate-700/40 text-slate-200'
+            ? 'ring-1'
+            : 'ring-1'
         }`}
+        style={isUser
+          ? { background: 'var(--af-accent-soft-2)', boxShadow: '0 0 0 1px var(--af-accent)', color: 'var(--af-text-base)' }
+          : { background: 'var(--af-card-bg)', boxShadow: '0 0 0 1px var(--af-card-ring)', color: 'var(--af-text-base)' }}
       >
         <div
-          className={`flex items-center gap-2 mb-2 text-[11px] ${isUser ? 'text-indigo-300' : 'text-slate-500'}`}
+          style={{ color: isUser ? 'var(--af-accent)' : 'var(--af-text-faint)' }}
         >
           <span className="font-semibold">{isUser ? t('sessions.userRole') : t('sessions.assistantRole')}</span>
           <span>·</span>
@@ -108,12 +111,13 @@ function MsgBubble({ msg }: MsgBubbleProps) {
                 {msg.tools.map((t, i) => (
                   <details
                     key={i}
-                    className="bg-slate-900/70 ring-1 ring-slate-700/40 rounded-lg px-3 py-1.5"
+                    className="rounded-lg ring-1 px-3 py-1.5"
+                  style={{ background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-border)' }}
                   >
                     <summary className="cursor-pointer text-[11px] font-mono text-amber-300">
                       {t.name}
                     </summary>
-                    <pre className="mt-1.5 text-[10px] text-slate-400 overflow-x-auto whitespace-pre-wrap">
+                    <pre className="mt-1.5 text-[10px] overflow-x-auto whitespace-pre-wrap" style={{ color: 'var(--af-text-muted)' }}>
                       {t.input}
                     </pre>
                   </details>
@@ -210,7 +214,7 @@ function SessionDetail({ session, onClear, onNavigate }: SessionDetailProps) {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <span className="text-xs font-mono text-slate-500 break-all">{session.sessionKey}</span>
+        <span className="text-xs font-mono break-all" style={{ color: 'var(--af-text-faint)' }}>{session.sessionKey}</span>
         <div className="flex items-center gap-2 shrink-0">
           <Button size="sm" variant="ghost" onClick={refetch} disabled={loading}>
             ↺
@@ -238,10 +242,11 @@ function SessionDetail({ session, onClear, onNavigate }: SessionDetailProps) {
         ).map(([k, v]: [string, string | number]) => (
           <div
             key={k}
-            className="bg-slate-800/60 rounded-lg px-3 py-2 text-center ring-1 ring-slate-700/40"
+            className="rounded-lg ring-1 px-3 py-2 text-center"
+            style={{ background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-border)' }}
           >
-            <div className="text-slate-500 mb-0.5">{k}</div>
-            <div className="text-slate-200 font-semibold">{v}</div>
+            <div style={{ color: 'var(--af-text-faint)' }} className="mb-0.5">{k}</div>
+            <div style={{ color: 'var(--af-text-heading)' }} className="font-semibold">{v}</div>
           </div>
         ))}
       </div>
@@ -299,27 +304,22 @@ function SessionDetail({ session, onClear, onNavigate }: SessionDetailProps) {
 
       {session.contextTokensEstimate > 0 && (
         <div className="flex flex-col gap-1">
-          <div className="flex justify-between text-[11px] text-slate-500">
+          <div className="flex justify-between text-[11px]" style={{ color: 'var(--af-text-faint)' }}>
             <span>{t('sessions.contextUsage')}</span>
             <span>{session.contextTokensEstimate.toLocaleString()} tokens</span>
           </div>
-          <div className="h-1.5 bg-slate-700/60 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all"
-              style={{
-                width: `${Math.min(100, (session.contextTokensEstimate / 200_000) * 100)}%`,
-              }}
-            />
+          <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--af-surface-2)' }}>
+            <div className="h-full rounded-full transition-all" style={{ background: 'var(--af-accent)', width: `${Math.min(100, (session.contextTokensEstimate / 200_000) * 100)}%` }} />
           </div>
-          <div className="text-[10px] text-slate-600">{t('sessions.maxContext')}</div>
+          <div className="text-[10px]" style={{ color: 'var(--af-text-faint)' }}>{t('sessions.maxContext')}</div>
         </div>
       )}
 
       {loading && (
-        <p className="text-xs text-slate-500 animate-pulse py-4 text-center">{t('sessions.loadingMessages')}</p>
+        <p className="text-xs animate-pulse py-4 text-center" style={{ color: 'var(--af-text-muted)' }}>{t('sessions.loadingMessages')}</p>
       )}
       {!loading && data && data.messages.length === 0 && (
-        <p className="text-xs text-slate-500 italic text-center py-4">{t('sessions.noMessages')}</p>
+        <p className="text-xs italic text-center py-4" style={{ color: 'var(--af-text-faint)' }}>{t('sessions.noMessages')}</p>
       )}
       {!loading && data && data.messages.length > 0 && (
         <div className="flex flex-col gap-3 max-h-[65vh] overflow-y-auto pr-1">
@@ -356,20 +356,23 @@ function SessionRow({ session, expanded, onToggle, onCleared, onNavigate }: Sess
     <div
       className={`rounded-xl ring-1 overflow-hidden transition-all ${
         expanded
-          ? 'bg-slate-800/60 ring-indigo-500/30'
-          : 'bg-slate-800/30 ring-slate-700/40 hover:ring-slate-600/60'
+          ? 'ring-1'
+          : 'ring-1'
       }`}
+      style={expanded
+        ? { background: 'var(--af-card-bg)', boxShadow: '0 0 0 1px var(--af-accent)' }
+        : { background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-border)' }}
     >
       <button
         onClick={onToggle}
         className="w-full flex items-center gap-3 px-4 py-3 text-left transition-colors"
       >
-        <span className="text-slate-500 text-xs">{expanded ? '▾' : '▸'}</span>
+        <span className="text-xs" style={{ color: 'var(--af-text-faint)' }}>{expanded ? '▾' : '▸'}</span>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-mono text-xs text-indigo-300 font-medium">{session.agentId}</span>
-            <span className="text-slate-600">·</span>
-            <span className="font-mono text-xs text-slate-400 truncate">{session.threadKey}</span>
+            <span className="font-mono text-xs font-medium" style={{ color: 'var(--af-accent)' }}>{session.agentId}</span>
+            <span style={{ color: 'var(--af-text-faint)' }}>·</span>
+            <span className="font-mono text-xs truncate" style={{ color: 'var(--af-text-muted)' }}>{session.threadKey}</span>
             <Badge variant={statusVariant(session.status)}>{session.status}</Badge>
             {session.errorCode && isProblemSession(session.status) ? (
               <Badge variant={statusVariant(session.status)}>
@@ -377,7 +380,7 @@ function SessionRow({ session, expanded, onToggle, onCleared, onNavigate }: Sess
               </Badge>
             ) : null}
           </div>
-          <div className="flex items-center gap-3 mt-0.5 text-[11px] text-slate-500">
+          <div className="flex items-center gap-3 mt-0.5 text-[11px]" style={{ color: 'var(--af-text-faint)' }}>
             <span>{session.messageCount} msgs</span>
             <span>·</span>
             <span>~{session.contextTokensEstimate.toLocaleString()} tok</span>
@@ -387,7 +390,7 @@ function SessionRow({ session, expanded, onToggle, onCleared, onNavigate }: Sess
         </div>
       </button>
       {expanded && (
-        <div className="px-4 pb-4 pt-1 border-t border-slate-700/40">
+        <div className="px-4 pb-4 pt-1" style={{ borderTop: '1px solid var(--af-border)' }}>
           <SessionDetail session={session} onClear={onCleared} onNavigate={onNavigate} />
         </div>
       )}
@@ -500,8 +503,8 @@ export function SessionsTab({
     <div className="flex flex-col gap-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-lg font-semibold text-slate-100">{t('sessions.title')}</h1>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <h1 className="text-lg font-semibold" style={{ color: 'var(--af-text-heading)' }}>{t('sessions.title')}</h1>
+          <p className="text-xs mt-0.5" style={{ color: 'var(--af-text-faint)' }}>
             {allSessions.length} sessions · {totalMessages} messages · ~
             {totalTokens.toLocaleString()} tokens · {problemSessions} {t('sessions.problemSessions')}
           </p>
@@ -522,19 +525,19 @@ export function SessionsTab({
       {errorStats && errorSessions > 0 ? (
         <div className="rounded-xl bg-red-950/20 ring-1 ring-red-500/15 px-4 py-3 flex flex-col gap-3">
           <div className="flex items-center justify-between gap-3 flex-wrap">
-            <div className="text-sm text-slate-200">
+            <div className="text-sm" style={{ color: 'var(--af-text-muted)' }}>
               <span className="font-semibold text-red-300">{errorStats.recentErrorSessions}</span>{' '}
               {t('sessions.errorTrendWindow')
                 .replace('{count}', String(errorStats.recentErrorSessions))
                 .replace('{n}', String(errorStats.windowDays))}
             </div>
-            <div className="text-xs text-slate-400">
+            <div className="text-xs" style={{ color: 'var(--af-text-faint)' }}>
               {t('sessions.latestErrorAt')}: {formatRelativeDate(errorStats.latestErrorAt)}
             </div>
           </div>
           {topErrorCodes.length > 0 ? (
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-[11px] text-slate-500">{t('sessions.topErrors')}</span>
+              <span className="text-[11px]" style={{ color: 'var(--af-text-faint)' }}>{t('sessions.topErrors')}</span>
               {topErrorCodes.map(({ code, count }) => (
                 <button
                   key={code}
@@ -570,12 +573,14 @@ export function SessionsTab({
           placeholder={t('sessions.searchPlaceholder')}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="flex-1 min-w-36 bg-slate-800/60 ring-1 ring-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:ring-indigo-500/60"
+          className="flex-1 min-w-36 rounded-lg px-3 py-1.5 text-sm focus:outline-none"
+          style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
         />
         <select
           value={filterAgent}
           onChange={(e) => setFilterAgent(e.target.value)}
-          className="bg-slate-800/60 ring-1 ring-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-slate-300 focus:outline-none"
+          className="rounded-lg px-3 py-1.5 text-sm focus:outline-none"
+          style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
         >
           <option value="all">{t('sessions.allAgents')}</option>
           {agentIds.map((id) => (
@@ -587,7 +592,8 @@ export function SessionsTab({
         <select
           value={filterErrorCode}
           onChange={(e) => setFilterErrorCode(e.target.value)}
-          className="bg-slate-800/60 ring-1 ring-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-slate-300 focus:outline-none"
+          className="rounded-lg px-3 py-1.5 text-sm focus:outline-none"
+          style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
         >
           <option value="all">{t('sessions.allErrors')}</option>
           {errorCodes.map((code) => (
@@ -599,7 +605,8 @@ export function SessionsTab({
         <select
           value={sortBy}
           onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
-          className="bg-slate-800/60 ring-1 ring-slate-700/50 rounded-lg px-3 py-1.5 text-sm text-slate-300 focus:outline-none"
+          className="rounded-lg px-3 py-1.5 text-sm focus:outline-none"
+          style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
         >
           <option value="recent">{t('sessions.recentFirst')}</option>
           <option value="messages">{t('sessions.mostMessages')}</option>
@@ -634,7 +641,7 @@ export function SessionsTab({
       ) : null}
 
       {!loading && sessions.length === 0 && (
-        <div className="text-center py-16 text-sm text-slate-500">
+        <div className="text-center py-16 text-sm" style={{ color: 'var(--af-text-faint)' }}>
           {search || filterAgent !== 'all' || filterErrorCode !== 'all'
             ? t('sessions.noMatch')
             : t('sessions.noSessions')}

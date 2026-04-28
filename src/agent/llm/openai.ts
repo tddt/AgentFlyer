@@ -23,6 +23,13 @@ function toOpenAIMessages(messages: Message[]): OpenAI.ChatCompletionMessagePara
       };
     }
     if (typeof m.content === 'string') {
+      if (m.role === 'assistant' && m.reasoning_content) {
+        return {
+          role: 'assistant',
+          content: m.content,
+          reasoning_content: m.reasoning_content,
+        } as OpenAI.ChatCompletionAssistantMessageParam & { reasoning_content: string };
+      }
       return { role: m.role as 'user' | 'assistant', content: m.content };
     }
     const parts = m.content as MessageContent[];
@@ -50,7 +57,7 @@ function toOpenAIMessages(messages: Message[]): OpenAI.ChatCompletionMessagePara
     if (m.role === 'assistant') {
       const textParts = parts.filter((p) => p.type === 'text');
       const toolUseParts = parts.filter((p) => p.type === 'tool_use');
-      const result: OpenAI.ChatCompletionAssistantMessageParam = {
+      const result: OpenAI.ChatCompletionAssistantMessageParam & { reasoning_content?: string } = {
         role: 'assistant',
         content: textParts.map((p) => (p as { text: string }).text).join('\n') || null,
         tool_calls:
@@ -65,6 +72,9 @@ function toOpenAIMessages(messages: Message[]): OpenAI.ChatCompletionMessagePara
               }))
             : undefined,
       };
+      if (m.reasoning_content) {
+        result.reasoning_content = m.reasoning_content;
+      }
       return result;
     }
     return { role: 'user', content: JSON.stringify(m.content) };
@@ -138,6 +148,13 @@ export class OpenAIProvider implements LLMProvider {
         if (!choice) continue;
 
         const delta = choice.delta;
+
+        // Capture reasoning_content for thinking-mode models (e.g. DeepSeek).
+        // The API requires it to be passed back verbatim on the next turn.
+        const reasoningDelta = (delta as Record<string, unknown>).reasoning_content;
+        if (typeof reasoningDelta === 'string' && reasoningDelta) {
+          yield { type: 'thinking_delta', thinking: reasoningDelta };
+        }
 
         if (delta.content) {
           yield { type: 'text_delta', text: delta.content };

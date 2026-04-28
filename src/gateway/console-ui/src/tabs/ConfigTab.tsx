@@ -1015,10 +1015,16 @@ function ensureConfigShape(raw: unknown): ConfigShape {
 function HelpTip({ text }: { text: string }) {
   return (
     <span className="relative inline-flex items-center group">
-      <span className="h-4 w-4 rounded-full bg-slate-700 hover:bg-slate-600 text-[10px] text-slate-300 inline-flex items-center justify-center cursor-help transition-colors">
+      <span
+        className="h-4 w-4 rounded-full text-[10px] inline-flex items-center justify-center cursor-help transition-colors"
+        style={{ background: 'var(--af-surface-3)', color: 'var(--af-text-muted)' }}
+      >
         ?
       </span>
-      <span className="pointer-events-none absolute z-20 left-6 top-1/2 -translate-y-1/2 hidden group-hover:block whitespace-pre-wrap w-72 rounded-lg bg-slate-900 ring-1 ring-slate-600/80 shadow-xl px-3 py-2 text-[11px] text-slate-200 leading-relaxed">
+      <span
+        className="pointer-events-none absolute z-20 left-6 top-1/2 -translate-y-1/2 hidden group-hover:block whitespace-pre-wrap w-72 rounded-lg shadow-xl px-3 py-2 text-[11px] leading-relaxed"
+        style={{ background: 'var(--af-card-bg)', boxShadow: '0 0 0 1px var(--af-card-ring)', color: 'var(--af-text-base)' }}
+      >
         {text}
       </span>
     </span>
@@ -1027,7 +1033,7 @@ function HelpTip({ text }: { text: string }) {
 
 function FieldLabel({ label, help }: { label: string; help: string }) {
   return (
-    <span className="text-sm text-slate-300 inline-flex items-center gap-2 font-medium">
+    <span className="text-sm inline-flex items-center gap-2 font-medium" style={{ color: 'var(--af-text-muted)' }}>
       {label}
       <HelpTip text={help} />
     </span>
@@ -1045,9 +1051,9 @@ function PanelSection({
       style={{ background: 'rgba(14,17,28,0.85)' }}
     >
       <div>
-        <h3 className="text-[13px] font-semibold text-slate-100">{title}</h3>
+        <h3 className="text-[13px] font-semibold" style={{ color: 'var(--af-text-heading)' }}>{title}</h3>
         {description && (
-          <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">{description}</p>
+          <p className="text-xs mt-0.5 leading-relaxed" style={{ color: 'var(--af-text-faint)' }}>{description}</p>
         )}
       </div>
       {children}
@@ -1059,10 +1065,10 @@ function FieldRow({ children }: { children: ReactNode }) {
   return <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-4 items-center">{children}</div>;
 }
 
-const inputCls =
-  'bg-slate-900/80 ring-1 ring-slate-700 focus:ring-indigo-500/60 focus:outline-none text-slate-200 text-sm rounded-lg px-3 py-2 transition-shadow w-full';
-const selectCls =
-  'bg-slate-900/80 ring-1 ring-slate-700 focus:ring-indigo-500/60 focus:outline-none text-slate-200 text-sm rounded-lg px-3 py-2 transition-shadow w-full';
+const inputCls = 'focus:outline-none text-sm rounded-lg px-3 py-2 transition-shadow w-full';
+const inputStyle: React.CSSProperties = { background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' };
+const selectCls = 'focus:outline-none text-sm rounded-lg px-3 py-2 transition-shadow w-full';
+const selectStyle: React.CSSProperties = { background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' };
 
 function TextRow({
   label,
@@ -1085,6 +1091,7 @@ function TextRow({
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
         className={inputCls}
+        style={inputStyle}
       />
     </FieldRow>
   );
@@ -1115,6 +1122,7 @@ function NumberRow({
         value={Number.isFinite(value) ? String(value) : '0'}
         onChange={(e) => onChange(Number(e.target.value))}
         className={inputCls}
+        style={inputStyle}
       />
     </FieldRow>
   );
@@ -1139,7 +1147,8 @@ function ToggleRow({
         role="switch"
         aria-checked={checked}
         onClick={() => onChange(!checked)}
-        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${checked ? 'bg-indigo-600' : 'bg-slate-700'}`}
+        className="relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none"
+        style={{ background: checked ? 'var(--af-accent)' : 'var(--af-surface-3)' }}
       >
         <span
           className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${checked ? 'translate-x-6' : 'translate-x-1'}`}
@@ -1165,7 +1174,7 @@ function SelectRow<T extends string>({
   return (
     <FieldRow>
       <FieldLabel label={label} help={help} />
-      <select value={value} onChange={(e) => onChange(e.target.value as T)} className={selectCls}>
+      <select value={value} onChange={(e) => onChange(e.target.value as T)} className={selectCls} style={selectStyle}>
         {options.map((opt) => (
           <option key={opt} value={opt}>
             {opt}
@@ -1198,7 +1207,7 @@ function GroupedModelSelect({
   return (
     <FieldRow>
       <FieldLabel label={label} help={help} />
-      <select value={value} onChange={(e) => onChange(e.target.value)} className={selectCls}>
+      <select value={value} onChange={(e) => onChange(e.target.value)} className={selectCls} style={selectStyle}>
         {(includeNone || groups.length === 0) && <option value="">— (default) —</option>}
         {groups.map(([groupName, group]) => {
           const models = Object.entries(group.models ?? {});
@@ -1243,8 +1252,8 @@ function MultiChoiceRow({
           return (
             <label
               key={opt}
-              className="inline-flex items-center gap-2 text-sm text-slate-300 bg-slate-800/60 ring-1 ring-slate-700/40 rounded-lg px-3 py-2 cursor-pointer hover:bg-slate-700/60 transition-colors"
-            >
+              className="inline-flex items-center gap-2 text-sm rounded-lg px-3 py-2 cursor-pointer hover:bg-white/[0.04] transition-colors"
+              style={{ color: 'var(--af-text-muted)', background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-border)' }}>
               <input
                 type="checkbox"
                 checked={checked}
@@ -1317,7 +1326,7 @@ function GroupedMcpChoiceRow({
     <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-4 items-start">
       <FieldLabel label={label} help={help} />
       <div className="flex flex-col gap-3">
-        <div className="rounded-xl border border-slate-700/60 bg-slate-900/45 px-3 py-3">
+        <div className="rounded-xl px-3 py-3" style={{ border: '1px solid var(--af-border)', background: 'var(--af-surface-2)' }}>
           <div className="flex flex-wrap items-center gap-2">
             <input
               value={search}
@@ -1342,12 +1351,15 @@ function GroupedMcpChoiceRow({
               Clear Visible
             </Button>
           </div>
-          <div className="mt-2 text-[11px] text-slate-500">
+          <div className="mt-2 text-[11px]" style={{ color: 'var(--af-text-faint)' }}>
             visible tools {visibleTools.length} · selected {selectedVisibleCount}
           </div>
         </div>
         {filteredGroups.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900/35 px-3 py-4 text-sm text-slate-500">
+          <div
+            className="rounded-xl px-3 py-4 text-sm"
+            style={{ border: '1px dashed var(--af-border)', background: 'var(--af-surface-2)', color: 'var(--af-text-faint)' }}
+          >
             No MCP tools match the current search.
           </div>
         ) : (
@@ -1357,25 +1369,27 @@ function GroupedMcpChoiceRow({
             return (
           <div
             key={group.serverId}
-            className="rounded-xl border border-slate-700/60 bg-slate-900/45 px-3 py-3"
+            className="rounded-xl px-3 py-3"
+            style={{ border: '1px solid var(--af-border)', background: 'var(--af-surface-2)' }}
           >
             <div className="mb-2 flex flex-wrap items-center gap-2 justify-between">
               <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-medium text-slate-100">
+              <span className="text-sm font-medium" style={{ color: 'var(--af-text-heading)' }}>
                 {group.serverId === 'ungrouped' ? 'Other MCP tools' : group.serverId}
               </span>
               <span
                 className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
                   group.connected
                     ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200'
-                    : 'border-slate-600/30 bg-slate-800/70 text-slate-300'
+                    : 'border-transparent bg-white/[0.06]'
                 }`}
+                style={group.connected ? {} : { color: 'var(--af-text-muted)' }}
               >
                 {group.connected ? 'connected' : 'cached'}
               </span>
-              <span className="text-[11px] text-slate-500">{group.tools.length} tools</span>
+              <span className="text-[11px]" style={{ color: 'var(--af-text-faint)' }}>{group.tools.length} tools</span>
               {activeGroupToolCount > 0 && (
-                <span className="text-[11px] text-slate-500">selected {activeGroupToolCount}</span>
+                <span className="text-[11px]" style={{ color: 'var(--af-text-faint)' }}>selected {activeGroupToolCount}</span>
               )}
               </div>
               <div className="flex flex-wrap gap-2">
@@ -1403,7 +1417,8 @@ function GroupedMcpChoiceRow({
                 return (
                   <label
                     key={toolName}
-                    className="inline-flex items-center gap-2 rounded-lg bg-slate-800/60 px-3 py-2 text-sm text-slate-300 ring-1 ring-slate-700/40 transition-colors hover:bg-slate-700/60"
+                    className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors hover:bg-white/[0.04]"
+                    style={{ background: 'var(--af-surface-3)', color: 'var(--af-text-muted)', boxShadow: '0 0 0 1px var(--af-border)' }}
                   >
                     <input
                       type="checkbox"
@@ -1457,6 +1472,7 @@ function DeferredTextRow({
         onChange={(e) => setLocal(e.target.value)}
         onBlur={() => onChange(local)}
         className={inputCls}
+        style={inputStyle}
       />
     </FieldRow>
   );
@@ -1512,10 +1528,13 @@ function TagInputRow({
                   }}
                   className={`text-xs px-2.5 py-1 rounded-md border transition-colors ${
                     active
-                      ? 'bg-indigo-600/30 border-indigo-500/50 text-indigo-300'
-                      : 'border-slate-700/60 text-slate-500 hover:text-slate-200 hover:border-slate-600'
+                      ? 'border-transparent'
+                    : 'hover:border-white/[0.16]'
                   }`}
-                  style={active ? {} : { background: 'rgba(30,34,50,0.6)' }}
+                  style={active
+                    ? { background: 'var(--af-accent-soft)', borderColor: 'var(--af-accent-soft-2)', color: 'var(--af-accent)' }
+                    : { background: 'var(--af-surface-2)', borderColor: 'var(--af-border)', color: 'var(--af-text-faint)' }
+                  }
                 >
                   {opt}
                 </button>
@@ -1525,19 +1544,21 @@ function TagInputRow({
         )}
         {/* Tag display + custom-entry input */}
         <div
-          className="min-h-[36px] flex flex-wrap gap-1.5 items-center ring-1 ring-slate-700 focus-within:ring-indigo-500/60 rounded-lg px-2 py-1.5 transition-shadow"
-          style={{ background: 'rgba(15,18,30,0.8)' }}
+          className="min-h-[36px] flex flex-wrap gap-1.5 items-center focus-within:ring-1 rounded-lg px-2 py-1.5 transition-shadow"
+          style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)' }}
         >
           {values.map((tag) => (
             <span
               key={tag}
-              className="inline-flex items-center gap-1 text-xs bg-slate-700/70 text-slate-200 rounded-md px-2 py-0.5 shrink-0"
+              className="inline-flex items-center gap-1 text-xs rounded-md px-2 py-0.5 shrink-0"
+              style={{ background: 'var(--af-surface-3)', color: 'var(--af-text-base)' }}
             >
               {tag}
               <button
                 type="button"
                 onClick={() => onChange(values.filter((v) => v !== tag))}
-                className="text-slate-400 hover:text-white leading-none ml-0.5"
+                className="hover:text-white leading-none ml-0.5"
+                style={{ color: 'var(--af-text-faint)' }}
                 aria-label={`Remove ${tag}`}
               >
                 ×
@@ -1552,7 +1573,8 @@ function TagInputRow({
               if (inputVal.trim()) commit(inputVal);
             }}
             placeholder={values.length === 0 ? 'Enter or , to add…' : ''}
-            className="flex-1 min-w-[100px] bg-transparent text-slate-200 text-sm outline-none placeholder:text-slate-600"
+            className="flex-1 min-w-[100px] bg-transparent text-sm outline-none"
+            style={{ color: 'var(--af-text-base)' }}
           />
         </div>
       </div>
@@ -1562,7 +1584,7 @@ function TagInputRow({
 
 function ListSummary({ values }: { values: string[] }) {
   return (
-    <span className="text-sm text-slate-400">{values.length > 0 ? values.join(', ') : 'none'}</span>
+    <span className="text-sm" style={{ color: 'var(--af-text-faint)' }}>{values.length > 0 ? values.join(', ') : 'none'}</span>
   );
 }
 
@@ -1602,15 +1624,15 @@ function FormModal({
         className="w-full max-w-2xl mx-4 rounded-2xl flex flex-col overflow-hidden"
         style={{
           maxHeight: '85vh',
-          background: 'linear-gradient(160deg, rgba(20,23,37,0.98) 0%, rgba(12,14,22,0.98) 100%)',
-          border: '1px solid rgba(255,255,255,0.08)',
-          boxShadow: '0 24px 64px rgba(0,0,0,0.6), 0 0 0 1px rgba(99,102,241,0.08) inset',
+          background: 'linear-gradient(160deg, var(--af-card-bg) 0%, var(--af-card-bg) 100%)',
+          border: '1px solid var(--af-overlay-border)',
+          boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
         }}
       >
         {/* Header — fixed */}
         <div className="px-6 pt-6 pb-4 shrink-0">
-          <h3 className="text-[15px] font-semibold text-slate-100">{title}</h3>
-          <p className="text-sm text-slate-400 mt-1 leading-relaxed">{description}</p>
+          <h3 className="text-[15px] font-semibold" style={{ color: 'var(--af-text-heading)' }}>{title}</h3>
+          <p className="text-sm mt-1 leading-relaxed" style={{ color: 'var(--af-text-muted)' }}>{description}</p>
         </div>
 
         {/* Scrollable form area */}
@@ -1621,7 +1643,7 @@ function FormModal({
         {/* Footer — fixed at bottom */}
         <div
           className="px-6 py-4 flex justify-end gap-2 shrink-0"
-          style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}
+          style={{ borderTop: '1px solid var(--af-border)' }}
         >
           <Button variant="ghost" size="sm" onClick={onClose}>
             Cancel
@@ -1673,32 +1695,34 @@ function McpHistoryEventCard({ record }: { record: McpHistoryEventInfo }) {
     record.outcome === 'connected'
       ? 'text-emerald-200 bg-emerald-500/10 border-emerald-500/20'
       : record.outcome === 'disabled'
-        ? 'text-slate-300 bg-slate-700/40 border-slate-600/30'
+        ? 'text-slate-300 bg-white/[0.06] border-white/[0.10]'
         : 'text-amber-200 bg-amber-500/10 border-amber-500/20';
-  const triggerTone =
-    record.trigger === 'auto-retry'
-      ? 'text-cyan-200 bg-cyan-500/10 border-cyan-500/20'
-      : record.trigger === 'manual-refresh'
-        ? 'text-indigo-200 bg-indigo-500/10 border-indigo-500/20'
-        : 'text-slate-300 bg-slate-700/40 border-slate-600/30';
+  const triggerToneAuto = record.trigger === 'auto-retry';
+  const triggerToneManual = record.trigger === 'manual-refresh';
+  const triggerTone = triggerToneAuto
+    ? 'text-cyan-200 bg-cyan-500/10 border-cyan-500/20'
+    : 'text-slate-300 bg-white/[0.06] border-white/[0.10]';
+  const triggerAccentStyle = triggerToneManual
+    ? { color: 'var(--af-accent)', background: 'var(--af-accent-soft)', border: '1px solid color-mix(in srgb, var(--af-accent) 20%, transparent)' }
+    : undefined;
   const nextRetryAt = formatMcpTimestamp(record.nextRetryAt);
 
   return (
-    <div className="rounded-xl border border-white/8 bg-slate-900/60 px-4 py-3">
+    <div className="rounded-xl px-4 py-3" style={{ border: '1px solid var(--af-border)', background: 'var(--af-surface-2)' }}>
       <div className="flex flex-wrap items-center gap-2 text-xs">
-        <span className="font-medium text-slate-100">{record.serverId}</span>
-        <span className="rounded-full border border-slate-600/30 bg-slate-800/60 px-2 py-0.5 uppercase tracking-wide text-slate-300">
+        <span className="font-medium" style={{ color: 'var(--af-text-heading)' }}>{record.serverId}</span>
+        <span className="rounded-full px-2 py-0.5 uppercase tracking-wide" style={{ border: '1px solid var(--af-border)', background: 'var(--af-surface-3)', color: 'var(--af-text-muted)' }}>
           {record.transport}
         </span>
-        <span className={`rounded-full border px-2 py-0.5 uppercase tracking-wide ${triggerTone}`}>
+        <span className={`rounded-full border px-2 py-0.5 uppercase tracking-wide ${triggerToneManual ? '' : triggerTone}`} style={triggerAccentStyle}>
           {formatMcpHistoryTrigger(record.trigger)}
         </span>
         <span className={`rounded-full border px-2 py-0.5 uppercase tracking-wide ${outcomeTone}`}>
           {formatMcpHistoryOutcome(record.outcome)}
         </span>
-        <span className="text-slate-500">{formatMcpTimestamp(record.timestamp)}</span>
+        <span style={{ color: 'var(--af-text-faint)' }}>{formatMcpTimestamp(record.timestamp)}</span>
       </div>
-      <div className="mt-2 text-[11px] text-slate-500 leading-relaxed">
+      <div className="mt-2 text-[11px] leading-relaxed" style={{ color: 'var(--af-text-faint)' }}>
         prefix={record.toolPrefix} · approval={record.approval} · timeout={record.timeoutMs}ms · tools={record.toolCount}
         {typeof record.retryCount === 'number' ? ` · retries=${record.retryCount}` : ''}
         {nextRetryAt ? ` · next retry ${nextRetryAt}` : ''}
@@ -1760,11 +1784,12 @@ function McpHistoryInspectorModal({
         }
       }}
     >
-      <div className="w-full max-w-5xl mx-4 max-h-[88vh] overflow-auto rounded-2xl bg-slate-900 ring-1 ring-slate-700 p-5 flex flex-col gap-4">
+      <div className="w-full max-w-5xl mx-4 max-h-[88vh] overflow-auto rounded-2xl p-5 flex flex-col gap-4"
+        style={{ background: 'var(--af-card-bg)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}>
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h3 className="text-base font-semibold text-slate-100">MCP Server Drilldown · {inspector.serverId}</h3>
-            <p className="text-xs text-slate-400 mt-1">
+            <h3 className="text-base font-semibold" style={{ color: 'var(--af-text-heading)' }}>MCP Server Drilldown · {inspector.serverId}</h3>
+            <p className="text-xs mt-1" style={{ color: 'var(--af-text-muted)' }}>
               {server?.transport === 'stdio'
                 ? `command=${server.command || '(unset)'}`
                 : `url=${server?.url || '(unset)'}`}
@@ -1781,36 +1806,36 @@ function McpHistoryInspectorModal({
         </div>
 
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-          <div className="rounded-xl border border-white/10 bg-slate-900/60 px-4 py-3">
-            <div className="text-[11px] uppercase tracking-wide text-slate-500">Runtime</div>
-            <div className="mt-1 text-lg font-semibold text-slate-100">{runtimeStatus?.status ?? 'unknown'}</div>
+          <div className="rounded-xl px-4 py-3" style={{ border: '1px solid var(--af-border)', background: 'var(--af-surface-2)' }}>
+            <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--af-text-faint)' }}>Runtime</div>
+            <div className="mt-1 text-lg font-semibold" style={{ color: 'var(--af-text-heading)' }}>{runtimeStatus?.status ?? 'unknown'}</div>
           </div>
-          <div className="rounded-xl border border-white/10 bg-slate-900/60 px-4 py-3">
-            <div className="text-[11px] uppercase tracking-wide text-slate-500">Recent Success</div>
-            <div className="mt-1 text-lg font-semibold text-slate-100">
+          <div className="rounded-xl px-4 py-3" style={{ border: '1px solid var(--af-border)', background: 'var(--af-surface-2)' }}>
+            <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--af-text-faint)' }}>Recent Success</div>
+            <div className="mt-1 text-lg font-semibold" style={{ color: 'var(--af-text-heading)' }}>
               {summary ? formatMcpSuccessRate(summary.recentSuccessRate) : '—'}
             </div>
           </div>
-          <div className="rounded-xl border border-white/10 bg-slate-900/60 px-4 py-3">
-            <div className="text-[11px] uppercase tracking-wide text-slate-500">Attempts</div>
-            <div className="mt-1 text-lg font-semibold text-slate-100">{summary?.recentAttempts ?? 0}</div>
+          <div className="rounded-xl px-4 py-3" style={{ border: '1px solid var(--af-border)', background: 'var(--af-surface-2)' }}>
+            <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--af-text-faint)' }}>Attempts</div>
+            <div className="mt-1 text-lg font-semibold" style={{ color: 'var(--af-text-heading)' }}>{summary?.recentAttempts ?? 0}</div>
           </div>
-          <div className="rounded-xl border border-white/10 bg-slate-900/60 px-4 py-3">
-            <div className="text-[11px] uppercase tracking-wide text-slate-500">Consecutive Errors</div>
-            <div className="mt-1 text-lg font-semibold text-slate-100">{summary?.consecutiveErrors ?? 0}</div>
+          <div className="rounded-xl px-4 py-3" style={{ border: '1px solid var(--af-border)', background: 'var(--af-surface-2)' }}>
+            <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--af-text-faint)' }}>Consecutive Errors</div>
+            <div className="mt-1 text-lg font-semibold" style={{ color: 'var(--af-text-heading)' }}>{summary?.consecutiveErrors ?? 0}</div>
           </div>
-          <div className="rounded-xl border border-white/10 bg-slate-900/60 px-4 py-3">
-            <div className="text-[11px] uppercase tracking-wide text-slate-500">Auto Recoveries</div>
-            <div className="mt-1 text-lg font-semibold text-slate-100">{summary?.autoRetryRecoveryCount ?? 0}</div>
+          <div className="rounded-xl px-4 py-3" style={{ border: '1px solid var(--af-border)', background: 'var(--af-surface-2)' }}>
+            <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--af-text-faint)' }}>Auto Recoveries</div>
+            <div className="mt-1 text-lg font-semibold" style={{ color: 'var(--af-text-heading)' }}>{summary?.autoRetryRecoveryCount ?? 0}</div>
           </div>
-          <div className="rounded-xl border border-white/10 bg-slate-900/60 px-4 py-3">
-            <div className="text-[11px] uppercase tracking-wide text-slate-500">Manual Fix Events</div>
-            <div className="mt-1 text-lg font-semibold text-slate-100">{summary?.manualFixErrorCount ?? 0}</div>
+          <div className="rounded-xl px-4 py-3" style={{ border: '1px solid var(--af-border)', background: 'var(--af-surface-2)' }}>
+            <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--af-text-faint)' }}>Manual Fix Events</div>
+            <div className="mt-1 text-lg font-semibold" style={{ color: 'var(--af-text-heading)' }}>{summary?.manualFixErrorCount ?? 0}</div>
           </div>
         </div>
 
         {(summary?.lastFailureAt || summary?.lastRecoveryAt || attention) && (
-          <div className="rounded-xl border border-white/8 bg-slate-900/60 px-4 py-3 text-sm text-slate-300 leading-relaxed">
+          <div className="rounded-xl px-4 py-3 text-sm leading-relaxed" style={{ border: '1px solid var(--af-border)', background: 'var(--af-surface-2)', color: 'var(--af-text-muted)' }}>
             {summary?.lastFailureAt && <div>Last failure: {formatMcpTimestamp(summary.lastFailureAt)}</div>}
             {summary?.lastRecoveryAt && <div>Last recovery: {formatMcpTimestamp(summary.lastRecoveryAt)}</div>}
             {attention && (
@@ -1823,9 +1848,9 @@ function McpHistoryInspectorModal({
         )}
 
         <div className="flex flex-col gap-2">
-          <div className="text-sm font-medium text-slate-200">Recent Events</div>
+          <div className="text-sm font-medium" style={{ color: 'var(--af-text-base)' }}>Recent Events</div>
           {inspector.loading ? (
-            <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900/40 px-4 py-5 text-sm text-slate-400">
+            <div className="rounded-xl px-4 py-5 text-sm" style={{ border: '1px dashed var(--af-border)', background: 'var(--af-surface-2)', color: 'var(--af-text-muted)' }}>
               Loading server history…
             </div>
           ) : inspector.error ? (
@@ -1833,7 +1858,7 @@ function McpHistoryInspectorModal({
               {inspector.error}
             </div>
           ) : inspector.records.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900/40 px-4 py-5 text-sm text-slate-400">
+            <div className="rounded-xl px-4 py-5 text-sm" style={{ border: '1px dashed var(--af-border)', background: 'var(--af-surface-2)', color: 'var(--af-text-muted)' }}>
               No MCP runtime events recorded yet for this server.
             </div>
           ) : (
@@ -1955,7 +1980,7 @@ function ChannelsPanel({ cfg, onChange }: Pick<PanelProps, 'cfg' | 'onChange'>) 
           }
         />
         {cfg.channels.telegram?.enabled && (
-          <div className="pl-4 border-l-2 border-indigo-600/40 flex flex-col gap-3">
+          <div className="pl-4 flex flex-col gap-3" style={{ borderLeft: '2px solid color-mix(in srgb, var(--af-accent) 40%, transparent)' }}>
             <TextRow
               label="Bot token"
               help="Telegram bot token from @BotFather."
@@ -2031,7 +2056,7 @@ function ChannelsPanel({ cfg, onChange }: Pick<PanelProps, 'cfg' | 'onChange'>) 
           }
         />
         {cfg.channels.discord?.enabled && (
-          <div className="pl-4 border-l-2 border-indigo-600/40 flex flex-col gap-3">
+          <div className="pl-4 flex flex-col gap-3" style={{ borderLeft: '2px solid color-mix(in srgb, var(--af-accent) 40%, transparent)' }}>
             <TextRow
               label="Bot token"
               help="Discord bot token from Discord Developer Portal."
@@ -2106,7 +2131,7 @@ function ChannelsPanel({ cfg, onChange }: Pick<PanelProps, 'cfg' | 'onChange'>) 
           }
         />
         {cfg.channels.feishu?.enabled && (
-          <div className="pl-4 border-l-2 border-indigo-600/40 flex flex-col gap-3">
+          <div className="pl-4 flex flex-col gap-3" style={{ borderLeft: '2px solid color-mix(in srgb, var(--af-accent) 40%, transparent)' }}>
             <TextRow
               label="App ID"
               help="Feishu Open Platform App ID (e.g. cli_xxxxxxxx)."
@@ -2194,7 +2219,7 @@ function ChannelsPanel({ cfg, onChange }: Pick<PanelProps, 'cfg' | 'onChange'>) 
           }
         />
         {cfg.channels.qq?.enabled && (
-          <div className="pl-4 border-l-2 border-indigo-600/40 flex flex-col gap-3">
+          <div className="pl-4 flex flex-col gap-3" style={{ borderLeft: '2px solid color-mix(in srgb, var(--af-accent) 40%, transparent)' }}>
             <TextRow
               label="App ID"
               help="QQ Open Platform App ID."
@@ -2306,7 +2331,7 @@ function ModelsPanel({
       </div>
 
       {groups.length === 0 && (
-        <p className="text-sm text-slate-500 text-center py-4">
+        <p className="text-sm text-center py-4" style={{ color: 'var(--af-text-faint)' }}>
           No model groups configured. Add a group to get started.
         </p>
       )}
@@ -2331,22 +2356,22 @@ function ModelsPanel({
                   borderBottom: '1px solid rgba(255,255,255,0.06)',
                 }}
               >
-                <span className="text-[13px] font-bold text-slate-100 shrink-0">{groupName}</span>
-                <span className="text-[10px] font-bold text-indigo-300 uppercase tracking-wider shrink-0">
+                <span className="text-[13px] font-bold shrink-0" style={{ color: 'var(--af-text-heading)' }}>{groupName}</span>
+                <span className="text-[10px] font-bold uppercase tracking-wider shrink-0" style={{ color: 'var(--af-accent)' }}>
                   {PROVIDER_LABELS[group.provider] ?? group.provider}
                 </span>
                 {hasApiKey && (
-                  <span className="text-xs text-slate-500 font-mono shrink-0">
+                  <span className="text-xs font-mono shrink-0" style={{ color: 'var(--af-text-faint)' }}>
                     {apiKey.slice(0, 6)}
                     {'\u2022'.repeat(Math.min(8, Math.max(0, apiKey.length - 6)))}
                   </span>
                 )}
                 {hasBaseUrl && (
-                  <span className="text-xs text-slate-500 font-mono truncate max-w-[200px]">
+                  <span className="text-xs font-mono truncate max-w-[200px]" style={{ color: 'var(--af-text-faint)' }}>
                     {group.apiBaseUrl}
                   </span>
                 )}
-                <span className="text-xs text-slate-600 shrink-0">
+                <span className="text-xs shrink-0" style={{ color: 'var(--af-text-faint)' }}>
                   {modelEntries.length}&nbsp;model{modelEntries.length !== 1 ? 's' : ''}
                 </span>
                 <div className="ml-auto flex gap-2 shrink-0">
@@ -2372,27 +2397,27 @@ function ModelsPanel({
 
               {/* Model rows inside this group */}
               {modelEntries.length === 0 ? (
-                <div className="px-4 py-3 text-xs text-slate-600 italic">
+                <div className="px-4 py-3 text-xs italic" style={{ color: 'var(--af-text-faint)' }}>
                   No models yet — use "+ Add Model".
                 </div>
               ) : (
                 modelEntries.map(([modelKey, def]) => (
                   <div
                     key={modelKey}
-                    className="flex items-center gap-3 px-4 py-2.5 hover:bg-slate-800/30 transition-colors"
+                    className="flex items-center gap-3 px-4 py-2.5 hover:bg-white/[0.04] transition-colors"
                     style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}
                   >
                     <div className="flex-1 min-w-0">
-                      <span className="text-sm font-semibold text-slate-200">{modelKey}</span>
-                      <span className="mx-1.5 text-slate-700">·</span>
-                      <span className="text-xs text-slate-400 font-mono">
-                        {def.id || <em className="text-slate-600">no id</em>}
+                      <span className="text-sm font-semibold" style={{ color: 'var(--af-text-base)' }}>{modelKey}</span>
+                      <span className="mx-1.5" style={{ color: 'var(--af-text-faint)' }}>·</span>
+                      <span className="text-xs font-mono" style={{ color: 'var(--af-text-muted)' }}>
+                        {def.id || <em style={{ color: 'var(--af-text-faint)' }}>no id</em>}
                       </span>
-                      <span className="ml-2 text-[10px] text-slate-600 font-mono bg-slate-800/60 px-1.5 py-0.5 rounded">
+                      <span className="ml-2 text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ color: 'var(--af-text-faint)', background: 'var(--af-surface-3)' }}>
                         {groupName}/{modelKey}
                       </span>
                     </div>
-                    <span className="text-xs text-slate-500 shrink-0">
+                    <span className="text-xs shrink-0" style={{ color: 'var(--af-text-faint)' }}>
                       max&nbsp;{def.maxTokens.toLocaleString()}
                       {def.temperature !== undefined ? ` · temp ${def.temperature}` : ''}
                     </span>
@@ -2455,7 +2480,7 @@ function AgentsPanel({
         </Button>
       </div>
       {cfg.agents.length === 0 && (
-        <p className="text-sm text-slate-500 text-center py-4">No agents configured.</p>
+        <p className="text-sm text-center py-4" style={{ color: 'var(--af-text-faint)' }}>No agents configured.</p>
       )}
       <div className="flex flex-col gap-2">
         {cfg.agents.map((agent, idx) => {
@@ -2474,12 +2499,12 @@ function AgentsPanel({
           return (
             <ItemCard key={`${agent.id}-${idx}`}>
               <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium text-slate-200">
+                <div className="text-sm font-medium" style={{ color: 'var(--af-text-base)' }}>
                   {agent.id}
                   {agent.name ? ` · ${agent.name}` : ''}
                 </div>
-                <div className="text-xs text-slate-500 mt-0.5">
-                  model={agent.model || '(default)'} · role={agent.mesh.role} · accepts:{' '}
+                <div className="text-xs mt-0.5" style={{ color: 'var(--af-text-faint)' }}>
+                  model={agent.model || '(default)'} · accepts:{' '}
                   <ListSummary values={agent.mesh.accepts} />
                   {agent.tools.sandboxProfile ? ` · sandbox=${agent.tools.sandboxProfile}` : ''}
                   {availableAgentMcpTools.length > 0
@@ -2487,21 +2512,21 @@ function AgentsPanel({
                     : ''}
                 </div>
                 {enabledAgentMcpTools.length > 0 && (
-                  <div className="text-xs text-slate-500 mt-0.5 leading-relaxed">
-                    MCP: {enabledAgentMcpSummary}
+                  <div className="text-xs mt-0.5 leading-relaxed" style={{ color: 'var(--af-text-faint)' }}>
+                    {enabledAgentMcpSummary}
                   </div>
                 )}
                 {(agent.soulFile || agent.agentsFile) && (
-                  <div className="text-xs text-slate-500 mt-0.5">
+                  <div className="text-xs mt-0.5" style={{ color: 'var(--af-text-faint)' }}>
                     {agent.soulFile && (
                       <span>
-                        soul: <span className="text-slate-400 font-mono">{agent.soulFile}</span>
+                        soul: <span className="font-mono" style={{ color: 'var(--af-text-muted)' }}>{agent.soulFile}</span>
                       </span>
                     )}
                     {agent.soulFile && agent.agentsFile && <span className="mx-1">·</span>}
                     {agent.agentsFile && (
                       <span>
-                        agents: <span className="text-slate-400 font-mono">{agent.agentsFile}</span>
+                        agents: <span className="font-mono" style={{ color: 'var(--af-text-muted)' }}>{agent.agentsFile}</span>
                       </span>
                     )}
                   </div>
@@ -2712,7 +2737,8 @@ function SkillsPanel({
                 setDirValidError(null);
               }}
               placeholder="/path/to/skills"
-              className="flex-1 font-mono text-sm bg-slate-900/80 ring-1 ring-slate-700 focus:ring-indigo-500/60 focus:outline-none text-slate-200 rounded-xl px-4 py-2 transition-shadow"
+              className="flex-1 font-mono text-sm focus:outline-none rounded-xl px-4 py-2 transition-shadow"
+              style={inputStyle}
             />
             <Button
               size="sm"
@@ -2732,8 +2758,7 @@ function SkillsPanel({
           )}
           {dirValidError && <p className="text-sm text-red-400">✗ {dirValidError}</p>}
           {dirValidResult === null && !dirValidError && (
-            <p className="text-xs text-slate-500">
-              Validate first, or click Confirm to add the directory without checking.
+            <p className="text-xs" style={{ color: 'var(--af-text-faint)' }}>
             </p>
           )}
         </FormModal>
@@ -2764,14 +2789,14 @@ function SkillsPanel({
           </Button>
         </div>
         {(cfg.skills.dirs ?? []).length === 0 ? (
-          <p className="text-sm text-slate-500">
+          <p className="text-sm" style={{ color: 'var(--af-text-faint)' }}>
             No extra dirs configured. Default dirs are always scanned.
           </p>
         ) : (
           <div className="flex flex-col gap-2">
             {(cfg.skills.dirs ?? []).map((dir, i) => (
               <ItemCard key={`${dir}-${i}`}>
-                <span className="text-sm font-mono text-slate-300 truncate flex-1">{dir}</span>
+                <span className="text-sm font-mono truncate flex-1" style={{ color: 'var(--af-text-muted)' }}>{dir}</span>
                 <Button
                   size="sm"
                   variant="danger"
@@ -2798,7 +2823,7 @@ function SkillsPanel({
         description="Skills currently found in the pool."
       >
         {availableSkills.length === 0 ? (
-          <p className="text-sm text-slate-500">
+          <p className="text-sm" style={{ color: 'var(--af-text-faint)' }}>
             No skills detected. Add skill dirs or place SKILL.md files in ~/.agentflyer/skills/.
           </p>
         ) : (
@@ -2806,15 +2831,16 @@ function SkillsPanel({
             {availableSkills.map((sk) => (
               <div
                 key={sk.id}
-                className="rounded-lg bg-slate-900/50 ring-1 ring-slate-700/40 px-3 py-2.5 flex items-start gap-3"
+                className="rounded-lg px-3 py-2.5 flex items-start gap-3"
+                style={{ background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}
               >
                 <div className="flex-1 min-w-0">
-                  <span className="text-sm font-medium text-slate-200">{sk.name}</span>
-                  <span className="text-xs text-slate-500 ml-2">{sk.shortDesc}</span>
+                  <span className="text-sm font-medium" style={{ color: 'var(--af-text-base)' }}>{sk.name}</span>
+                  <span className="text-xs ml-2" style={{ color: 'var(--af-text-faint)' }}>{sk.shortDesc}</span>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   {sk.source === 'builtin' && (
-                    <span className="text-xs text-indigo-400 bg-indigo-400/10 px-1.5 py-0.5 rounded">
+                    <span className="text-xs px-1.5 py-0.5 rounded" style={{ color: 'var(--af-accent)', background: 'var(--af-accent-soft)' }}>
                       built-in
                     </span>
                   )}
@@ -2866,16 +2892,16 @@ function SearchPanel({
         ))}
       </div>
       {cfg.search.providers.length === 0 && (
-        <p className="text-sm text-slate-500 text-center py-4">No search providers configured.</p>
+        <p className="text-sm text-center py-4" style={{ color: 'var(--af-text-faint)' }}>No search providers configured.</p>
       )}
       <div className="flex flex-col gap-2">
         {cfg.search.providers.map((provider, idx) => (
           <ItemCard key={`${provider.provider}-${idx}`}>
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-slate-200 capitalize">
+              <div className="text-sm font-medium capitalize" style={{ color: 'var(--af-text-base)' }}>
                 {provider.provider}
               </div>
-              <div className="text-xs text-slate-500 mt-0.5">max {provider.maxResults} results</div>
+              <div className="text-xs mt-0.5" style={{ color: 'var(--af-text-faint)' }}>max {provider.maxResults} results</div>
             </div>
             <div className="flex gap-2 shrink-0">
               <Button
@@ -3125,9 +3151,9 @@ function McpPanel({
         description="Quick health overview for configured MCP servers, grouped before you drill into one server card."
       >
         <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-8">
-          <div className="rounded-xl border border-white/10 bg-slate-900/60 px-4 py-3">
-            <div className="text-[11px] uppercase tracking-wide text-slate-500">Configured</div>
-            <div className="mt-1 text-2xl font-semibold text-slate-100">{statusSummary.configured}</div>
+          <div className="rounded-xl px-4 py-3" style={{ border: '1px solid var(--af-border)', background: 'var(--af-surface-2)' }}>
+            <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--af-text-faint)' }}>Configured</div>
+            <div className="mt-1 text-2xl font-semibold" style={{ color: 'var(--af-text-heading)' }}>{statusSummary.configured}</div>
           </div>
           <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
             <div className="text-[11px] uppercase tracking-wide text-emerald-300/80">Connected</div>
@@ -3137,17 +3163,17 @@ function McpPanel({
             <div className="text-[11px] uppercase tracking-wide text-amber-300/80">Errors</div>
             <div className="mt-1 text-2xl font-semibold text-amber-200">{statusSummary.errored}</div>
           </div>
-          <div className="rounded-xl border border-slate-600/30 bg-slate-800/40 px-4 py-3">
-            <div className="text-[11px] uppercase tracking-wide text-slate-400">Disabled</div>
-            <div className="mt-1 text-2xl font-semibold text-slate-200">{statusSummary.disabled}</div>
+          <div className="rounded-xl px-4 py-3" style={{ border: '1px solid var(--af-border)', background: 'var(--af-surface-3)' }}>
+            <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--af-text-muted)' }}>Disabled</div>
+            <div className="mt-1 text-2xl font-semibold" style={{ color: 'var(--af-text-base)' }}>{statusSummary.disabled}</div>
           </div>
           <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-4 py-3">
             <div className="text-[11px] uppercase tracking-wide text-cyan-300/80">stdio</div>
             <div className="mt-1 text-2xl font-semibold text-cyan-200">{statusSummary.stdio}</div>
           </div>
-          <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/5 px-4 py-3">
-            <div className="text-[11px] uppercase tracking-wide text-indigo-300/80">sse</div>
-            <div className="mt-1 text-2xl font-semibold text-indigo-200">{statusSummary.sse}</div>
+          <div className="rounded-xl px-4 py-3" style={{ border: '1px solid var(--af-accent-soft-2)', background: 'var(--af-accent-soft)' }}>
+            <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--af-accent)' }}>sse</div>
+            <div className="mt-1 text-2xl font-semibold" style={{ color: 'var(--af-accent)' }}>{statusSummary.sse}</div>
           </div>
           <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 px-4 py-3">
             <div className="text-[11px] uppercase tracking-wide text-rose-300/80">Manual Fix</div>
@@ -3165,7 +3191,7 @@ function McpPanel({
         description="Current MCP issues that can impact unattended workflow or scheduler execution."
       >
         {mcpAttention.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900/40 px-4 py-5 text-sm text-slate-400">
+          <div className="rounded-xl border border-dashed px-4 py-5 text-sm" style={{ borderColor: 'var(--af-border)', background: 'var(--af-surface-2)', color: 'var(--af-text-muted)' }}>
             No MCP operator attention items right now.
           </div>
         ) : (
@@ -3173,10 +3199,11 @@ function McpPanel({
             {mcpAttention.map((entry) => (
               <div
                 key={entry.serverId}
-                className="rounded-xl border border-white/8 bg-slate-900/60 px-4 py-3"
+                className="rounded-xl px-4 py-3"
+                style={{ border: '1px solid var(--af-border)', background: 'var(--af-surface-2)' }}
               >
                 <div className="flex flex-wrap items-center gap-2 text-xs">
-                  <span className="font-medium text-slate-100">{entry.serverId}</span>
+                  <span className="font-medium" style={{ color: 'var(--af-text-heading)' }}>{entry.serverId}</span>
                   <span
                     className={`rounded-full border px-2 py-0.5 uppercase tracking-wide ${
                       entry.severity === 'critical'
@@ -3187,9 +3214,9 @@ function McpPanel({
                     {formatMcpAttentionState(entry.state)}
                   </span>
                 </div>
-                <div className="mt-2 text-sm text-slate-200 leading-relaxed">{entry.message}</div>
+                <div className="mt-2 text-sm leading-relaxed" style={{ color: 'var(--af-text-base)' }}>{entry.message}</div>
                 {(entry.lastErrorCode || typeof entry.retryCount === 'number' || entry.nextRetryAt) && (
-                  <div className="mt-2 text-[11px] text-slate-500 leading-relaxed">
+                  <div className="mt-2 text-[11px] leading-relaxed" style={{ color: 'var(--af-text-faint)' }}>
                     {entry.lastErrorCode ? `code=${entry.lastErrorCode}` : ''}
                     {typeof entry.retryCount === 'number' ? ` · retries=${entry.retryCount}` : ''}
                     {entry.nextRetryAt ? ` · next retry ${formatMcpTimestamp(entry.nextRetryAt)}` : ''}
@@ -3210,7 +3237,8 @@ function McpPanel({
             <select
               value={statusFilter}
               onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}
-              className="rounded-lg border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+              className="rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2"
+              style={{ border: '1px solid var(--af-border)', background: 'var(--af-input-bg)', color: 'var(--af-text-base)' }}
             >
               <option value="all">status: all</option>
               <option value="connected">status: connected</option>
@@ -3221,7 +3249,8 @@ function McpPanel({
             <select
               value={transportFilter}
               onChange={(event) => setTransportFilter(event.target.value as typeof transportFilter)}
-              className="rounded-lg border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+              className="rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2"
+              style={{ border: '1px solid var(--af-border)', background: 'var(--af-input-bg)', color: 'var(--af-text-base)' }}
             >
               <option value="all">transport: all</option>
               <option value="stdio">transport: stdio</option>
@@ -3230,7 +3259,8 @@ function McpPanel({
             <select
               value={errorCodeFilter}
               onChange={(event) => setErrorCodeFilter(event.target.value)}
-              className="rounded-lg border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+              className="rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2"
+              style={{ border: '1px solid var(--af-border)', background: 'var(--af-input-bg)', color: 'var(--af-text-base)' }}
             >
               <option value="all">error code: all</option>
               {errorCodeOptions.map((code) => (
@@ -3242,7 +3272,8 @@ function McpPanel({
             <select
               value={errorPhaseFilter}
               onChange={(event) => setErrorPhaseFilter(event.target.value)}
-              className="rounded-lg border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+              className="rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2"
+              style={{ border: '1px solid var(--af-border)', background: 'var(--af-input-bg)', color: 'var(--af-text-base)' }}
             >
               <option value="all">error phase: all</option>
               {errorPhaseOptions.map((phase) => (
@@ -3286,11 +3317,11 @@ function McpPanel({
         </div>
 
         {servers.length === 0 ? (
-          <p className="text-sm text-slate-500">
+          <p className="text-sm" style={{ color: 'var(--af-text-faint)' }}>
             No MCP servers configured. Add a server here instead of editing raw JSON.
           </p>
         ) : filteredServers.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900/40 px-4 py-5 text-sm text-slate-400">
+          <div className="rounded-xl border border-dashed px-4 py-5 text-sm" style={{ borderColor: 'var(--af-border)', background: 'var(--af-surface-2)', color: 'var(--af-text-muted)' }}>
             No MCP servers match the current filters. Clear one or more filters to inspect the full runtime surface.
           </div>
         ) : (
@@ -3309,19 +3340,19 @@ function McpPanel({
                 runtimeStatus?.status === 'connected'
                   ? 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20'
                   : runtimeStatus?.status === 'disabled'
-                    ? 'text-slate-300 bg-slate-700/40 border-slate-600/30'
+                    ? 'text-slate-300 bg-white/[0.06] border-white/[0.10]'
                     : 'text-amber-300 bg-amber-500/10 border-amber-500/20';
 
               return (
               <ItemCard key={`${server.id}-${index}`}>
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-slate-200 flex items-center gap-2">
+                  <div className="text-sm font-medium flex items-center gap-2" style={{ color: 'var(--af-text-base)' }}>
                     <span>{server.id}</span>
-                    <span className="text-[10px] uppercase tracking-wide text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 rounded-full px-2 py-0.5">
+                    <span className="text-[10px] uppercase tracking-wide rounded-full px-2 py-0.5" style={{ color: 'var(--af-accent)', background: 'var(--af-accent-soft)', border: '1px solid color-mix(in srgb, var(--af-accent) 20%, transparent)' }}>
                       {server.transport}
                     </span>
                     {!server.enabled && (
-                      <span className="text-[10px] uppercase tracking-wide text-slate-400 bg-slate-700/40 rounded-full px-2 py-0.5">
+                      <span className="text-[10px] uppercase tracking-wide rounded-full px-2 py-0.5" style={{ color: 'var(--af-text-muted)', background: 'var(--af-surface-3)' }}>
                         disabled
                       </span>
                     )}
@@ -3331,19 +3362,19 @@ function McpPanel({
                       </span>
                     )}
                   </div>
-                  <div className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+                  <div className="text-xs mt-0.5 leading-relaxed" style={{ color: 'var(--af-text-faint)' }}>
                     {server.transport === 'stdio'
                       ? `command=${server.command || '(unset)'}${server.args.length > 0 ? ` ${server.args.join(' ')}` : ''}`
                       : `url=${server.url || '(unset)'}`}
                   </div>
-                  <div className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+                  <div className="text-xs mt-0.5 leading-relaxed" style={{ color: 'var(--af-text-faint)' }}>
                     approval={server.approval} · prefix={server.toolPrefix?.trim() || `mcp_${server.id}`} · timeout={server.timeoutMs}ms
                     {server.allowTools && server.allowTools.length > 0
                       ? ` · allowTools=${server.allowTools.join(', ')}`
                       : ' · allowTools=all'}
                   </div>
                   {runtimeStatus && (
-                    <div className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+                    <div className="text-xs mt-1.5 leading-relaxed" style={{ color: 'var(--af-text-muted)' }}>
                       tools={runtimeStatus.toolCount}
                       {runtimeStatus.tools.length > 0
                         ? ` · ${runtimeStatus.tools.slice(0, 4).join(', ')}${runtimeStatus.tools.length > 4 ? ' ...' : ''}`
@@ -3351,7 +3382,7 @@ function McpPanel({
                     </div>
                   )}
                   {historySummary && (
-                    <div className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
+                    <div className="text-[11px] mt-1.5 leading-relaxed" style={{ color: 'var(--af-text-faint)' }}>
                       recent success {formatMcpSuccessRate(historySummary.recentSuccessRate)} across {historySummary.recentAttempts} attempt{historySummary.recentAttempts === 1 ? '' : 's'}
                       {' · '}consecutive errors {historySummary.consecutiveErrors}
                       {' · '}auto recoveries {historySummary.autoRetryRecoveryCount}
@@ -3363,7 +3394,7 @@ function McpPanel({
                     </div>
                   )}
                   {runtimeStatus && (lastConnectedAt || lastRefreshAt || nextRetryAt) && (
-                    <div className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
+                    <div className="text-[11px] mt-1.5 leading-relaxed" style={{ color: 'var(--af-text-faint)' }}>
                       {lastConnectedAt ? `last connected ${lastConnectedAt}` : 'never connected'}
                       {lastRefreshAt ? ` · last refresh ${lastRefreshAt}` : ''}
                       {nextRetryAt ? ` · next retry ${nextRetryAt}` : ''}
@@ -3384,7 +3415,7 @@ function McpPanel({
                             </span>
                           )}
                           {typeof runtimeStatus.retryCount === 'number' && runtimeStatus.retryCount > 0 && (
-                            <span className="text-[10px] uppercase tracking-wide text-slate-300 bg-slate-950/60 border border-slate-500/20 rounded-full px-1.5 py-0.5">
+                            <span className="text-[10px] uppercase tracking-wide rounded-full px-1.5 py-0.5" style={{ color: 'var(--af-text-muted)', background: 'var(--af-surface-3)', border: '1px solid var(--af-border)' }}>
                               retries={runtimeStatus.retryCount}
                             </span>
                           )}
@@ -3397,7 +3428,7 @@ function McpPanel({
                       )}
                       {runtimeStatus.lastError}
                       {diagnosticHint && (
-                        <div className="mt-2 rounded-md border border-amber-400/15 bg-slate-950/20 px-2.5 py-2">
+                        <div className="mt-2 rounded-md border border-amber-400/15 px-2.5 py-2" style={{ background: 'var(--af-surface-2)' }}>
                           <div className="font-medium text-amber-100">{diagnosticHint.title}</div>
                           <div className="mt-1 text-amber-100/75">{diagnosticHint.description}</div>
                         </div>
@@ -3405,7 +3436,7 @@ function McpPanel({
                     </div>
                   )}
                   {serverAttention && (
-                    <div className="mt-1.5 rounded-lg border border-amber-500/15 bg-slate-950/30 px-3 py-2 text-[11px] text-amber-100/90 leading-relaxed">
+                    <div className="mt-1.5 rounded-lg border border-amber-500/15 px-3 py-2 text-[11px] text-amber-100/90 leading-relaxed" style={{ background: 'var(--af-surface-2)' }}>
                       {serverAttention.message}
                     </div>
                   )}
@@ -3468,7 +3499,7 @@ function McpPanel({
         description="Newest-first MCP recovery timeline. Use it to confirm whether a server failed once, kept auto-retrying, or recovered after manual intervention."
       >
         {filteredHistory.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900/40 px-4 py-5 text-sm text-slate-400">
+          <div className="rounded-xl border border-dashed px-4 py-5 text-sm" style={{ borderColor: 'var(--af-border)', background: 'var(--af-surface-2)', color: 'var(--af-text-muted)' }}>
             No MCP runtime events recorded yet for the current server scope.
           </div>
         ) : (
@@ -3489,7 +3520,7 @@ function McpPanel({
         title="Operator Notes"
         description="MCP now supports runtime health, reconnect, structured diagnostics, and a recent event timeline. Use these notes to keep the operator path predictable."
       >
-        <div className="text-sm text-slate-400 leading-relaxed space-y-2">
+        <div className="text-sm leading-relaxed space-y-2" style={{ color: 'var(--af-text-muted)' }}>
           <p>Automatic reconnect only retries recoverable failures. manual-fix states mean the server config or transport contract needs operator intervention.</p>
           <p>Recent Runtime Events shows the last transition per retry or reconnect attempt, so you can tell whether a recovery came from startup, config reload, manual reconnect, or auto retry.</p>
           <p>toolPrefix defaults to mcp_serverId. Keep prefixes stable to avoid tool-name churn across agent prompts and approval rules.</p>
@@ -3590,14 +3621,14 @@ function FederationPanel({
           </Button>
         </div>
         {cfg.federation.peers.length === 0 && (
-          <p className="text-sm text-slate-500 text-center py-4">No peers configured.</p>
+          <p className="text-sm text-center py-4" style={{ color: 'var(--af-text-faint)' }}>No peers configured.</p>
         )}
         <div className="flex flex-col gap-2">
           {cfg.federation.peers.map((peer, idx) => (
             <ItemCard key={`${peer.nodeId}-${idx}`}>
               <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium text-slate-200">{peer.nodeId}</div>
-                <div className="text-xs text-slate-500 mt-0.5">
+                <div className="text-sm font-medium" style={{ color: 'var(--af-text-heading)' }}>{peer.nodeId}</div>
+                <div className="text-xs mt-0.5" style={{ color: 'var(--af-text-faint)' }}>
                   {peer.host}:{peer.port}
                 </div>
               </div>
@@ -3858,7 +3889,7 @@ export function ConfigTab() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64 text-slate-400 text-sm gap-2">
+      <div className="flex items-center justify-center h-64 text-sm gap-2" style={{ color: 'var(--af-text-muted)' }}>
         <span className="animate-spin">⟳</span> Loading config…
       </div>
     );
@@ -3902,7 +3933,7 @@ export function ConfigTab() {
   };
 
   return (
-    <div className="flex h-[calc(100vh-4rem)] bg-slate-950">
+    <div className="flex h-[calc(100vh-4rem)]" style={{ background: 'var(--af-card-bg)' }}>
       {/* ── Left Config Nav ── */}
       <nav
         className="w-52 shrink-0 flex flex-col h-full"
@@ -3915,7 +3946,7 @@ export function ConfigTab() {
           className="px-4 py-[14px]"
           style={{ borderBottom: '1px solid rgba(255,255,255,0.055)' }}
         >
-          <h2 className="text-[10.5px] font-semibold text-slate-500 uppercase tracking-[0.12em]">
+          <h2 className="text-[10.5px] font-semibold uppercase tracking-[0.12em]" style={{ color: 'var(--af-text-faint)' }}>
             Settings
           </h2>
         </div>
@@ -3927,16 +3958,13 @@ export function ConfigTab() {
               <button
                 key={id}
                 onClick={() => setActiveSection(id)}
-                className={`relative w-full flex items-center gap-3 px-3 py-[9px] rounded-lg text-[13px] font-medium mb-px text-left transition-colors duration-150 ${
-                  active
-                    ? 'text-indigo-300 bg-indigo-500/10'
-                    : 'text-slate-500 hover:text-slate-200 hover:bg-white/[0.04]'
-                }`}
+                className={`relative w-full flex items-center gap-3 px-3 py-[9px] rounded-lg text-[13px] font-medium mb-px text-left transition-colors duration-150 hover:bg-white/[0.04]`}
+                style={active ? { color: 'var(--af-accent)', background: 'var(--af-accent-soft)' } : { color: 'var(--af-text-faint)' }}
               >
                 {active && (
-                  <span className="absolute left-0 top-[7px] bottom-[7px] w-[2px] rounded-r-full bg-indigo-400" />
+                  <span className="absolute left-0 top-[7px] bottom-[7px] w-[2px] rounded-r-full" style={{ background: 'var(--af-accent)' }} />
                 )}
-                <span className={`shrink-0 ${active ? 'text-indigo-400' : ''}`}>
+                <span className="shrink-0" style={active ? { color: 'var(--af-accent)' } : {}}>
                   {ConfigIco[id]}
                 </span>
                 <span className="truncate">{label}</span>
@@ -3949,7 +3977,7 @@ export function ConfigTab() {
         </div>
 
         {/* Save / Reset in nav footer */}
-        <div className="px-3 py-3 border-t border-slate-700/50 flex flex-col gap-2">
+        <div className="px-3 py-3 flex flex-col gap-2" style={{ borderTop: '1px solid var(--af-border)' }}>
           {parseError && <p className="text-xs text-red-400 px-1">{parseError}</p>}
           {dirty && !parseError && <p className="text-xs text-amber-400 px-1">Unsaved changes</p>}
           <Button
@@ -3969,7 +3997,7 @@ export function ConfigTab() {
       {/* ── Right Content Panel ── */}
       <div className="flex-1 overflow-y-auto p-6">
         {!cfg ? (
-          <div className="flex items-center justify-center h-64 text-slate-400 text-sm">
+          <div className="flex items-center justify-center h-64 text-sm" style={{ color: 'var(--af-text-muted)' }}>
             No config loaded.
           </div>
         ) : (
@@ -4000,7 +4028,8 @@ export function ConfigTab() {
                   onChange={(e) => handleJsonChange(e.target.value)}
                   rows={32}
                   spellCheck={false}
-                  className="w-full font-mono text-sm bg-slate-900/80 ring-1 ring-slate-700 focus:ring-indigo-500/60 focus:outline-none text-slate-200 rounded-xl px-4 py-3 resize-none transition-shadow"
+                  className="w-full font-mono text-sm focus:outline-none rounded-xl px-4 py-3 resize-none transition-shadow"
+                  style={inputStyle}
                 />
               </PanelSection>
             )}
@@ -4307,7 +4336,7 @@ export function ConfigTab() {
                 label="Available MCP tools"
                 help="先在 MCP 面板连通并刷新运行时，这里才会出现可勾选的 MCP 工具。"
               />
-              <div className="rounded-lg border border-dashed border-slate-700 bg-slate-900/40 px-3 py-2 text-sm text-slate-500">
+              <div className="rounded-lg border border-dashed px-3 py-2 text-sm" style={{ borderColor: 'var(--af-border)', background: 'var(--af-surface-2)', color: 'var(--af-text-faint)' }}>
                 No MCP tools discovered yet.
               </div>
             </FieldRow>
@@ -4403,13 +4432,13 @@ export function ConfigTab() {
                 label="Skills"
                 help="Select skills from the global pool to assign to this agent."
               />
-              <div className="flex flex-col gap-1 max-h-40 overflow-y-auto bg-slate-900/60 ring-1 ring-slate-700/50 rounded-xl p-2">
+              <div className="flex flex-col gap-1 max-h-40 overflow-y-auto rounded-xl p-2" style={{ background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-border)' }}>
                 {availableSkills.map((sk) => {
                   const checked = agentModal.draft.skills.includes(sk.id);
                   return (
                     <label
                       key={sk.id}
-                      className="inline-flex items-start gap-2 text-sm text-slate-300 hover:bg-slate-700/40 rounded-lg px-2 py-1.5 cursor-pointer transition-colors"
+                      className="inline-flex items-start gap-2 text-sm hover:bg-white/[0.04] rounded-lg px-2 py-1.5 cursor-pointer transition-colors" style={{ color: 'var(--af-text-base)' }}
                     >
                       <input
                         type="checkbox"
@@ -4426,7 +4455,7 @@ export function ConfigTab() {
                         <span className="font-medium flex items-center gap-1.5">
                           {sk.name}
                           {sk.source === 'builtin' && (
-                            <span className="text-xs text-indigo-400 bg-indigo-400/10 px-1 py-0.5 rounded leading-none">
+                        <span className="text-xs" style={{ color: 'var(--af-accent)', background: 'var(--af-accent-soft)', padding: '0 4px', borderRadius: '4px', lineHeight: '1.5' }}>
                               built-in
                             </span>
                           )}
@@ -4441,7 +4470,7 @@ export function ConfigTab() {
                             </span>
                           )}
                         </span>
-                        <span className="text-xs text-slate-500">{sk.shortDesc}</span>
+                        <span className="text-xs" style={{ color: 'var(--af-text-faint)' }}>{sk.shortDesc}</span>
                       </span>
                     </label>
                   );
@@ -4766,7 +4795,8 @@ export function ConfigTab() {
               }
               rows={6}
               spellCheck={false}
-              className="w-full font-mono text-sm bg-slate-900/80 ring-1 ring-slate-700 focus:ring-indigo-500/60 focus:outline-none text-slate-200 rounded-xl px-4 py-3 resize-y transition-shadow"
+              className="w-full font-mono text-sm focus:outline-none rounded-xl px-4 py-3 resize-y transition-shadow"
+            style={inputStyle}
             />
           </div>
         </FormModal>

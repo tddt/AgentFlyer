@@ -68,9 +68,9 @@ function AgentTrendMini({
           </div>
         ))}
       </div>
-      <div className="mt-1.5 flex items-center justify-between gap-2 text-[10px] text-slate-500">
+      <div className="mt-1.5 flex items-center justify-between gap-2 text-[10px]" style={{ color: 'var(--af-text-faint)' }}>
         <span>{formatTrendLabel(trend[0]?.date ?? '')}</span>
-        <span className="text-slate-400">{summary.replace('{n}', String(windowDays))}</span>
+        <span style={{ color: 'var(--af-text-muted)' }}>{summary.replace('{n}', String(windowDays))}</span>
         <span>{formatTrendLabel(trend.at(-1)?.date ?? '')}</span>
       </div>
     </div>
@@ -157,7 +157,7 @@ function PingWidget() {
       <span
         className={`w-2 h-2 rounded-full ${status === 'ok' ? 'bg-emerald-400' : status === 'error' ? 'bg-red-400' : 'bg-yellow-400 animate-pulse'}`}
       />
-      <span className="text-xs text-slate-400">
+      <span className="text-xs" style={{ color: 'var(--af-text-muted)' }}>
         {status === 'checking'
           ? t('overview.pinging')
           : status === 'ok'
@@ -168,7 +168,10 @@ function PingWidget() {
       </span>
       <button
         onClick={() => void ping()}
-        className="text-[10px] text-slate-600 hover:text-slate-400"
+        className="text-[10px] transition-colors"
+        style={{ color: 'var(--af-text-faint)' }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--af-text-muted)'; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--af-text-faint)'; }}
       >
         ↺
       </button>
@@ -262,7 +265,7 @@ export function OverviewTab({
     }
   };
 
-  if (loading && !status) return <div className="text-slate-400 text-sm p-8">{t('common.loading')}</div>;
+  if (loading && !status) return <div className="text-sm p-8" style={{ color: 'var(--af-text-muted)' }}>{t('common.loading')}</div>;
   if (error) return <div className="text-red-400 text-sm p-8">{t('common.error')}{error}</div>;
 
   const agents: AgentInfo[] = Array.isArray(agentListResult?.agents) ? agentListResult.agents : [];
@@ -306,11 +309,11 @@ export function OverviewTab({
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
-          <h1 className="text-[17px] font-semibold text-slate-100 tracking-tight">{t('overview.title')}</h1>
-          <p className="text-xs text-slate-500 mt-0.5">{t('overview.subtitle')}</p>
+          <h1 className="text-[17px] font-semibold tracking-tight" style={{ color: 'var(--af-text-heading)' }}>{t('overview.title')}</h1>
+          <p className="text-xs mt-0.5" style={{ color: 'var(--af-text-muted)' }}>{t('overview.subtitle')}</p>
         </div>
         <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1.5 cursor-pointer text-xs text-slate-400">
+          <label className="flex items-center gap-1.5 cursor-pointer text-xs" style={{ color: 'var(--af-text-muted)' }}>
             <input
               type="checkbox"
               className="rounded"
@@ -339,9 +342,9 @@ export function OverviewTab({
 
       {/* Stats grid */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-7">
-        <StatCard label={t('overview.version')} value={status?.version ?? '—'} accent="text-slate-300" />
+        <StatCard label={t('overview.version')} value={status?.version ?? '—'} useThemeAccent />
         <StatCard label={t('overview.uptime')} value={uptime} accent="text-emerald-400" />
-        <StatCard label={t('overview.agents')} value={agentCount} accent="text-indigo-400" />
+        <StatCard label={t('overview.agents')} value={agentCount} useThemeAccent />
         <StatCard label={t('overview.sessions')} value={sessions.length} accent="text-blue-400" />
         <StatCard label={t('overview.messages')} value={totalMsgs} accent="text-violet-400" />
         <StatCard label={t('overview.errorSessions')} value={problemSessions} accent="text-red-400" />
@@ -354,33 +357,33 @@ export function OverviewTab({
 
       {/* Health row */}
       <div
-        className="rounded-xl px-5 py-3 flex items-center gap-6 flex-wrap ring-1 ring-white/[0.06]"
-        style={{ background: 'rgba(14,17,28,0.8)' }}
+        className="rounded-xl px-5 py-3 flex items-center gap-6 flex-wrap"
+        style={{ background: 'var(--af-card-bg)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}
       >
         <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-400 font-medium">{t('overview.gateway')}</span>
+          <span className="text-xs font-medium" style={{ color: 'var(--af-text-muted)' }}>{t('overview.gateway')}</span>
           <Badge variant="green">{t('overview.online')}</Badge>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-400">{t('overview.rpcLatency')}</span>
+          <span className="text-xs" style={{ color: 'var(--af-text-muted)' }}>{t('overview.rpcLatency')}</span>
           <PingWidget />
         </div>
         <div className="flex items-center gap-2 ml-auto">
-          <span className="text-xs text-slate-500">v{status?.version}</span>
+          <span className="text-xs" style={{ color: 'var(--af-text-faint)' }}>v{status?.version}</span>
         </div>
       </div>
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
         {/* Active Agents */}
         <div
-          className="rounded-xl ring-1 ring-white/[0.07] overflow-hidden"
-          style={{ background: 'rgba(14,17,28,0.85)' }}
+          className="rounded-xl overflow-hidden"
+          style={{ background: 'var(--af-card-bg)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}
         >
           <div
             className="px-5 py-3.5 flex items-center justify-between"
-            style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}
+            style={{ borderBottom: '1px solid var(--af-border)' }}
           >
-            <h2 className="text-[13px] font-semibold text-slate-300 tracking-tight">
+            <h2 className="text-[13px] font-semibold tracking-tight" style={{ color: 'var(--af-text-heading)' }}>
               {t('overview.activeAgents')}
             </h2>
             <div className="flex items-center gap-2">
@@ -388,7 +391,10 @@ export function OverviewTab({
               {onNavigate && (
                 <button
                   onClick={() => onNavigate('agents')}
-                  className="text-xs text-slate-500 hover:text-indigo-400"
+                  className="text-xs transition-colors"
+                  style={{ color: 'var(--af-text-muted)' }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--af-accent)'; }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--af-text-muted)'; }}
                 >
                   →
                 </button>
@@ -396,19 +402,20 @@ export function OverviewTab({
             </div>
           </div>
           {agents.length === 0 ? (
-            <p className="text-slate-500 text-sm px-5 py-4">{t('overview.noAgentsRunning')}</p>
+            <p className="text-sm px-5 py-4" style={{ color: 'var(--af-text-muted)' }}>{t('overview.noAgentsRunning')}</p>
           ) : (
-            <ul className="divide-y divide-slate-700/40">
+            <ul style={{ borderTop: '1px solid var(--af-border)' }}>
               {agents.map((a) => (
                 <li
                   key={a.agentId}
-                  className="px-5 py-3 flex items-center gap-3 hover:bg-white/[0.02] transition-colors"
+                  className="px-5 py-3 flex items-center gap-3 transition-colors"
+                  style={{ borderBottom: '1px solid var(--af-border)' }}
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
-                  <span className="text-[13px] font-medium text-slate-200 truncate">
+                  <span className="text-[13px] font-medium truncate" style={{ color: 'var(--af-text-base)' }}>
                     {a.name ?? a.agentId}
                   </span>
-                  <span className="text-[11px] text-slate-500 ml-auto font-mono shrink-0">
+                  <span className="text-[11px] ml-auto font-mono shrink-0" style={{ color: 'var(--af-text-faint)' }}>
                     {a.agentId}
                   </span>
                 </li>
@@ -419,14 +426,14 @@ export function OverviewTab({
 
         {/* Recent Sessions */}
         <div
-          className="rounded-xl ring-1 ring-white/[0.07] overflow-hidden"
-          style={{ background: 'rgba(14,17,28,0.85)' }}
+          className="rounded-xl overflow-hidden"
+          style={{ background: 'var(--af-card-bg)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}
         >
           <div
             className="px-5 py-3.5 flex items-center justify-between"
-            style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}
+            style={{ borderBottom: '1px solid var(--af-border)' }}
           >
-            <h2 className="text-[13px] font-semibold text-slate-300 tracking-tight">
+            <h2 className="text-[13px] font-semibold tracking-tight" style={{ color: 'var(--af-text-heading)' }}>
               {t('overview.recentSessions')}
             </h2>
             <div className="flex items-center gap-2">
@@ -434,7 +441,10 @@ export function OverviewTab({
               {onNavigate && (
                 <button
                   onClick={() => onNavigate('sessions')}
-                  className="text-xs text-slate-500 hover:text-indigo-400"
+                  className="text-xs transition-colors"
+                  style={{ color: 'var(--af-text-muted)' }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--af-accent)'; }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--af-text-muted)'; }}
                 >
                   →
                 </button>
@@ -442,20 +452,21 @@ export function OverviewTab({
             </div>
           </div>
           {recentSessions.length === 0 ? (
-            <p className="text-slate-500 text-sm px-5 py-4">{t('overview.noSessionsYet')}</p>
+            <p className="text-sm px-5 py-4" style={{ color: 'var(--af-text-muted)' }}>{t('overview.noSessionsYet')}</p>
           ) : (
-            <ul className="divide-y divide-slate-700/40">
+            <ul>
               {recentSessions.map((s) => (
                 <li
                   key={s.sessionKey}
-                  className="px-5 py-2.5 flex items-center gap-3 hover:bg-white/[0.02] transition-colors"
+                  className="px-5 py-2.5 flex items-center gap-3 transition-colors"
+                  style={{ borderBottom: '1px solid var(--af-border)' }}
                 >
                   <div className="flex flex-col min-w-0 flex-1">
-                    <span className="text-[11.5px] font-mono text-slate-300 truncate">
+                    <span className="text-[11.5px] font-mono truncate" style={{ color: 'var(--af-text-base)' }}>
                       {s.threadKey}
                     </span>
                     <div className="flex items-center gap-2 flex-wrap mt-0.5">
-                      <span className="text-[10px] text-slate-500">
+                      <span className="text-[10px]" style={{ color: 'var(--af-text-faint)' }}>
                         {s.agentId} · {s.messageCount} msgs · {timeAgo(s.lastActivity)}
                       </span>
                       {s.errorCode ? (
@@ -489,28 +500,28 @@ export function OverviewTab({
       {/* Session distribution per agent */}
       {agentBars.length > 0 && (
         <div
-          className="rounded-xl ring-1 ring-white/[0.07] p-5"
-          style={{ background: 'rgba(14,17,28,0.85)' }}
+          className="rounded-xl p-5"
+          style={{ background: 'var(--af-card-bg)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}
         >
-          <h2 className="text-[13px] font-semibold text-slate-300 tracking-tight mb-4">
+          <h2 className="text-[13px] font-semibold tracking-tight mb-4" style={{ color: 'var(--af-text-heading)' }}>
             {t('overview.sessionDistribution')}
           </h2>
           <div className="flex flex-col gap-3">
             {agentBars.map((b) => (
               <div key={b.agentId} className="flex items-center gap-3">
-                <span className="text-[11.5px] text-slate-400 w-28 shrink-0 truncate">
+                <span className="text-[11.5px] w-28 shrink-0 truncate" style={{ color: 'var(--af-text-muted)' }}>
                   {b.name ?? b.agentId}
                 </span>
                 <div
                   className="flex-1 rounded-full h-1.5 overflow-hidden"
-                  style={{ background: 'rgba(255,255,255,0.07)' }}
+                  style={{ background: 'var(--af-surface-2)' }}
                 >
                   <div
-                    className="bg-indigo-500 h-1.5 rounded-full transition-all duration-500"
-                    style={{ width: `${(b.count / maxSessionCount) * 100}%` }}
+                    className="h-1.5 rounded-full transition-all duration-500"
+                    style={{ width: `${(b.count / maxSessionCount) * 100}%`, background: 'var(--af-accent)' }}
                   />
                 </div>
-                <span className="text-[11px] text-slate-500 w-20 text-right shrink-0">
+                <span className="text-[11px] w-20 text-right shrink-0" style={{ color: 'var(--af-text-faint)' }}>
                   {b.count} sess · {b.msgs} msgs
                 </span>
               </div>
@@ -520,15 +531,15 @@ export function OverviewTab({
       )}
 
       <div
-        className="rounded-xl ring-1 ring-white/[0.07] p-5"
-        style={{ background: 'rgba(14,17,28,0.85)' }}
+        className="rounded-xl p-5"
+        style={{ background: 'var(--af-card-bg)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}
       >
         <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
-          <h2 className="text-[13px] font-semibold text-slate-300 tracking-tight">
+          <h2 className="text-[13px] font-semibold tracking-tight" style={{ color: 'var(--af-text-heading)' }}>
             {t('overview.errorBreakdown')}
           </h2>
           {errorStats ? (
-            <span className="text-[11px] text-slate-500">
+            <span className="text-[11px]" style={{ color: 'var(--af-text-faint)' }}>
               {t('overview.errorTrendWindow')
                 .replace('{count}', String(errorStats.recentErrorSessions))
                 .replace('{n}', String(errorStats.windowDays))}
@@ -553,14 +564,14 @@ export function OverviewTab({
                     title={`${point.date}: ${point.count}`}
                   />
                 </div>
-                <span className="text-[10px] text-slate-500">{formatTrendLabel(point.date)}</span>
-                <span className="text-[10px] text-slate-400 font-mono">{point.count}</span>
+                <span className="text-[10px]" style={{ color: 'var(--af-text-faint)' }}>{formatTrendLabel(point.date)}</span>
+                <span className="text-[10px] font-mono" style={{ color: 'var(--af-text-muted)' }}>{point.count}</span>
               </div>
             ))}
           </div>
         ) : null}
         {errorBreakdown.length === 0 ? (
-          <p className="text-slate-500 text-sm">{t('overview.noErrors')}</p>
+          <p className="text-sm" style={{ color: 'var(--af-text-muted)' }}>{t('overview.noErrors')}</p>
         ) : (
           <div className="flex flex-wrap gap-2">
             {errorBreakdown.map(({ code, count }) => (
@@ -581,21 +592,21 @@ export function OverviewTab({
       </div>
 
       <div
-        className="rounded-xl ring-1 ring-white/[0.07] p-5"
-        style={{ background: 'rgba(14,17,28,0.85)' }}
+        className="rounded-xl p-5"
+        style={{ background: 'var(--af-card-bg)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}
       >
         <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
-          <h2 className="text-[13px] font-semibold text-slate-300 tracking-tight">
+          <h2 className="text-[13px] font-semibold tracking-tight" style={{ color: 'var(--af-text-heading)' }}>
             {t('overview.agentErrors')}
           </h2>
           {errorStats ? (
-            <span className="text-[11px] text-slate-500">
+            <span className="text-[11px]" style={{ color: 'var(--af-text-faint)' }}>
               {t('overview.agentErrorsHint').replace('{n}', String(errorStats.windowDays))}
             </span>
           ) : null}
         </div>
         {hotAgents.length === 0 ? (
-          <p className="text-slate-500 text-sm">{t('overview.noErrors')}</p>
+          <p className="text-sm" style={{ color: 'var(--af-text-muted)' }}>{t('overview.noErrors')}</p>
         ) : (
           <div className="flex flex-col gap-2">
             {hotAgents.map((entry) => {
@@ -622,10 +633,10 @@ export function OverviewTab({
                     className="min-w-0 flex-1 text-left"
                   >
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-[12px] font-medium text-slate-200 truncate">{label}</span>
-                      <span className="text-[10px] text-slate-500 font-mono">{entry.agentId}</span>
+                      <span className="text-[12px] font-medium truncate" style={{ color: 'var(--af-text-base)' }}>{label}</span>
+                      <span className="text-[10px] font-mono" style={{ color: 'var(--af-text-faint)' }}>{entry.agentId}</span>
                     </div>
-                    <div className="mt-1 flex items-center gap-2 flex-wrap text-[10px] text-slate-500">
+                    <div className="mt-1 flex items-center gap-2 flex-wrap text-[10px]" style={{ color: 'var(--af-text-faint)' }}>
                       <span>
                         {entry.recentErrorSessions} / {entry.totalErrorSessions} {t('overview.errorSessions')}
                       </span>
@@ -666,10 +677,10 @@ export function OverviewTab({
 
       {/* Quick actions */}
       <div
-        className="rounded-xl ring-1 ring-white/[0.06] p-5"
-        style={{ background: 'rgba(14,17,28,0.6)' }}
+        className="rounded-xl p-5"
+        style={{ background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}
       >
-        <h2 className="text-[13px] font-semibold text-slate-400 tracking-tight mb-3">
+        <h2 className="text-[13px] font-semibold tracking-tight mb-3" style={{ color: 'var(--af-text-muted)' }}>
           {t('overview.quickActions')}
         </h2>
         <div className="flex flex-wrap gap-2">

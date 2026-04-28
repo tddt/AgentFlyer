@@ -29,15 +29,15 @@ export function Modal({
       <div
         className="w-full max-w-sm mx-4 p-6 flex flex-col gap-5 af-scale-in"
         style={{
-          background: 'linear-gradient(160deg, rgba(20,23,37,0.98) 0%, rgba(12,14,22,0.98) 100%)',
-          border: '1px solid rgba(255,255,255,0.08)',
+          background: 'var(--af-overlay-bg)',
+          border: '1px solid var(--af-overlay-border)',
           borderRadius: '16px',
-          boxShadow: '0 24px 64px rgba(0,0,0,0.6), 0 0 0 1px rgba(99,102,241,0.1)',
+          boxShadow: '0 24px 64px rgba(0,0,0,0.45), 0 0 0 1px var(--af-border)',
         }}
       >
         <div className="flex flex-col gap-1.5">
-          <h3 className="text-[15px] font-semibold text-slate-100">{title}</h3>
-          <p className="text-sm text-slate-400 leading-relaxed">{message}</p>
+          <h3 style={{ color: 'var(--af-text-heading)' }} className="text-[15px] font-semibold">{title}</h3>
+          <p style={{ color: 'var(--af-text-muted)' }} className="text-sm leading-relaxed">{message}</p>
         </div>
         <div className="flex justify-end gap-2">
           <Button variant="ghost" size="sm" onClick={onCancel}>

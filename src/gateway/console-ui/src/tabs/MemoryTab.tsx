@@ -59,8 +59,8 @@ export function MemoryTab() {
       {/* ── Header ────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-base font-semibold text-slate-100">{t('memory.title')}</h1>
-          <p className="text-[13px] text-slate-500 mt-0.5">
+          <h1 className="text-base font-semibold" style={{ color: 'var(--af-text-heading)' }}>{t('memory.title')}</h1>
+          <p className="text-[13px] mt-0.5" style={{ color: 'var(--af-text-faint)' }}>
             {t('memory.subtitle')}
           </p>
         </div>
@@ -75,14 +75,16 @@ export function MemoryTab() {
         style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}
       >
         <input
-          className="flex-1 rounded-lg bg-slate-900/70 ring-1 ring-slate-700 px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-indigo-500"
+        className="flex-1 rounded-lg px-3 py-2 text-sm focus:outline-none"
+          style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
           placeholder={t('memory.searchPlaceholder')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
         />
         <input
-          className="w-40 rounded-lg bg-slate-900/70 ring-1 ring-slate-700 px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-indigo-500"
+        className="w-40 rounded-lg px-3 py-2 text-sm focus:outline-none"
+          style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
           placeholder={t('memory.partitionPlaceholder')}
           value={partition}
           onChange={(e) => setPartition(e.target.value)}
@@ -101,14 +103,14 @@ export function MemoryTab() {
       )}
 
       {loading && !data && (
-        <div className="flex items-center gap-2 text-sm text-slate-500 px-1">
-          <div className="w-3.5 h-3.5 rounded-full border-2 border-indigo-500/30 border-t-indigo-400 animate-spin" />
+        <div className="flex items-center gap-2 text-sm px-1" style={{ color: 'var(--af-text-muted)' }}>
+          <div className="w-3.5 h-3.5 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: 'var(--af-accent)', borderTopColor: 'transparent' }} />
           {t('memory.loading')}
         </div>
       )}
 
       {!loading && !error && results.length === 0 && (
-        <div className="text-sm text-slate-600 px-1">{t('memory.noEntries')}</div>
+        <div className="text-sm px-1" style={{ color: 'var(--af-text-faint)' }}>{t('memory.noEntries')}</div>
       )}
 
       {results.length > 0 && (
@@ -118,11 +120,8 @@ export function MemoryTab() {
         >
           {/* Table header */}
           <div
-            className="grid grid-cols-[1fr_100px_80px_80px_80px] gap-4 px-4 py-2.5 text-[11px] font-medium text-slate-500 uppercase tracking-wider"
-            style={{
-              borderBottom: '1px solid rgba(255,255,255,0.07)',
-              background: 'rgba(255,255,255,0.02)',
-            }}
+            className="grid grid-cols-[1fr_100px_80px_80px_80px] gap-4 px-4 py-2.5 text-[11px] font-medium uppercase tracking-wider"
+            style={{ borderBottom: '1px solid var(--af-border)', background: 'var(--af-surface-2)', color: 'var(--af-text-faint)' }}
           >
             <span>{t('memory.content')}</span>
             <span>{t('memory.partition')}</span>
@@ -139,9 +138,9 @@ export function MemoryTab() {
             >
               {/* Content */}
               <div className="flex flex-col gap-1 min-w-0">
-                <p className="text-sm text-slate-200 line-clamp-2 leading-snug">{entry.content}</p>
+                <p className="text-sm line-clamp-2 leading-snug" style={{ color: 'var(--af-text-muted)' }}>{entry.content}</p>
                 {entry.score != null && (
-                  <span className="text-[11px] text-slate-600">
+                  <span className="text-[11px]" style={{ color: 'var(--af-text-faint)' }}>
                     score: {entry.score.toFixed(3)}
                   </span>
                 )}
@@ -153,17 +152,17 @@ export function MemoryTab() {
                 {entry.partition ? (
                   <Badge color="indigo">{entry.partition}</Badge>
                 ) : (
-                  <span className="text-[12px] text-slate-600">—</span>
+                  <span className="text-[12px]" style={{ color: 'var(--af-text-faint)' }}>—</span>
                 )}
               </div>
 
               {/* Importance */}
-              <div className="text-[12px] text-slate-400">
+              <div className="text-[12px]" style={{ color: 'var(--af-text-muted)' }}>
                 {entry.importance != null ? entry.importance.toFixed(2) : '—'}
               </div>
 
               {/* Created */}
-              <div className="text-[12px] text-slate-500">{relDate(entry.createdAt)}</div>
+              <div className="text-[12px]" style={{ color: 'var(--af-text-faint)' }}>{relDate(entry.createdAt)}</div>
 
               {/* Delete */}
               <div className="flex justify-end">

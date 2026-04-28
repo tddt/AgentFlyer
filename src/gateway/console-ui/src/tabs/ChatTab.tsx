@@ -1647,11 +1647,18 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 rounded-[1.4rem] border border-white/8 bg-[linear-gradient(135deg,rgba(56,189,248,0.08),rgba(15,23,42,0.92)_45%,rgba(30,41,59,0.78))] px-4 py-4 shadow-[0_18px_60px_rgba(8,47,73,0.18)]">
+      <div
+        className="shrink-0 rounded-[1.4rem] px-4 py-4"
+        style={{
+          border: '1px solid var(--af-card-ring)',
+          background: 'var(--af-card-bg)',
+          boxShadow: '0 18px 60px rgba(8,47,73,0.12)',
+        }}
+      >
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-sm font-semibold text-slate-100">{agent.name ?? agent.agentId}</span>
+              <span className="text-sm font-semibold" style={{ color: 'var(--af-text-heading)' }}>{agent.name ?? agent.agentId}</span>
               <Badge variant="blue">{t('chat.title')}</Badge>
               {participantAliases.map((alias) => (
                 <span
@@ -1665,10 +1672,10 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
             <div className="mt-2 text-[11px] uppercase tracking-[0.18em] text-cyan-300/65">
               Active Thread
             </div>
-            <div className="mt-1 font-mono text-[11px] text-slate-300 truncate max-w-[460px]" title={currentThread}>
+            <div className="mt-1 font-mono text-[11px] truncate max-w-[460px]" style={{ color: 'var(--af-text-muted)' }} title={currentThread}>
               {currentThread}
             </div>
-            <div className="mt-2 text-xs text-slate-400/80">
+            <div className="mt-2 text-xs" style={{ color: 'var(--af-text-muted)' }}>
               {t('chat.inbox.hint')}
             </div>
           </div>
@@ -1688,12 +1695,17 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
                 {t('chat.sessions', { n: agentSessions.length })}
               </Button>
               {showSessions && (
-                <div className="absolute right-0 top-full mt-2 w-80 bg-slate-900 ring-1 ring-slate-700 rounded-xl shadow-2xl z-50 overflow-hidden">
-                  <div className="px-3 py-2 border-b border-slate-700/60 flex items-center justify-between">
-                    <span className="text-xs font-medium text-slate-300">{t('chat.selectThread')}</span>
+                <div className="absolute right-0 top-full mt-2 w-80 rounded-xl shadow-2xl z-50 overflow-hidden"
+                  style={{ background: 'var(--af-overlay-bg)', boxShadow: '0 0 0 1px var(--af-overlay-border), 0 20px 60px rgba(0,0,0,0.35)' }}
+                >
+                  <div className="px-3 py-2 flex items-center justify-between" style={{ borderBottom: '1px solid var(--af-border)' }}>
+                    <span className="text-xs font-medium" style={{ color: 'var(--af-text-heading)' }}>{t('chat.selectThread')}</span>
                     <button
                       onClick={() => setShowSessions(false)}
-                      className="text-slate-500 hover:text-slate-300 text-xs"
+                      className="text-xs transition-colors"
+                      style={{ color: 'var(--af-text-faint)' }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--af-text-muted)'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--af-text-faint)'; }}
                     >
                       ✕
                     </button>
@@ -1701,29 +1713,37 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
                   <div className="max-h-72 overflow-y-auto">
                     <button
                       onClick={startNewThread}
-                      className="w-full px-3 py-2.5 text-left hover:bg-slate-700/50 border-b border-slate-700/40 flex items-center gap-2"
+                      className="w-full px-3 py-2.5 text-left flex items-center gap-2 transition-colors"
+                      style={{ borderBottom: '1px solid var(--af-border)' }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--af-surface-2)'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = ''; }}
                     >
                       <span className="text-emerald-400 text-xs">＋</span>
-                      <span className="text-xs text-slate-300">{t('chat.newThread')}</span>
+                      <span className="text-xs" style={{ color: 'var(--af-text-base)' }}>{t('chat.newThread')}</span>
                     </button>
                     {agentSessions.length === 0 && (
-                      <p className="text-xs text-slate-500 px-3 py-3">{t('chat.noSessionsYet')}</p>
+                      <p className="text-xs px-3 py-3" style={{ color: 'var(--af-text-muted)' }}>{t('chat.noSessionsYet')}</p>
                     )}
                     {agentSessions.map((s) => (
                       <button
                         key={s.sessionKey}
                         onClick={() => loadSession(s)}
-                        className={`w-full px-3 py-2.5 text-left hover:bg-slate-700/50 flex flex-col gap-0.5 ${
-                          s.threadKey === currentThread ? 'bg-indigo-600/20' : ''
+                        className={`w-full px-3 py-2.5 text-left flex flex-col gap-0.5 ${
+                          s.threadKey === currentThread ? '' : ''
                         }`}
+                        style={{
+                          background: s.threadKey === currentThread ? 'var(--af-accent-soft-2)' : 'transparent',
+                        }}
+                        onMouseEnter={(e) => { if (s.threadKey !== currentThread) (e.currentTarget as HTMLButtonElement).style.background = 'var(--af-surface-2)'; }}
+                        onMouseLeave={(e) => { if (s.threadKey !== currentThread) (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
                       >
                         <div className="flex items-center justify-between">
-                          <span className="text-xs font-mono text-slate-300 truncate">{s.threadKey}</span>
+                          <span className="text-xs font-mono truncate" style={{ color: 'var(--af-text-muted)' }}>{s.threadKey}</span>
                           {s.threadKey === currentThread && (
-                            <span className="text-[10px] text-indigo-400 ml-1 shrink-0">{t('chat.active')}</span>
+                            <span className="text-[10px] ml-1 shrink-0" style={{ color: 'var(--af-accent)' }}>{t('chat.active')}</span>
                           )}
                         </div>
-                        <div className="flex items-center gap-2 text-[10px] text-slate-500">
+                        <div className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--af-text-faint)' }}>
                           <span>{s.messageCount} msgs</span>
                           <span>·</span>
                           <span>{timeAgo(s.lastActivity)}</span>
@@ -1790,21 +1810,25 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
                     </Button>
                   </div>
                 </div>
-                <div className="mt-3 rounded-xl border border-white/6 bg-slate-950/30 px-3 py-2.5 text-xs leading-5 text-slate-200/85 whitespace-pre-wrap">
-                  {suggestedRecoveryMessage}
-                </div>
+                <div className="mt-3 rounded-xl px-3 py-2.5 text-xs leading-5 whitespace-pre-wrap"
+                style={{ border: '1px solid var(--af-border)', background: 'var(--af-surface-2)', color: 'var(--af-text-base)' }}
+              >
+                {suggestedRecoveryMessage}
+              </div>
                 {expandedContextPanel === 'recovery' ? (
                   <div className="mt-3 space-y-3">
-                    <div className="rounded-xl bg-slate-950/25 ring-1 ring-white/5 px-3 py-2.5">
+                    <div className="rounded-xl px-3 py-2.5"
+                      style={{ background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}
+                    >
                       <div className="flex items-center justify-between gap-2 flex-wrap">
-                        <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-slate-300/80">
+                        <div className="text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--af-text-muted)' }}>
                           {t('chat.recovery.structuredLabel')}
                         </div>
                         <Button size="sm" variant="ghost" onClick={applyStructuredRecoverySuggestion} disabled={!structuredRecoveryMessage}>
                           {t('chat.recovery.useStructuredSuggestion')}
                         </Button>
                       </div>
-                      <div className="mt-2 text-xs text-slate-200/90 leading-5 whitespace-pre-wrap break-words">
+                      <div className="mt-2 text-xs leading-5 whitespace-pre-wrap break-words" style={{ color: 'var(--af-text-base)' }}>
                         {structuredRecoveryMessage}
                       </div>
                       {structuredRecoveryVariants.length > 0 ? (
@@ -1824,8 +1848,10 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
                       ) : null}
                     </div>
                     {recoveryEvidenceEntries.length > 0 ? (
-                      <div className="rounded-xl bg-slate-950/25 ring-1 ring-white/5 px-3 py-2.5">
-                        <div className="flex items-center gap-2 flex-wrap text-[11px] font-medium uppercase tracking-[0.08em] text-slate-300/80">
+                      <div className="rounded-xl px-3 py-2.5"
+                      style={{ background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}
+                    >
+                      <div className="flex items-center gap-2 flex-wrap text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--af-text-muted)' }}>
                           <span>{t('chat.recovery.evidenceLabel')}</span>
                           {recoveryPatternMetas.map((meta) => (
                             <Badge key={`${meta.variant}-${meta.label}`} variant={meta.variant}>
@@ -1863,10 +1889,10 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
                     <div className="mt-1 text-xs text-cyan-100/80 leading-5">
                       {hubFocusTarget?.title || t('chat.inbox.threadFallback')}
                     </div>
-                    <div className="mt-1 text-[11px] text-slate-400">
+                    <div className="mt-1 text-[11px]" style={{ color: 'var(--af-text-muted)' }}>
                       {focusedMessageId ? t('chat.hub.matchFound') : t('chat.hub.matchPending')}
-                    </div>
-                    <div className="mt-2 text-xs text-slate-300/75 line-clamp-2">
+                </div>
+                <div className="mt-2 text-xs line-clamp-2" style={{ color: 'var(--af-text-muted)' }}>
                       {truncateText(hubFocusTarget?.text || t('chat.hub.contextEmpty'), 110)}
                     </div>
                   </div>
@@ -1883,7 +1909,9 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
                   </div>
                 </div>
                 {expandedContextPanel === 'hub' ? (
-                  <div className="mt-3 rounded-xl border border-white/6 bg-slate-950/30 px-3 py-2.5 text-xs leading-5 text-slate-200/85 whitespace-pre-wrap">
+              <div className="mt-3 rounded-xl px-3 py-2.5 text-xs leading-5 whitespace-pre-wrap"
+                style={{ border: '1px solid var(--af-border)', background: 'var(--af-surface-2)', color: 'var(--af-text-base)' }}
+              >
                     {hubFocusTarget?.text || t('chat.hub.contextEmpty')}
                   </div>
                 ) : null}
@@ -1895,7 +1923,9 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
 
       <div className="flex-1 overflow-y-auto flex flex-col gap-4 pr-1 min-h-0 pt-4">
         {messages.length === 0 && (
-          <div className="rounded-2xl border border-dashed border-white/10 bg-slate-950/25 px-5 py-8 text-center text-slate-500 text-sm mt-2">
+          <div className="rounded-2xl border border-dashed px-5 py-8 text-center text-sm mt-2"
+            style={{ borderColor: 'var(--af-border)', background: 'var(--af-surface-2)', color: 'var(--af-text-muted)' }}
+          >
             {t('chat.startConversation', { name: agent.name ?? agent.agentId })}
           </div>
         )}
@@ -1925,7 +1955,13 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
             {pendingStatus}
           </div>
         ) : null}
-        <div className="relative flex items-end gap-2 bg-slate-800/60 ring-1 ring-slate-700/50 rounded-[1.25rem] p-3 shadow-[0_12px_30px_rgba(15,23,42,0.25)]">
+        <div
+          className="relative flex items-end gap-2 rounded-[1.25rem] p-3"
+          style={{
+            background: 'var(--af-input-bg)',
+            boxShadow: '0 0 0 1px var(--af-input-ring), 0 12px 30px rgba(15,23,42,0.15)',
+          }}
+        >
           <textarea
             ref={inputRef}
             value={input}
@@ -1934,7 +1970,8 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
             placeholder={inputPlaceholder}
             rows={2}
             disabled={busy}
-            className="flex-1 bg-transparent text-slate-200 text-sm placeholder:text-slate-500 resize-none focus:outline-none min-h-10"
+            className="flex-1 bg-transparent text-sm resize-none focus:outline-none min-h-10"
+            style={{ color: 'var(--af-text-base)' }}
           />
           <Button
             variant="primary"
@@ -2162,7 +2199,10 @@ export function ChatTab({
 
   if (mode === 'inbox') {
     return (
-      <div className="flex h-[calc(100vh-4rem)] min-h-0 flex-col rounded-[1.75rem] border border-cyan-400/12 bg-[linear-gradient(180deg,rgba(8,47,73,0.32),rgba(2,6,23,0.92))] shadow-[0_24px_80px_rgba(8,47,73,0.22)]">
+      <div
+        className="flex h-[calc(100vh-4rem)] min-h-0 flex-col rounded-[1.75rem]"
+        style={{ border: '1px solid var(--af-card-ring)', background: 'var(--af-card-bg)', boxShadow: '0 24px 80px rgba(8,47,73,0.18)' }}
+      >
         <HubWorkspaceContent
           agents={agents}
           hubThreads={hubThreads}
@@ -2201,11 +2241,14 @@ export function ChatTab({
 
   return (
     <div className="grid h-[calc(100vh-4rem)] gap-4 xl:grid-cols-[200px_minmax(0,1fr)]">
-      <div className="flex min-h-0 flex-col rounded-[1.75rem] border border-white/8 bg-slate-950/55 p-3 shadow-[0_24px_80px_rgba(2,6,23,0.35)]">
+      <div
+        className="flex min-h-0 flex-col rounded-[1.75rem] p-3"
+        style={{ border: '1px solid var(--af-card-ring)', background: 'var(--af-card-bg)', boxShadow: '0 24px 80px rgba(2,6,23,0.25)' }}
+      >
         <div className="flex items-center justify-between border-b border-white/8 pb-3 shrink-0">
           <div>
-            <h1 className="text-sm font-semibold text-slate-100">{t('chat.title')}</h1>
-            <p className="mt-1 text-[11px] uppercase tracking-[0.18em] text-slate-500">
+            <h1 className="text-sm font-semibold" style={{ color: 'var(--af-text-heading)' }}>{t('chat.title')}</h1>
+            <p className="mt-1 text-[11px] uppercase tracking-[0.18em]" style={{ color: 'var(--af-text-faint)' }}>
               Agent Deck
             </p>
           </div>
@@ -2214,7 +2257,7 @@ export function ChatTab({
           </Button>
         </div>
         <div className="mt-3 flex flex-col gap-1 overflow-y-auto pr-1 min-h-0">
-          {agents.length === 0 ? <p className="text-xs text-slate-500 pt-2">{t('chat.noAgents')}</p> : null}
+          {agents.length === 0 ? <p className="text-xs pt-2" style={{ color: 'var(--af-text-muted)' }}>{t('chat.noAgents')}</p> : null}
           {agents.map((a) => {
             const active = a.agentId === effectiveActiveId;
             const stateBadge = chatAgentStateLabel(a.activity, t);
@@ -2223,20 +2266,25 @@ export function ChatTab({
               <button
                 key={a.agentId}
                 onClick={() => setActiveAgentId(a.agentId)}
-                className={`group rounded-2xl border px-3 py-3 text-left transition-all ${
-                  active
-                    ? 'border-indigo-400/35 bg-indigo-500/12 text-indigo-100 shadow-[0_8px_30px_rgba(99,102,241,0.18)]'
-                    : 'border-white/6 bg-slate-900/65 text-slate-400 hover:border-white/12 hover:bg-slate-900/90 hover:text-slate-200'
-                }`}
+                className="group rounded-2xl border px-3 py-3 text-left transition-all"
+                style={active ? {
+                  borderColor: 'var(--af-accent-soft)',
+                  background: 'var(--af-accent-soft)',
+                  color: 'var(--af-accent-text)',
+                } : {
+                  borderColor: 'var(--af-card-ring)',
+                  background: 'var(--af-card-bg)',
+                  color: 'var(--af-text-muted)',
+                }}
               >
                 <div className="text-xs font-semibold truncate">{a.name ?? a.agentId}</div>
-                <div className="mt-1 text-[10px] font-mono text-slate-500 truncate group-hover:text-slate-400">
+                <div className="mt-1 text-[10px] font-mono truncate" style={{ color: 'var(--af-text-faint)' }}>
                   {a.agentId}
                 </div>
                 <div className="mt-2 flex items-center gap-1.5 flex-wrap">
                   <Badge variant={stateBadge.variant}>{stateBadge.text}</Badge>
                   {a.activity?.activeRun?.threadKey ? (
-                    <span className="text-[10px] text-slate-500 truncate max-w-full">
+                    <span className="text-[10px] truncate max-w-full" style={{ color: 'var(--af-text-faint)' }}>
                       #{a.activity.activeRun.threadKey}
                     </span>
                   ) : null}
@@ -2251,7 +2299,8 @@ export function ChatTab({
                     {a.mentionAliases.slice(0, 2).map((alias) => (
                       <span
                         key={`${a.agentId}:${alias}`}
-                        className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-slate-400"
+                        className="rounded-full px-2 py-0.5 text-[10px]"
+                        style={{ background: 'var(--af-surface-2)', color: 'var(--af-text-muted)' }}
                       >
                         @{alias}
                       </span>
@@ -2264,20 +2313,26 @@ export function ChatTab({
         </div>
       </div>
 
-      <div className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[1.75rem] border border-white/8 bg-slate-950/45 p-3 shadow-[0_24px_80px_rgba(2,6,23,0.3)]">
-        <div className="mb-3 flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-[linear-gradient(135deg,rgba(14,165,233,0.12),rgba(99,102,241,0.08)_45%,rgba(15,23,42,0.65))] px-4 py-3">
+      <div
+        className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[1.75rem] p-3"
+        style={{ border: '1px solid var(--af-card-ring)', background: 'var(--af-card-bg)', boxShadow: '0 24px 80px rgba(2,6,23,0.2)' }}
+      >
+        <div
+          className="mb-3 flex items-center justify-between gap-3 rounded-2xl px-4 py-3"
+          style={{ border: '1px solid var(--af-card-ring)', background: 'var(--af-surface-2)' }}
+        >
           <div>
-            <div className="text-[11px] uppercase tracking-[0.18em] text-cyan-300/70">
+            <div className="text-[11px] uppercase tracking-[0.18em]" style={{ color: 'var(--af-accent)' }}>
               {t('chat.inbox.title')}
             </div>
-            <div className="mt-1 text-xs text-slate-300/80">{t('chat.hub.mobileHint')}</div>
+            <div className="mt-1 text-xs" style={{ color: 'var(--af-text-muted)' }}>{t('chat.hub.mobileHint')}</div>
           </div>
           <Button size="sm" variant="default" onClick={() => onOpenInbox?.()}>
             {t('chat.hub.openWorkspace')}
           </Button>
         </div>
         {agents.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-slate-500 text-sm">
+          <div className="flex h-full items-center justify-center text-sm" style={{ color: 'var(--af-text-muted)' }}>
             {t('chat.noAgentsAvailable')}
           </div>
         ) : (
@@ -2320,10 +2375,11 @@ function ThinkingBubble({ msg }: { msg: Message }) {
   const { t } = useLocale();
   const [open, setOpen] = useState(false);
   return (
-    <div className="text-xs bg-slate-800/30 rounded-lg ring-1 ring-slate-700/30 overflow-hidden">
+    <div className="rounded-lg overflow-hidden" style={{ background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}>
       <button
         onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-slate-500 hover:text-slate-400 transition-colors"
+        className="w-full flex items-center gap-2 px-3 py-2 transition-colors text-xs"
+        style={{ color: 'var(--af-text-muted)' }}
       >
         <span className="text-[10px] leading-none">{open ? '▾' : '▸'}</span>
         <span className="italic">
@@ -2335,7 +2391,7 @@ function ThinkingBubble({ msg }: { msg: Message }) {
         </span>
       </button>
       {open && (
-        <pre className="px-3 pb-3 whitespace-pre-wrap font-mono text-slate-500 text-[11px] border-t border-slate-700/30">
+        <pre className="px-3 pb-3 whitespace-pre-wrap font-mono text-[11px]" style={{ borderTop: '1px solid var(--af-border)', color: 'var(--af-text-muted)' }}>
           {msg.content}
         </pre>
       )}
@@ -2349,11 +2405,11 @@ function ToolCallList({ tools }: { tools: ToolCall[] }) {
       {tools.map((tool) => (
         <div
           key={tool.id}
-          className="flex items-center gap-2 text-[11px] bg-slate-900/60 ring-1 ring-slate-700/40 rounded-lg px-3 py-1.5"
-        >
+          className="flex items-center gap-2 text-[11px] rounded-lg px-3 py-1.5"
+          style={{ background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}>
           <span className="text-amber-400 font-mono font-semibold">{tool.name}</span>
           {tool.input && (
-            <span className="text-slate-500 truncate max-w-[260px] font-mono">{tool.input}</span>
+            <span className="truncate max-w-[260px] font-mono" style={{ color: 'var(--af-text-faint)' }}>{tool.input}</span>
           )}
         </div>
       ))}
@@ -2381,10 +2437,16 @@ function CollapsibleTextBlock({
       ? 'bg-red-950/30 ring-red-500/30 text-red-200'
       : tone === 'success'
       ? 'bg-emerald-950/20 ring-emerald-500/20 text-emerald-100'
-      : 'bg-white/[0.03] ring-white/[0.05] text-slate-200/90';
+      : 'bg-white/[0.03] ring-white/[0.05]';
+
+  const textStyle = tone === 'error'
+    ? undefined
+    : tone === 'success'
+    ? undefined
+    : { color: 'var(--af-text-muted)' };
 
   return (
-    <div className={`rounded-md px-2.5 py-2 ring-1 ${toneClass}`}>
+    <div className={`rounded-md px-2.5 py-2 ring-1 ${toneClass}`} style={textStyle}>
       <div className="text-xs leading-5 whitespace-pre-wrap break-words">{visibleText}</div>
       {normalizedText ? (
         <div className="mt-2 flex items-center justify-end gap-2">
@@ -2402,8 +2464,8 @@ function CollapsibleTextBlock({
 
 function RecoveryEvidenceCard({ entry }: { entry: RecoveryEvidenceEntry }) {
   return (
-    <div className="rounded-md bg-white/[0.03] px-2.5 py-2">
-      <div className="text-[10px] uppercase tracking-[0.08em] text-slate-400">{entry.label}</div>
+    <div className="rounded-md px-2.5 py-2" style={{ background: 'var(--af-surface-2)' }}>
+      <div className="text-[10px] uppercase tracking-[0.08em]" style={{ color: 'var(--af-text-muted)' }}>{entry.label}</div>
       <div className="mt-1">
         <CollapsibleTextBlock text={entry.fullValue ?? entry.value} tone={entry.tone} />
       </div>
@@ -2446,8 +2508,8 @@ function HubConversationBubble({
       <div
         className={`max-w-[92%] rounded-[1.4rem] border px-3 py-3 shadow-[0_14px_30px_rgba(2,6,23,0.18)] ${
           isDeliverable
-            ? 'border-fuchsia-300/18 bg-[linear-gradient(135deg,rgba(168,85,247,0.2),rgba(91,33,182,0.16)_52%,rgba(15,23,42,0.82))] text-slate-100 rounded-br-md'
-            : 'border-cyan-300/14 bg-[linear-gradient(135deg,rgba(34,211,238,0.16),rgba(15,23,42,0.88)_52%,rgba(30,41,59,0.82))] text-slate-100 rounded-bl-md'
+            ? 'border-fuchsia-300/18 bg-[linear-gradient(135deg,rgba(168,85,247,0.2),rgba(91,33,182,0.16)_52%,rgba(15,23,42,0.82))] rounded-br-md'
+            : 'border-cyan-300/14 bg-[linear-gradient(135deg,rgba(34,211,238,0.16),rgba(15,23,42,0.88)_52%,rgba(30,41,59,0.82))] rounded-bl-md'
         }`}
       >
         <div className="flex items-center justify-between gap-3">
@@ -2460,8 +2522,8 @@ function HubConversationBubble({
               {(agentLabel || t('chat.inbox.system')).slice(0, 1)}
             </span>
             <div className="flex flex-col">
-              <span className="text-[11px] font-medium text-slate-100">{agentLabel}</span>
-              <span className="text-[10px] text-slate-300/60">{new Date(event.ts).toLocaleTimeString()}</span>
+              <span className="text-[11px] font-medium" style={{ color: 'var(--af-text-heading)' }}>{agentLabel}</span>
+              <span className="text-[10px]" style={{ color: 'var(--af-text-faint)' }}>{new Date(event.ts).toLocaleTimeString()}</span>
             </div>
             <Badge variant={isDeliverable ? 'purple' : 'blue'}>
               {isDeliverable ? t('chat.inbox.kind.deliverable') : t('chat.inbox.kind.reply')}
@@ -2469,9 +2531,9 @@ function HubConversationBubble({
             {!seen ? <Badge variant="blue">{t('chat.hub.unreadShort', { count: 1 })}</Badge> : null}
           </div>
         </div>
-        <div className="mt-3 text-sm font-medium text-slate-50">{event.title}</div>
-        <div className="mt-2 whitespace-pre-wrap text-xs leading-6 text-slate-100/85">{event.text}</div>
-        <div className="mt-3 flex flex-wrap gap-2 text-[10px] text-slate-300/60">
+        <div className="mt-3 text-sm font-medium" style={{ color: 'var(--af-text-heading)' }}>{event.title}</div>
+        <div className="mt-2 whitespace-pre-wrap text-xs leading-6" style={{ color: 'var(--af-text-base)' }}>{event.text}</div>
+        <div className="mt-3 flex flex-wrap gap-2 text-[10px]" style={{ color: 'var(--af-text-faint)' }}>
           {event.channelId ? <span>{event.channelId}</span> : null}
           {event.publicationSummary ? <span>{event.publicationSummary}</span> : null}
           {event.threadKey ? <span>{event.threadKey}</span> : null}
@@ -2558,14 +2620,14 @@ function HubWorkspaceContent({
 
   return (
     <>
-      <div className="relative border-b border-white/8 px-4 py-4 shrink-0">
+      <div className="relative px-4 py-4 shrink-0" style={{ borderBottom: '1px solid var(--af-border)' }}>
         <div className="flex items-start justify-between gap-3">
           <div>
-            <div className="text-[11px] uppercase tracking-[0.22em] text-cyan-300/70">
+            <div className="text-[11px] uppercase tracking-[0.22em]" style={{ color: 'var(--af-accent)' }}>
               {t('chat.inbox.title')}
             </div>
-            <div className="mt-1 text-sm font-semibold text-slate-100">{t('chat.hub.sidebarTitle')}</div>
-            <div className="mt-1 text-xs leading-5 text-slate-300/80">{t('chat.hub.sidebarSubtitle')}</div>
+            <div className="mt-1 text-sm font-semibold" style={{ color: 'var(--af-text-heading)' }}>{t('chat.hub.sidebarTitle')}</div>
+            <div className="mt-1 text-xs leading-5" style={{ color: 'var(--af-text-muted)' }}>{t('chat.hub.sidebarSubtitle')}</div>
           </div>
           <div className="flex items-center gap-2">
             {unreadHubThreadCount > 0 ? <Badge variant="blue">{t('chat.hub.unread', { count: unreadHubThreadCount })}</Badge> : null}
@@ -2577,13 +2639,15 @@ function HubWorkspaceContent({
             value={hubQuery}
             onChange={(event) => setHubQuery(event.target.value)}
             placeholder={t('chat.inbox.searchPlaceholder')}
-            className="rounded-xl bg-slate-950/55 ring-1 ring-white/8 px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-cyan-400/40"
+            className="rounded-xl px-3 py-2.5 text-sm focus:outline-none"
+            style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
           />
           <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
             <select
               value={hubKindFilter}
               onChange={(event) => setHubKindFilter(event.target.value as 'all' | 'reply' | 'deliverable')}
-              className="rounded-xl bg-slate-950/55 ring-1 ring-white/8 px-3 py-2.5 text-sm text-slate-100 focus:outline-none focus:ring-cyan-400/40"
+              className="rounded-xl px-3 py-2.5 text-sm focus:outline-none"
+              style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
             >
               <option value="all">{t('chat.inbox.filter.all')}</option>
               <option value="reply">{t('chat.inbox.filter.reply')}</option>
@@ -2592,7 +2656,8 @@ function HubWorkspaceContent({
             <select
               value={hubAgentFilter}
               onChange={(event) => setHubAgentFilter(event.target.value)}
-              className="rounded-xl bg-slate-950/55 ring-1 ring-white/8 px-3 py-2.5 text-sm text-slate-100 focus:outline-none focus:ring-cyan-400/40"
+              className="rounded-xl px-3 py-2.5 text-sm focus:outline-none"
+              style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
             >
               <option value="all">{t('chat.inbox.filter.allAgents')}</option>
               {agents.map((agent) => (
@@ -2604,7 +2669,8 @@ function HubWorkspaceContent({
             <select
               value={hubWindowFilter}
               onChange={(event) => setHubWindowFilter(event.target.value as 'all' | '1h' | '24h' | '7d')}
-              className="rounded-xl bg-slate-950/55 ring-1 ring-white/8 px-3 py-2.5 text-sm text-slate-100 focus:outline-none focus:ring-cyan-400/40"
+              className="rounded-xl px-3 py-2.5 text-sm focus:outline-none"
+              style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
             >
               <option value="all">{t('chat.inbox.window.all')}</option>
               <option value="1h">{t('chat.inbox.window.1h')}</option>
@@ -2614,7 +2680,8 @@ function HubWorkspaceContent({
             <select
               value={hubChannelFilter}
               onChange={(event) => setHubChannelFilter(event.target.value)}
-              className="rounded-xl bg-slate-950/55 ring-1 ring-white/8 px-3 py-2.5 text-sm text-slate-100 focus:outline-none focus:ring-cyan-400/40"
+              className="rounded-xl px-3 py-2.5 text-sm focus:outline-none"
+              style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}  
             >
               <option value="all">{t('chat.inbox.filter.allChannels')}</option>
               {hubChannels.map((channelId) => (
@@ -2624,7 +2691,10 @@ function HubWorkspaceContent({
               ))}
             </select>
           </div>
-          <div className="flex items-center justify-between gap-2 rounded-xl border border-white/8 bg-slate-950/30 px-3 py-2 text-xs text-slate-300">
+          <div
+            className="flex items-center justify-between gap-2 rounded-xl px-3 py-2 text-xs"
+            style={{ border: '1px solid var(--af-border)', background: 'var(--af-surface-2)', color: 'var(--af-text-muted)' }}
+          >
             <span>{t('chat.hub.threadListTitle')}</span>
             <Button size="sm" variant="ghost" onClick={() => setShowProcessedThreads(!showProcessedThreads)}>
               {showProcessedThreads ? t('chat.hub.hideProcessed') : t('chat.hub.showProcessed')}
@@ -2634,14 +2704,23 @@ function HubWorkspaceContent({
       </div>
 
       <div className="grid min-h-0 flex-1 gap-3 px-3 py-3 xl:grid-cols-[minmax(220px,0.88fr)_minmax(0,1.12fr)]">
-        <div className="min-h-0 overflow-hidden rounded-2xl border border-white/8 bg-slate-950/35">
-          <div className="flex items-center justify-between border-b border-white/8 px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-slate-500">
+        <div
+          className="min-h-0 overflow-hidden rounded-2xl"
+          style={{ border: '1px solid var(--af-card-ring)', background: 'var(--af-card-bg)' }}
+        >
+          <div
+            className="flex items-center justify-between px-3 py-2 text-[11px] uppercase tracking-[0.18em]"
+            style={{ borderBottom: '1px solid var(--af-border)', color: 'var(--af-text-faint)' }}
+          >
             <span>{t('chat.hub.threadListTitle')}</span>
             <span>{filteredHubThreads.length}</span>
           </div>
           <div className="space-y-1 overflow-y-auto px-2 py-2 h-full">
             {filteredHubThreads.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-white/10 bg-slate-950/30 px-3 py-4 text-xs text-slate-400">
+              <div
+                className="rounded-xl border border-dashed px-3 py-4 text-xs"
+                style={{ borderColor: 'var(--af-border)', background: 'var(--af-surface-2)', color: 'var(--af-text-muted)' }}
+              >
                 {hubThreads.length === 0 ? t('chat.inbox.empty') : t('chat.inbox.emptyFiltered')}
               </div>
             ) : (
@@ -2674,29 +2753,29 @@ function HubWorkspaceContent({
                         setSelectedThreadKey(thread.threadKey);
                       }
                     }}
-                    className={`w-full rounded-[1.35rem] border px-3 py-3 text-left transition-all ${
+                  className={`w-full rounded-[1.35rem] border px-3 py-3 text-left transition-all ${
                       isActive
                         ? 'border-cyan-300/35 bg-cyan-400/10 shadow-[0_12px_30px_rgba(34,211,238,0.08)]'
-                        : thread.isProcessed
-                        ? 'border-white/8 bg-slate-950/20 text-slate-400 hover:border-white/14 hover:bg-slate-900/55'
-                        : 'border-white/8 bg-slate-950/35 hover:border-white/14 hover:bg-slate-900/80'
+                        : 'border-white/8 hover:border-white/14'
                     }`}
+                  style={!isActive ? { background: thread.isProcessed ? 'var(--af-surface-2)' : 'var(--af-card-bg)' } : undefined}
                   >
                     <div className="flex items-start gap-3">
-                      <div className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${isActive ? 'bg-cyan-300/18 text-cyan-100' : 'bg-white/6 text-slate-200'}`}>
+                      <div className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${isActive ? 'bg-cyan-300/18 text-cyan-100' : 'bg-white/6'}`}
+                        style={!isActive ? { color: 'var(--af-text-heading)' } : undefined}>
                         {participantSummary.slice(0, 1)}
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center justify-between gap-2">
-                          <div className={`truncate text-sm font-medium ${thread.isProcessed ? 'text-slate-400' : 'text-slate-100'}`}>
+                      <div className={`truncate text-sm font-medium`} style={{ color: thread.isProcessed ? 'var(--af-text-faint)' : 'var(--af-text-heading)' }}>
                             {thread.title || t('chat.inbox.threadFallback')}
                           </div>
-                          <span className="shrink-0 text-[10px] text-slate-500">{timeAgo(thread.latestTs)}</span>
+                          <span className="shrink-0 text-[10px]" style={{ color: 'var(--af-text-faint)' }}>{timeAgo(thread.latestTs)}</span>
                         </div>
-                        <div className={`mt-1 line-clamp-2 text-xs leading-5 ${thread.isProcessed ? 'text-slate-500' : 'text-slate-300'}`}>
+                        <div className={`mt-1 line-clamp-2 text-xs leading-5`} style={{ color: thread.isProcessed ? 'var(--af-text-faint)' : 'var(--af-text-muted)' }}>
                           {thread.preview}
                         </div>
-                        <div className="mt-2 flex items-center gap-2 flex-wrap text-[10px] text-slate-500">
+                        <div className="mt-2 flex items-center gap-2 flex-wrap text-[10px]" style={{ color: 'var(--af-text-faint)' }}>
                           <span className="truncate max-w-[150px]">{participantSummary}</span>
                           {thread.unreadCount > 0 ? (
                             <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-cyan-400/20 px-1.5 text-[10px] text-cyan-100">
@@ -2707,7 +2786,7 @@ function HubWorkspaceContent({
                         </div>
                       </div>
                     </div>
-                    <div className="mt-2 flex flex-wrap gap-2 pl-[3.25rem] text-[10px] text-slate-500">
+                    <div className="mt-2 flex flex-wrap gap-2 pl-[3.25rem] text-[10px]" style={{ color: 'var(--af-text-faint)' }}>
                       <Badge variant={thread.deliverableCount > 0 ? 'purple' : 'green'}>
                         {thread.deliverableCount > 0 && thread.replyCount > 0
                           ? `${thread.replyCount}+${thread.deliverableCount}`
@@ -2725,19 +2804,25 @@ function HubWorkspaceContent({
           </div>
         </div>
 
-        <div className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-white/8 bg-slate-950/35">
+        <div
+          className="flex min-h-0 flex-col overflow-hidden rounded-2xl"
+          style={{ border: '1px solid var(--af-card-ring)', background: 'var(--af-card-bg)' }}
+        >
           {selectedHubThread ? (
             <>
-              <div className="shrink-0 border-b border-white/8 bg-[linear-gradient(135deg,rgba(34,211,238,0.12),rgba(15,23,42,0.92)_58%,rgba(30,41,59,0.82))] px-4 py-3">
+              <div
+                className="shrink-0 px-4 py-3"
+                style={{ borderBottom: '1px solid var(--af-border)', background: 'var(--af-surface-2)' }}
+              >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="text-[11px] uppercase tracking-[0.16em] text-slate-500">
+                    <div className="text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--af-text-faint)' }}>
                       {t('chat.inbox.activityTitle')}
                     </div>
-                    <div className="mt-1 truncate text-sm font-semibold text-slate-100">
+                    <div className="mt-1 truncate text-sm font-semibold" style={{ color: 'var(--af-text-heading)' }}>
                       {selectedHubThread.title || t('chat.inbox.threadFallback')}
                     </div>
-                    <div className="mt-1 line-clamp-2 text-xs text-slate-400">
+                    <div className="mt-1 line-clamp-2 text-xs" style={{ color: 'var(--af-text-muted)' }}>
                       {selectedHubThread.agentIds.length > 0
                         ? selectedHubThread.agentIds.map((agentId) => getAgentLabel(agentId, agents)).join(' · ')
                         : t('chat.inbox.system')}
@@ -2761,7 +2846,10 @@ function HubWorkspaceContent({
                   </Button>
                 </div>
               </div>
-              <div className="flex-1 overflow-y-auto bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.06),transparent_42%),linear-gradient(180deg,rgba(2,6,23,0.2),rgba(2,6,23,0.55))] px-3 py-3">
+              <div
+                className="flex-1 overflow-y-auto px-3 py-3"
+                style={{ background: 'var(--af-surface-3)' }}
+              >
                 <div className="flex min-h-full flex-col justify-end gap-3">
                   {selectedHubThread.events.map((event) => {
                     const eventSeen = seenInboxEventIdSet.has(event.id);
@@ -2803,7 +2891,7 @@ function HubWorkspaceContent({
               </div>
             </>
           ) : (
-            <div className="m-3 rounded-xl border border-dashed border-white/10 bg-slate-950/30 px-3 py-4 text-xs text-slate-400">
+            <div className="m-3 rounded-xl border border-dashed px-3 py-4 text-xs" style={{ borderColor: 'var(--af-border)', color: 'var(--af-text-muted)' }}>
               {hubThreads.length === 0 ? t('chat.inbox.empty') : t('chat.inbox.emptyFiltered')}
             </div>
           )}
@@ -2817,7 +2905,7 @@ function TokenBadge({ usage }: { usage: TokenUsage }) {
   const total = usage.input + usage.output;
   const cacheNote = usage.cacheRead ? ` · ${usage.cacheRead.toLocaleString()} cached` : '';
   return (
-    <div className="text-[10px] text-slate-600 mt-1 text-right font-mono">
+    <div className="text-[10px] mt-1 text-right font-mono" style={{ color: 'var(--af-text-faint)' }}>
       {usage.input.toLocaleString()}↑ {usage.output.toLocaleString()}↓ · {total.toLocaleString()}{' '}
       tokens{cacheNote}
     </div>
@@ -2845,9 +2933,12 @@ function ChatBubble({
           highlighted ? 'ring-2 ring-cyan-400/60 shadow-lg shadow-cyan-500/10' : ''
         } ${
           isUser
-            ? 'bg-indigo-600/80 text-slate-100 rounded-br-sm'
-            : 'bg-slate-800/80 ring-1 ring-slate-700/50 rounded-bl-sm'
+            ? 'rounded-br-sm'
+            : 'rounded-bl-sm'
         }`}
+        style={isUser
+          ? { background: 'var(--af-accent)', color: 'var(--af-btn-primary-text)' }
+          : { background: 'var(--af-card-bg)', boxShadow: '0 0 0 1px var(--af-card-ring)', color: 'var(--af-text-base)' }}
       >
         {isUser ? (
           <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
@@ -2858,7 +2949,7 @@ function ChatBubble({
             {msg.toolResults && msg.toolResults.length > 0 && (
               <ToolResultList toolResults={msg.toolResults} />
             )}
-            {msg.streaming && <span className="text-xs text-slate-500 animate-pulse">typing…</span>}
+            {msg.streaming && <span className="text-xs animate-pulse" style={{ color: 'var(--af-text-muted)' }}>typing…</span>}
           </div>
         )}
         {!isUser && !msg.streaming && msg.content && (

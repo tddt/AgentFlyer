@@ -87,7 +87,11 @@ interface MeshAgentEntry {
 const MESH_STATUS_COLORS: Record<string, string> = {
   idle: 'text-emerald-400',
   busy: 'text-amber-400',
-  offline: 'text-slate-500',
+  offline: '',
+};
+
+const MESH_STATUS_STYLES: Record<string, React.CSSProperties> = {
+  offline: { color: 'var(--af-text-faint)' },
 };
 
 function MeshTopologyPanel() {
@@ -103,12 +107,15 @@ function MeshTopologyPanel() {
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-sm font-semibold text-slate-200">Mesh 节点</h2>
-          <p className="text-[11px] text-slate-500 mt-0.5">已注册到本地 mesh 的 agent 列表</p>
+          <h2 className="text-sm font-semibold" style={{ color: 'var(--af-text-heading)' }}>Mesh 节点</h2>
+          <p className="text-[11px] mt-0.5" style={{ color: 'var(--af-text-faint)' }}>已注册到本地 mesh 的 agent 列表</p>
         </div>
         <button
           onClick={refetch}
-          className="text-[11px] text-slate-500 hover:text-slate-300 transition-colors"
+          className="text-[11px] transition-colors"
+          style={{ color: 'var(--af-text-faint)' }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--af-text-muted)'; }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--af-text-faint)'; }}
         >
           刷新
         </button>
@@ -123,7 +130,8 @@ function MeshTopologyPanel() {
               {['Agent ID', '名称', '角色', '状态', '模型', '能力'].map((h) => (
                 <th
                   key={h}
-                  className="px-3 py-2 text-left text-[11px] font-medium text-slate-500 uppercase tracking-wide"
+                  className="px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wide"
+                  style={{ color: 'var(--af-text-faint)' }}
                 >
                   {h}
                 </th>
@@ -139,14 +147,15 @@ function MeshTopologyPanel() {
                   background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)',
                 }}
               >
-                <td className="px-3 py-2 font-mono text-indigo-300/80">{agent.agentId}</td>
-                <td className="px-3 py-2 text-slate-300">{agent.name || '—'}</td>
-                <td className="px-3 py-2 text-slate-400">{agent.role}</td>
-                <td className={`px-3 py-2 font-medium ${MESH_STATUS_COLORS[agent.status] ?? 'text-slate-400'}`}>
+                <td className="px-3 py-2 font-mono" style={{ color: 'var(--af-accent)' }}>{agent.agentId}</td>
+                <td className="px-3 py-2" style={{ color: 'var(--af-text-muted)' }}>{agent.name || '—'}</td>
+                <td className="px-3 py-2" style={{ color: 'var(--af-text-faint)' }}>{agent.role}</td>
+                <td className={`px-3 py-2 font-medium ${MESH_STATUS_COLORS[agent.status] ?? ''}`}
+                  style={MESH_STATUS_STYLES[agent.status] ?? undefined}>
                   {agent.status}
                 </td>
-                <td className="px-3 py-2 text-slate-400 font-mono text-[11px]">{agent.model}</td>
-                <td className="px-3 py-2 text-slate-500">
+                <td className="px-3 py-2 font-mono text-[11px]" style={{ color: 'var(--af-text-faint)' }}>{agent.model}</td>
+                <td className="px-3 py-2" style={{ color: 'var(--af-text-faint)' }}>
                   {agent.capabilities.length > 0 ? agent.capabilities.join(', ') : '—'}
                 </td>
               </tr>
@@ -229,9 +238,14 @@ function EditModal({
 
   const field = (label: string, key: keyof EditForm, placeholder?: string) => (
     <div className="flex flex-col gap-1">
-      <label className="text-xs text-slate-400">{label}</label>
+      <label className="text-xs" style={{ color: 'var(--af-text-muted)' }}>{label}</label>
       <input
-        className="rounded-lg bg-slate-900/70 ring-1 ring-slate-700 px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-indigo-500"
+        className="rounded-lg px-3 py-2 text-sm focus:outline-none"
+        style={{
+          background: 'var(--af-input-bg)',
+          boxShadow: '0 0 0 1px var(--af-input-ring)',
+          color: 'var(--af-text-base)',
+        }}
         value={form[key]}
         placeholder={placeholder}
         onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
@@ -241,10 +255,10 @@ function EditModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="bg-slate-900 ring-1 ring-slate-700 rounded-2xl shadow-2xl w-full max-w-md p-6 flex flex-col gap-5">
+      <div className="rounded-2xl shadow-2xl w-full max-w-md p-6 flex flex-col gap-5" style={{ background: 'var(--af-overlay-bg)', border: '1px solid var(--af-overlay-border)' }}>
         <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold text-slate-100">{t('agents.editModal.title')}</h2>
-          <span className="font-mono text-xs text-slate-500">{agentId}</span>
+          <h2 className="text-base font-semibold" style={{ color: 'var(--af-text-heading)' }}>{t('agents.editModal.title')}</h2>
+          <span className="font-mono text-xs" style={{ color: 'var(--af-text-muted)' }}>{agentId}</span>
         </div>
         <div className="flex flex-col gap-4">
           {field(t('agents.editModal.name'), 'name', t('agents.editModal.namePlaceholder'))}
@@ -280,7 +294,7 @@ function formatTrendLabel(date: string): string {
 
 function problemCardTone(params: { hasProblems: boolean; topErrorCode?: string }): string {
   if (!params.hasProblems) {
-    return 'ring-slate-700/50 hover:ring-indigo-500/30';
+    return 'hover:ring-white/[0.14]';
   }
   return isSuspendedProblemCode(params.topErrorCode ?? '')
     ? 'ring-amber-500/30 hover:ring-amber-500/45'
@@ -337,7 +351,7 @@ function AgentErrorTrend({
   const peakCount = Math.max(...trend.map((point) => point.count), 0);
 
   return (
-    <div className="rounded-lg bg-slate-950/40 ring-1 ring-white/5 px-3 py-2.5">
+    <div className="rounded-lg ring-1 px-3 py-2.5" style={{ background: 'var(--af-card-bg)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}>
       <div className="flex items-end gap-1 h-10">
         {trend.map((point) => (
           <div key={point.date} className="flex-1 h-full flex items-end" title={`${point.date}: ${point.count}`}>
@@ -348,9 +362,9 @@ function AgentErrorTrend({
           </div>
         ))}
       </div>
-      <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-slate-500">
+      <div className="mt-2 flex items-center justify-between gap-2 text-[10px]" style={{ color: 'var(--af-text-faint)' }}>
         <span>{formatTrendLabel(trend[0]?.date ?? '')}</span>
-        <span className="text-slate-400">{summary.replace('{n}', String(windowDays))}</span>
+        <span style={{ color: 'var(--af-text-muted)' }}>{summary.replace('{n}', String(windowDays))}</span>
         <span>{formatTrendLabel(trend.at(-1)?.date ?? '')}</span>
       </div>
     </div>
@@ -530,7 +544,7 @@ export function AgentsTab({
     [toast, refetch],
   );
 
-  if (loading && !agentsResult) return <div className="text-slate-400 text-sm p-8">{t('common.loading')}</div>;
+  if (loading && !agentsResult) return <div className="text-sm p-8" style={{ color: 'var(--af-text-muted)' }}>{t('common.loading')}</div>;
   if (error) return <div className="text-red-400 text-sm p-8">{t('common.error')}{error}</div>;
 
   const list: AgentInfo[] = Array.isArray(agentsResult?.agents) ? agentsResult.agents : [];
@@ -564,8 +578,8 @@ export function AgentsTab({
 
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-semibold text-slate-100">{t('agents.title')}</h1>
-          <p className="text-xs text-slate-500 mt-0.5">{t('agents.running', { n: activeCount })}</p>
+          <h1 className="text-lg font-semibold" style={{ color: 'var(--af-text-heading)' }}>{t('agents.title')}</h1>
+          <p className="text-xs mt-0.5" style={{ color: 'var(--af-text-muted)' }}>{t('agents.running', { n: activeCount })}</p>
         </div>
         <Button
           size="sm"
@@ -584,11 +598,11 @@ export function AgentsTab({
       {groupEntries.map(([workspace, agents]) => (
         <div key={workspace} className="flex flex-col gap-3">
           <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">
+            <span className="text-xs font-medium uppercase tracking-wider" style={{ color: 'var(--af-text-muted)' }}>
               {workspace}
             </span>
-            <div className="flex-1 h-px bg-slate-700/50" />
-            <span className="text-xs text-slate-600">{agents.length}</span>
+            <div className="flex-1 h-px" style={{ background: 'var(--af-border)' }} />
+            <span className="text-xs" style={{ color: 'var(--af-text-faint)' }}>{agents.length}</span>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {agents.map((a) => {
@@ -607,19 +621,26 @@ export function AgentsTab({
               return (
                 <div key={a.agentId} className="flex flex-col">
                   <div
-                    className={`rounded-xl bg-slate-800/60 ring-1 transition-all p-4 flex flex-col gap-3 cursor-pointer ${
+                    className={`rounded-xl ring-1 transition-all p-4 flex flex-col gap-3 cursor-pointer ${
                       isSelected
-                        ? 'ring-indigo-500/60 bg-slate-800'
+                        ? ''
                         : problemCardTone({ hasProblems: hasRecentProblems, topErrorCode: topProblemCode })
                     }`}
+                    style={isSelected ? {
+                      background: 'var(--af-accent-soft)',
+                      boxShadow: '0 0 0 1px var(--af-accent)',
+                    } : {
+                      background: 'var(--af-card-bg)',
+                      boxShadow: '0 0 0 1px var(--af-card-ring)',
+                    }}
                     onClick={() => setSelected(isSelected ? null : a.agentId)}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex flex-col gap-0.5 min-w-0">
-                        <span className="text-sm font-semibold text-slate-100 truncate">
+                        <span className="text-sm font-semibold truncate" style={{ color: 'var(--af-text-heading)' }}>
                           {a.name ?? a.agentId}
                         </span>
-                        <span className="text-xs font-mono text-slate-500 truncate">
+                        <span className="text-xs font-mono truncate" style={{ color: 'var(--af-text-faint)' }}>
                           {a.agentId}
                         </span>
                       </div>
@@ -719,8 +740,9 @@ export function AgentsTab({
                         className={
                           topProblemTone
                             ? 'rounded-lg bg-amber-950/20 ring-1 ring-amber-500/15 px-3 py-2 text-[11px] text-amber-100/85'
-                            : 'rounded-lg bg-red-950/20 ring-1 ring-red-500/15 px-3 py-2 text-[11px] text-slate-300'
+                            : 'rounded-lg bg-red-950/20 ring-1 ring-red-500/15 px-3 py-2 text-[11px]'
                         }
+                        style={topProblemTone ? undefined : { color: 'var(--af-text-muted)' }}
                       >
                         <div className="flex items-center gap-2 flex-wrap">
                           <span>
@@ -728,7 +750,7 @@ export function AgentsTab({
                               .replace('{recent}', String(errorStats.recentErrorSessions))
                               .replace('{total}', String(errorStats.totalErrorSessions))}
                           </span>
-                          <span className="text-slate-500">·</span>
+                          <span style={{ color: 'var(--af-text-faint)' }}>·</span>
                           <Badge variant={topProblemVariant}>{formatProblemCode(errorStats.topErrorCode, t)}</Badge>
                         </div>
                       </div>
@@ -825,8 +847,8 @@ export function AgentsTab({
 
                   {/* Expanded config detail */}
                   {isSelected && cfg && (
-                    <div className="rounded-b-xl bg-slate-900/70 ring-1 ring-t-0 ring-slate-700/50 px-4 py-3 -mt-1">
-                      <pre className="text-xs font-mono text-slate-400 overflow-x-auto whitespace-pre-wrap">
+                    <div className="rounded-b-xl ring-1 ring-t-0 px-4 py-3 -mt-1" style={{ background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-border)' }}>
+                      <pre className="text-xs font-mono overflow-x-auto whitespace-pre-wrap" style={{ color: 'var(--af-text-muted)' }}>
                         {JSON.stringify(cfg, null, 2)}
                       </pre>
                     </div>
@@ -838,7 +860,7 @@ export function AgentsTab({
         </div>
       ))}
 
-      {list.length === 0 && <p className="text-slate-500 text-sm py-4">{t('agents.noAgents')}</p>}
+      {list.length === 0 && <p className="text-sm py-4" style={{ color: 'var(--af-text-faint)' }}>{t('agents.noAgents')}</p>}
 
       {/* Mesh topology — only rendered when mesh agents are registered */}
       <MeshTopologyPanel />

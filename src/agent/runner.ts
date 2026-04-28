@@ -92,10 +92,20 @@ function sanitizeMessages(messages: Message[]): Message[] {
   type TUC = import('../core/types.js').ToolUseContent;
   type TRC = import('../core/types.js').ToolResultContent;
 
+  const isReasoningContentFailure = (m: Message): boolean =>
+    m.role === 'assistant' &&
+    typeof m.content === 'string' &&
+    /reasoning_content.+must be passed back to the api/i.test(m.content);
+
   const isToolResultMsg = (m: Message): boolean =>
     m.role === 'user' &&
     Array.isArray(m.content) &&
     (m.content as MC[]).some((c) => c.type === 'tool_result');
+
+  const isToolUseMsg = (m: Message): boolean =>
+    m.role === 'assistant' &&
+    Array.isArray(m.content) &&
+    (m.content as MC[]).some((c) => c.type === 'tool_use');
 
   let current = messages;
 
@@ -108,6 +118,28 @@ function sanitizeMessages(messages: Message[]): Message[] {
     while (i < current.length) {
       const msg = current[i];
       if (!msg) {
+        i++;
+        continue;
+      }
+
+      // ── Case C: previously poisoned turn from missing reasoning_content ───
+      if (isReasoningContentFailure(msg)) {
+        logger.warn('Dropping poisoned reasoning_content failure turn from history');
+        changed = true;
+
+        const prev = out[out.length - 1];
+        if (prev) {
+          if (isToolResultMsg(prev)) {
+            out.pop();
+            const prev2 = out[out.length - 1];
+            if (prev2 && isToolUseMsg(prev2)) {
+              out.pop();
+            }
+          } else if (prev.role === 'user') {
+            out.pop();
+          }
+        }
+
         i++;
         continue;
       }
@@ -696,6 +728,7 @@ export class AgentRunner {
           .map((entry) => ({
             role: entry.role,
             content: entry.content,
+            ...(entry.reasoning_content ? { reasoning_content: entry.reasoning_content } : {}),
           })),
       );
 
@@ -868,6 +901,7 @@ export class AgentRunner {
 
     const toolCallMap = new Map<string, { name: string; inputJson: string }>();
     let accText = '';
+    let accThinking = '';
     let stopReason: 'end_turn' | 'tool_use' | 'max_tokens' | 'stop_sequence' = 'end_turn';
     let streamErrorMessage: string | null = null;
     const indexToId = new Map<string, string>();
@@ -875,6 +909,8 @@ export class AgentRunner {
     for (const chunk of chunks) {
       if (chunk.type === 'text_delta') {
         accText += chunk.text;
+      } else if (chunk.type === 'thinking_delta') {
+        accThinking += chunk.thinking;
       } else if (chunk.type === 'tool_use_delta') {
         const id = chunk.id || indexToId.get(chunk.name) || chunk.name;
         if (chunk.id) {
@@ -916,16 +952,24 @@ export class AgentRunner {
         ? [...(accText ? [{ type: 'text' as const, text: accText }] : []), ...assistantToolUse]
         : accText;
 
-    if (assistantToolUse.length > 0 || accText.trim().length > 0) {
+    if (assistantToolUse.length > 0 || accText.trim().length > 0 || accThinking.trim().length > 0) {
       const assistantMsg: StoredMessage = {
         id: ulid(),
         sessionKey: this.sessionKey,
         role: 'assistant',
         content: assistantContent,
+        ...(accThinking ? { reasoning_content: accThinking } : {}),
         timestamp: Date.now(),
       };
       await sessionStore.append(this.sessionKey, assistantMsg);
-      state.messages = [...state.messages, { role: 'assistant', content: assistantContent }];
+      state.messages = [
+        ...state.messages,
+        {
+          role: 'assistant',
+          content: assistantContent,
+          ...(accThinking ? { reasoning_content: accThinking } : {}),
+        },
+      ];
     }
 
     if (streamErrorMessage) {

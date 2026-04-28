@@ -177,13 +177,13 @@ function FormModal({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-3xl mx-4 max-h-[85vh] overflow-auto rounded-2xl bg-slate-900 ring-1 ring-slate-700 p-5 flex flex-col gap-4">
+      <div className="w-full max-w-3xl mx-4 max-h-[85vh] overflow-auto rounded-2xl p-5 flex flex-col gap-4" style={{ background: 'var(--af-card-bg)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}>
         <div>
-          <h3 className="text-base font-semibold text-slate-100">{title}</h3>
-          <p className="text-xs text-slate-400 mt-1">{description}</p>
+          <h3 className="text-base font-semibold" style={{ color: 'var(--af-text-heading)' }}>{title}</h3>
+          <p className="text-xs mt-1" style={{ color: 'var(--af-text-muted)' }}>{description}</p>
         </div>
         <div className="flex flex-col gap-3">{children}</div>
-        <div className="flex justify-end gap-2 pt-2 border-t border-slate-700/50">
+        <div className="flex justify-end gap-2 pt-2" style={{ borderTop: '1px solid var(--af-border)' }}>
           <Button variant="ghost" size="sm" onClick={onClose}>
             {t('common.cancel')}
           </Button>
@@ -206,9 +206,9 @@ function ConfirmModal({ state, onClose }: { state: ConfirmState; onClose: () => 
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-md mx-4 rounded-2xl bg-slate-900 ring-1 ring-slate-700 p-5 flex flex-col gap-4">
-        <h3 className="text-base font-semibold text-slate-100">{state.title}</h3>
-        <p className="text-sm text-slate-400">{state.message}</p>
+      <div className="w-full max-w-md mx-4 rounded-2xl p-5 flex flex-col gap-4" style={{ background: 'var(--af-card-bg)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}>
+        <h3 className="text-base font-semibold" style={{ color: 'var(--af-text-heading)' }}>{state.title}</h3>
+        <p className="text-sm" style={{ color: 'var(--af-text-muted)' }}>{state.message}</p>
         <div className="flex justify-end gap-2">
           <Button size="sm" variant="ghost" onClick={onClose}>
             {t('common.cancel')}
@@ -226,7 +226,7 @@ function ConfirmModal({ state, onClose }: { state: ConfirmState; onClose: () => 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="grid grid-cols-[200px_minmax(0,1fr)] gap-3 items-center">
-      <span className="text-xs text-slate-400">{label}</span>
+      <span className="text-xs" style={{ color: 'var(--af-text-muted)' }}>{label}</span>
       {children}
     </label>
   );
@@ -253,17 +253,17 @@ function HistoryRecordCard({
   return (
     <div
       className="rounded-xl overflow-hidden"
-      style={{ border: '1px solid rgba(255,255,255,0.07)', background: 'rgba(255,255,255,0.02)' }}
+      style={{ border: '1px solid var(--af-border)', background: 'var(--af-surface-2)' }}
     >
       {/* meta row */}
       <div
         className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3"
-        style={{ borderBottom: r.result ? '1px solid rgba(255,255,255,0.06)' : undefined }}
+        style={{ borderBottom: r.result ? '1px solid var(--af-border)' : undefined }}
       >
-        <span className="text-xs text-slate-500 font-medium">#{total - index}</span>
+        <span className="text-xs font-medium" style={{ color: 'var(--af-text-faint)' }}>#{total - index}</span>
         <Badge variant={r.ok ? 'green' : 'red'}>{r.ok ? 'OK' : 'Error'}</Badge>
-        <span className="text-xs text-slate-400">{new Date(r.startedAt).toLocaleString()}</span>
-        <span className="text-xs text-slate-500 font-mono">{durStr}</span>
+        <span className="text-xs" style={{ color: 'var(--af-text-muted)' }}>{new Date(r.startedAt).toLocaleString()}</span>
+        <span className="text-xs font-mono" style={{ color: 'var(--af-text-faint)' }}>{durStr}</span>
         {r.deliverableId && (
           <button
             className="text-xs text-cyan-300 hover:text-cyan-200"
@@ -273,7 +273,7 @@ function HistoryRecordCard({
           </button>
         )}
         {(r.workflowId ?? r.agentId) && (
-          <span className="text-xs text-slate-600 ml-auto truncate max-w-[200px]">
+          <span className="text-xs ml-auto truncate max-w-[200px]" style={{ color: 'var(--af-text-faint)' }}>
             {r.workflowId ? `⚡ ${r.workflowId}` : r.agentId}
           </span>
         )}
@@ -283,12 +283,8 @@ function HistoryRecordCard({
       {r.result ? (
         <div className="relative">
           <pre
-            className="px-4 py-3 text-xs text-slate-300 font-mono whitespace-pre-wrap break-all leading-relaxed"
-            style={{
-              maxHeight: expanded ? '600px' : '120px',
-              overflowY: expanded ? 'auto' : 'hidden',
-              transition: 'max-height 0.2s ease',
-            }}
+            className="px-4 py-3 text-xs font-mono whitespace-pre-wrap break-all leading-relaxed"
+            style={{ color: 'var(--af-text-base)', maxHeight: expanded ? '600px' : '120px', overflowY: expanded ? 'auto' : 'hidden', transition: 'max-height 0.2s ease' }}
           >
             {r.result}
           </pre>
@@ -300,7 +296,7 @@ function HistoryRecordCard({
               style={{ background: 'linear-gradient(to bottom, transparent, rgba(15,23,42,0.95))' }}
             >
               <button
-                className="text-[11px] text-indigo-400 hover:text-indigo-300 font-medium transition-colors"
+                className="text-[11px] font-medium transition-colors" style={{ color: 'var(--af-accent)' }}
                 onClick={() => setExpanded(true)}
               >
                 {t('scheduler.showResult')}
@@ -310,10 +306,10 @@ function HistoryRecordCard({
           {isLong && expanded && (
             <div
               className="flex justify-center py-1.5"
-              style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}
+              style={{ borderTop: '1px solid var(--af-border)' }}
             >
               <button
-                className="text-[11px] text-slate-500 hover:text-slate-300 font-medium transition-colors"
+                className="text-[11px] font-medium transition-colors" style={{ color: 'var(--af-text-muted)' }}
                 onClick={() => setExpanded(false)}
               >
                 {t('scheduler.collapseResult')}
@@ -322,7 +318,7 @@ function HistoryRecordCard({
           )}
         </div>
       ) : (
-        <div className="px-4 py-3 text-xs text-slate-600 italic">{t('scheduler.historyModal.noOutput')}</div>
+        <div className="px-4 py-3 text-xs italic" style={{ color: 'var(--af-text-faint)' }}>{t('scheduler.historyModal.noOutput')}</div>
       )}
     </div>
   );
@@ -595,15 +591,15 @@ export function SchedulerTab() {
   };
 
   if (loading && !schedulerResult)
-    return <div className="text-slate-400 text-sm p-8">{t('common.loading')}</div>;
+    return <div className="text-sm p-8" style={{ color: 'var(--af-text-muted)' }}>{t('common.loading')}</div>;
   if (error) return <div className="text-red-400 text-sm p-8">Error: {error}</div>;
 
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-semibold text-slate-100">{t('scheduler.title')}</h1>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <h1 className="text-lg font-semibold" style={{ color: 'var(--af-text-heading)' }}>{t('scheduler.title')}</h1>
+          <p className="text-xs mt-0.5" style={{ color: 'var(--af-text-faint)' }}>
             {t('scheduler.subtitle')}
           </p>
         </div>
@@ -631,10 +627,10 @@ export function SchedulerTab() {
             style={{ borderBottom: '1px solid rgba(99,102,241,0.15)' }}
           >
             <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-            <span className="text-[11px] font-semibold text-indigo-300 uppercase tracking-wider">
+            <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--af-accent)' }}>
               {t('scheduler.runningNow')}
             </span>
-            <span className="ml-auto text-xs text-indigo-400">{t('scheduler.active', { n: String(runningTasks.length) })}</span>
+            <span className="ml-auto text-xs" style={{ color: 'var(--af-accent)' }}>{t('scheduler.active', { n: String(runningTasks.length) })}</span>
           </div>
           <div
             className="divide-y"
@@ -657,8 +653,8 @@ export function SchedulerTab() {
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse shrink-0" />
                   <div className="flex-1 min-w-0">
-                    <span className="text-sm font-medium text-slate-200">{rt.taskName}</span>
-                    <span className="ml-2 text-xs text-slate-500">
+                    <span className="text-sm font-medium" style={{ color: 'var(--af-text-base)' }}>{rt.taskName}</span>
+                    <span className="ml-2 text-xs" style={{ color: 'var(--af-text-faint)' }}>
                       {rt.workflowId ? `⚡ ${rt.workflowId}` : describeAgentTarget(rt.agentId, agents)}
                     </span>
                   </div>
@@ -666,8 +662,7 @@ export function SchedulerTab() {
                     {mins > 0 ? `${mins}m ` : ''}
                     {String(secs).padStart(2, '0')}s
                   </span>
-                  <span className="text-xs text-slate-500 shrink-0">
-                    started {new Date(rt.startedAt).toLocaleTimeString()}
+                  <span className="text-xs shrink-0" style={{ color: 'var(--af-text-faint)' }}>
                   </span>
                 </div>
               );
@@ -677,49 +672,41 @@ export function SchedulerTab() {
       )}
 
       {sortedTasks.length === 0 ? (
-        <div className="text-slate-500 text-sm py-4">{t('scheduler.noTasks')}</div>
+        <div className="text-sm py-4" style={{ color: 'var(--af-text-faint)' }}>{t('scheduler.noTasks')}</div>
       ) : (
-        <div className="rounded-xl bg-slate-800/60 ring-1 ring-slate-700/50 overflow-hidden">
+        <div className="rounded-xl overflow-hidden" style={{ background: 'var(--af-card-bg)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}>
           <table className="w-full text-sm">
-            <thead className="border-b border-slate-700/50">
+            <thead style={{ borderBottom: '1px solid var(--af-border)' }}>
               <tr className="text-left">
-                <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">
-                  {t('scheduler.col.task')}
+                <th className="px-4 py-3 text-xs font-medium uppercase tracking-wide" style={{ color: 'var(--af-text-faint)' }}>
                 </th>
-                <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">
-                  {t('scheduler.col.target')}
+                <th className="px-4 py-3 text-xs font-medium uppercase tracking-wide" style={{ color: 'var(--af-text-faint)' }}>
                 </th>
-                <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">
-                  {t('scheduler.col.schedule')}
+                <th className="px-4 py-3 text-xs font-medium uppercase tracking-wide" style={{ color: 'var(--af-text-faint)' }}>
                 </th>
-                <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">
-                  {t('scheduler.col.output')}
+                <th className="px-4 py-3 text-xs font-medium uppercase tracking-wide" style={{ color: 'var(--af-text-faint)' }}>
                 </th>
-                <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">
-                  {t('scheduler.col.status')}
+                <th className="px-4 py-3 text-xs font-medium uppercase tracking-wide" style={{ color: 'var(--af-text-faint)' }}>
                 </th>
-                <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">
-                  {t('scheduler.col.next')}
+                <th className="px-4 py-3 text-xs font-medium uppercase tracking-wide" style={{ color: 'var(--af-text-faint)' }}>
                 </th>
-                <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">
-                  {t('scheduler.col.lastResult')}
+                <th className="px-4 py-3 text-xs font-medium uppercase tracking-wide" style={{ color: 'var(--af-text-faint)' }}>
                 </th>
-                <th className="px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">
-                  {t('scheduler.col.actions')}
+                <th className="px-4 py-3 text-xs font-medium uppercase tracking-wide" style={{ color: 'var(--af-text-faint)' }}>
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-700/50">
+            <tbody style={{ borderTop: '1px solid var(--af-border)' }}>
               {sortedTasks.map((task) => (
-                <tr key={task.id} className="hover:bg-slate-700/20 transition-colors align-top">
-                  <td className="px-4 py-3 text-slate-200">
+                <tr key={task.id} className="hover:bg-white/[0.02] transition-colors align-top" style={{ borderTop: '1px solid var(--af-border)' }}>
+                  <td className="px-4 py-3" style={{ color: 'var(--af-text-base)' }}>
                     <div className="font-medium">{task.name}</div>
-                    <div className="text-xs text-slate-500 mt-1 line-clamp-2">{task.message}</div>
+                    <div className="text-xs mt-1 line-clamp-2" style={{ color: 'var(--af-text-faint)' }}>{task.message}</div>
                     {task.reportTo && (
-                      <div className="text-xs text-slate-500 mt-1">report to: {task.reportTo}</div>
+                      <div className="text-xs mt-1" style={{ color: 'var(--af-text-faint)' }}>report to: {task.reportTo}</div>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-slate-400 font-mono text-xs">
+                  <td className="px-4 py-3 font-mono text-xs" style={{ color: 'var(--af-text-muted)' }}>
                     <div className="flex flex-col gap-1">
                       {task.workflowId ? (
                         <span className="text-purple-400">
@@ -732,14 +719,14 @@ export function SchedulerTab() {
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    <code className="text-xs bg-slate-700/60 px-1.5 py-0.5 rounded text-slate-300 font-mono">
+                    <code className="text-xs px-1.5 py-0.5 rounded font-mono" style={{ background: 'var(--af-surface-2)', color: 'var(--af-text-base)' }}>
                       {task.cronExpr}
                     </code>
-                    <div className="text-xs text-slate-500 mt-1">runs: {task.runCount}</div>
+                    <div className="text-xs mt-1" style={{ color: 'var(--af-text-faint)' }}>runs: {task.runCount}</div>
                   </td>
-                  <td className="px-4 py-3 text-xs text-slate-300">
+                  <td className="px-4 py-3 text-xs" style={{ color: 'var(--af-text-base)' }}>
                     {task.outputChannel ?? defaultOutputChannel}
-                    <div className="text-slate-500 mt-1">
+                    <div className="mt-1" style={{ color: 'var(--af-text-faint)' }}>
                       {task.publicationChannels && task.publicationChannels.length > 0
                         ? t('scheduler.publicationCount', {
                             n: String(task.publicationTargets?.length ?? task.publicationChannels.length),
@@ -756,13 +743,12 @@ export function SchedulerTab() {
                       {task.enabled === false ? 'disabled' : 'enabled'}
                     </Badge>
                   </td>
-                  <td className="px-4 py-3 text-slate-400 text-xs">
+                  <td className="px-4 py-3 text-xs" style={{ color: 'var(--af-text-muted)' }}>
                     {task.nextRunAt ? new Date(task.nextRunAt).toLocaleString() : '—'}
                   </td>
-                  <td className="px-4 py-3 text-xs text-slate-400 max-w-[360px]">
+                  <td className="px-4 py-3 text-xs max-w-[360px]" style={{ color: 'var(--af-text-muted)' }}>
                     <div className="line-clamp-3">{task.lastResult ?? '—'}</div>
-                    <div className="text-slate-500 mt-1">
-                      {task.lastRunAt ? new Date(task.lastRunAt).toLocaleString() : ''}
+                    <div className="mt-1" style={{ color: 'var(--af-text-faint)' }}>
                     </div>
                     {task.latestDeliverableId && (
                       <button
@@ -822,13 +808,10 @@ export function SchedulerTab() {
               onChange={(e) =>
                 setTaskModal({ ...taskModal, form: { ...taskModal.form, name: e.target.value } })
               }
-              className="bg-slate-800 border border-slate-600 text-slate-200 text-xs rounded-lg px-2.5 py-2"
+              className="rounded-lg px-2.5 py-2 text-xs" style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
             />
-          </Field>
-
-          <Field label={t('scheduler.modal.targetType')}>
             <div className="flex gap-3">
-              <label className="text-xs text-slate-300 inline-flex items-center gap-2">
+              <label className="text-xs inline-flex items-center gap-2" style={{ color: 'var(--af-text-base)' }}>
                 <input
                   type="radio"
                   checked={taskModal.form.targetType === 'agent'}
@@ -839,7 +822,7 @@ export function SchedulerTab() {
                 />
                 Agent
               </label>
-              <label className="text-xs text-slate-300 inline-flex items-center gap-2">
+              <label className="text-xs inline-flex items-center gap-2" style={{ color: 'var(--af-text-base)' }}>
                 <input
                   type="radio"
                   checked={taskModal.form.targetType === 'workflow'}
@@ -867,7 +850,7 @@ export function SchedulerTab() {
                       form: { ...taskModal.form, agentId: e.target.value },
                     })
                   }
-                  className="bg-slate-800 border border-slate-600 text-slate-200 text-xs rounded-lg px-2.5 py-2"
+                  className="rounded-lg px-2.5 py-2 text-xs" style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
                 >
                   {agents.map((a) => (
                     <option key={a.agentId} value={a.agentId}>
@@ -894,9 +877,8 @@ export function SchedulerTab() {
                     form: { ...taskModal.form, workflowId: e.target.value },
                   })
                 }
-                className="bg-slate-800 border border-slate-600 text-slate-200 text-xs rounded-lg px-2.5 py-2"
+                className="rounded-lg px-2.5 py-2 text-xs" style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
               >
-                <option value="">{t('scheduler.modal.selectWorkflow')}</option>
                 {workflows.map((w) => (
                   <option key={w.id} value={w.id}>
                     {w.name}
@@ -908,7 +890,7 @@ export function SchedulerTab() {
 
           <Field label="Schedule Mode">
             <div className="flex gap-3">
-              <label className="text-xs text-slate-300 inline-flex items-center gap-2">
+              <label className="text-xs inline-flex items-center gap-2" style={{ color: 'var(--af-text-base)' }}>
                 <input
                   type="radio"
                   checked={taskModal.form.scheduleMode === 'cron'}
@@ -922,7 +904,7 @@ export function SchedulerTab() {
                 />
                 Cron
               </label>
-              <label className="text-xs text-slate-300 inline-flex items-center gap-2">
+              <label className="text-xs inline-flex items-center gap-2" style={{ color: 'var(--af-text-base)' }}>
                 <input
                   type="radio"
                   checked={taskModal.form.scheduleMode === 'interval'}
@@ -949,33 +931,14 @@ export function SchedulerTab() {
                     form: { ...taskModal.form, cronExpr: e.target.value },
                   })
                 }
-                className="bg-slate-800 border border-slate-600 text-slate-200 text-xs rounded-lg px-2.5 py-2 font-mono"
+                className="rounded-lg px-2.5 py-2 text-xs font-mono" style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
               />
-            </Field>
-          ) : (
-            <Field label="Interval Minutes">
-              <input
-                type="number"
-                min={1}
-                value={taskModal.form.intervalMinutes}
-                onChange={(e) =>
-                  setTaskModal({
-                    ...taskModal,
-                    form: { ...taskModal.form, intervalMinutes: Number(e.target.value) },
-                  })
-                }
-                className="bg-slate-800 border border-slate-600 text-slate-200 text-xs rounded-lg px-2.5 py-2"
-              />
-            </Field>
-          )}
-
-          <Field label="Validation / Next Run">
             <div className="text-xs">
-              {previewLoading && <span className="text-slate-400">Validating schedule…</span>}
+              {previewLoading && <span style={{ color: 'var(--af-text-muted)' }}>Validating schedule…</span>}
               {!previewLoading && preview?.valid && (
                 <div className="text-emerald-300">
                   Valid schedule: <span className="font-mono">{preview.cronExpr}</span>
-                  <div className="text-slate-400 mt-1">
+                  <div style={{ color: 'var(--af-text-muted)' }} className="mt-1">
                     Next run:{' '}
                     {preview.nextRunAt ? new Date(preview.nextRunAt).toLocaleString() : 'n/a'}
                   </div>
@@ -989,6 +952,22 @@ export function SchedulerTab() {
               )}
             </div>
           </Field>
+        ) : (
+          <Field label="Interval Minutes">
+              <input
+                type="number"
+                min={1}
+                value={taskModal.form.intervalMinutes}
+                onChange={(e) =>
+                  setTaskModal({
+                    ...taskModal,
+                    form: { ...taskModal.form, intervalMinutes: Number(e.target.value) },
+                  })
+                }
+                className="rounded-lg px-2.5 py-2 text-xs" style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
+              />
+          </Field>
+        )}
 
           <Field label="Report To (Optional)">
             <select
@@ -999,7 +978,7 @@ export function SchedulerTab() {
                   form: { ...taskModal.form, reportTo: e.target.value },
                 })
               }
-              className="bg-slate-800 border border-slate-600 text-slate-200 text-xs rounded-lg px-2.5 py-2"
+              className="rounded-lg px-2.5 py-2 text-xs" style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
             >
               <option value="">(none)</option>
               {agents.map((a) => (
@@ -1022,7 +1001,7 @@ export function SchedulerTab() {
                   },
                 })
               }
-              className="bg-slate-800 border border-slate-600 text-slate-200 text-xs rounded-lg px-2.5 py-2"
+              className="rounded-lg px-2.5 py-2 text-xs" style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
             >
               <option value="logs">logs (default)</option>
               <option value="cli">cli</option>
@@ -1031,10 +1010,10 @@ export function SchedulerTab() {
           </Field>
 
           <Field label={t('scheduler.modal.publicationChannels')}>
-            <div className="rounded-xl bg-slate-800/50 border border-slate-700/60 p-3 flex flex-col gap-2">
-              <p className="text-xs text-slate-400">{t('scheduler.modal.publicationHint')}</p>
+            <div className="rounded-xl p-3 flex flex-col gap-2" style={{ background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-border)' }}>
+              <p className="text-xs" style={{ color: 'var(--af-text-muted)' }}>{t('scheduler.modal.publicationHint')}</p>
               {channels.length === 0 ? (
-                <span className="text-xs text-slate-500">{t('scheduler.modal.noChannels')}</span>
+                <span className="text-xs" style={{ color: 'var(--af-text-faint)' }}>{t('scheduler.modal.noChannels')}</span>
               ) : (
                 <>
                   {taskModal.form.publicationTargets.map((target, index) => (
@@ -1055,9 +1034,9 @@ export function SchedulerTab() {
                             },
                           })
                         }
-                        className="bg-slate-900/50 border border-slate-700 text-slate-200 text-xs rounded-lg px-2.5 py-2"
-                      >
-                        {channels.map((channel) => (
+                        className="rounded-lg px-2.5 py-2 text-xs" style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
+                        >
+                          {channels.map((channel) => (
                           <option key={channel.id} value={channel.id}>
                             {channel.name}
                           </option>
@@ -1077,7 +1056,7 @@ export function SchedulerTab() {
                           })
                         }
                         placeholder="threadKey"
-                        className="bg-slate-900/50 border border-slate-700 text-slate-200 text-xs rounded-lg px-2.5 py-2 font-mono"
+                        className="rounded-lg px-2.5 py-2 text-xs font-mono" style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
                       />
                       <input
                         value={target.agentId ?? ''}
@@ -1095,7 +1074,7 @@ export function SchedulerTab() {
                           })
                         }
                         placeholder="agentId (optional)"
-                        className="bg-slate-900/50 border border-slate-700 text-slate-200 text-xs rounded-lg px-2.5 py-2"
+                        className="rounded-lg px-2.5 py-2 text-xs" style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
                       />
                       <Button
                         size="sm"
@@ -1143,7 +1122,7 @@ export function SchedulerTab() {
                     return (
                       <div
                         key={`${target.channelId}:${target.threadKey}:hint`}
-                        className="text-[11px] text-slate-500"
+                        className="text-[11px]" style={{ color: 'var(--af-text-faint)' }}
                       >
                         {channel.name} · {formatPublicationLabel(channel, t)}
                       </div>
@@ -1155,7 +1134,7 @@ export function SchedulerTab() {
           </Field>
 
           <Field label="Enabled">
-            <label className="text-xs text-slate-300 inline-flex items-center gap-2">
+            <label className="text-xs inline-flex items-center gap-2" style={{ color: 'var(--af-text-base)' }}>
               <input
                 type="checkbox"
                 checked={taskModal.form.enabled}
@@ -1178,7 +1157,7 @@ export function SchedulerTab() {
                 setTaskModal({ ...taskModal, form: { ...taskModal.form, message: e.target.value } })
               }
               rows={6}
-              className="bg-slate-800 border border-slate-600 text-slate-200 text-xs rounded-lg px-2.5 py-2 font-mono"
+              className="rounded-lg px-2.5 py-2 text-xs font-mono" style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
             />
           </Field>
         </FormModal>
@@ -1195,15 +1174,15 @@ export function SchedulerTab() {
               if (e.target === e.currentTarget) setHistoryModal(null);
             }}
           >
-            <div className="w-full max-w-4xl max-h-[88vh] flex flex-col rounded-2xl bg-slate-900 ring-1 ring-slate-700">
+            <div className="w-full max-w-4xl max-h-[88vh] flex flex-col rounded-2xl" style={{ background: 'var(--af-card-bg)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}>
               {/* header — fixed */}
               <div
                 className="flex items-start justify-between shrink-0 px-5 pt-5 pb-4"
-                style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}
+                style={{ borderBottom: '1px solid var(--af-border)' }}
               >
                 <div>
-                  <h3 className="text-base font-semibold text-slate-100">{t('scheduler.historyModal.title')}</h3>
-                  <p className="text-xs text-slate-400 mt-0.5">{historyModal.task.name}</p>
+                  <h3 className="text-base font-semibold" style={{ color: 'var(--af-text-heading)' }}>{t('scheduler.historyModal.title')}</h3>
+                  <p className="text-xs mt-0.5" style={{ color: 'var(--af-text-muted)' }}>{historyModal.task.name}</p>
                 </div>
                 <Button size="sm" variant="ghost" onClick={() => setHistoryModal(null)}>
                   {t('common.close')}
@@ -1213,14 +1192,14 @@ export function SchedulerTab() {
               {/* scrollable body */}
               <div className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-3">
                 {historyModal.loading && (
-                  <div className="flex items-center gap-2 text-sm text-slate-400 py-6">
-                    <div className="w-3.5 h-3.5 rounded-full border-2 border-indigo-500/30 border-t-indigo-400 animate-spin" />
+                  <div className="flex items-center gap-2 text-sm py-6" style={{ color: 'var(--af-text-muted)' }}>
+                    <div className="w-3.5 h-3.5 rounded-full border-2 animate-spin" style={{ borderColor: 'var(--af-card-ring)', borderTopColor: 'var(--af-accent)' }} />
                     {t('scheduler.historyModal.loading')}
                   </div>
                 )}
 
                 {!historyModal.loading && historyModal.records.length === 0 && (
-                  <div className="text-slate-500 text-sm py-6">
+                  <div className="text-sm py-6" style={{ color: 'var(--af-text-faint)' }}>
                     {t('scheduler.historyModal.noRecords')}
                   </div>
                 )}

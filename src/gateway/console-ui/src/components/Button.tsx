@@ -1,19 +1,41 @@
-import type { ButtonHTMLAttributes, ReactNode } from 'react';
+import type { ButtonHTMLAttributes, CSSProperties, ReactNode } from 'react';
 
 type Variant = 'default' | 'primary' | 'danger' | 'ghost';
 type Size = 'sm' | 'md';
 
 const baseClass =
-  'inline-flex items-center justify-center gap-1.5 font-medium rounded-lg transition-all duration-150 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-offset-slate-950 disabled:opacity-50 disabled:pointer-events-none';
+  'inline-flex items-center justify-center gap-1.5 font-medium rounded-lg transition-all duration-150 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 disabled:opacity-50 disabled:pointer-events-none';
 
-const variantClass: Record<Variant, string> = {
-  primary:
-    'bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white shadow-md shadow-indigo-500/25 hover:shadow-indigo-500/35 focus-visible:ring-indigo-500',
-  danger:
-    'bg-red-600 hover:bg-red-500 active:bg-red-700 text-white shadow-md shadow-red-500/20 hover:shadow-red-500/30 focus-visible:ring-red-400',
-  default:
-    'bg-slate-800 hover:bg-slate-700 text-slate-200 ring-1 ring-white/[0.08] hover:ring-white/[0.12] focus-visible:ring-slate-400',
-  ghost: 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.05] focus-visible:ring-slate-400',
+// Tailwind JIT doesn't see CSS-variable-based classes, so we apply theme colors via inline styles.
+type VariantStyle = { className: string; style: CSSProperties };
+
+const variantMeta: Record<Variant, VariantStyle> = {
+  primary: {
+    className: 'shadow-md active:opacity-90',
+    style: {
+      background: 'var(--af-btn-primary-bg)',
+      color: 'var(--af-btn-primary-text)',
+      boxShadow: '0 4px 14px var(--af-btn-primary-shadow)',
+    },
+  },
+  danger: {
+    className: 'bg-red-600 hover:bg-red-500 active:bg-red-700 text-white shadow-md shadow-red-500/20 hover:shadow-red-500/30 focus-visible:ring-red-400',
+    style: {},
+  },
+  default: {
+    className: 'ring-1 transition-colors',
+    style: {
+      background: 'var(--af-btn-default-bg)',
+      color: 'var(--af-btn-default-text)',
+      boxShadow: '0 0 0 1px var(--af-btn-default-ring)',
+    },
+  },
+  ghost: {
+    className: 'transition-colors',
+    style: {
+      color: 'var(--af-text-muted)',
+    },
+  },
 };
 
 const sizeClass: Record<Size, string> = {
@@ -27,11 +49,13 @@ interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
   children: ReactNode;
 }
 
-export function Button({ variant = 'default', size = 'md', className = '', ...rest }: Props) {
+export function Button({ variant = 'default', size = 'md', className = '', style: styleProp, ...rest }: Props) {
+  const meta = variantMeta[variant];
   return (
     <button
       {...rest}
-      className={`${baseClass} ${variantClass[variant]} ${sizeClass[size]} ${className}`}
+      style={{ ...meta.style, ...styleProp }}
+      className={`${baseClass} ${meta.className} ${sizeClass[size]} ${className}`}
     />
   );
 }

@@ -101,7 +101,7 @@ select {
 
 /* ─── Doc Prose (Markdown → HTML renderer) ────────────────── */
 .doc-prose {
-  color: #cbd5e1;
+  color: var(--af-text-base);
   font-size: 13.5px;
   line-height: 1.75;
 }
@@ -111,58 +111,58 @@ select {
 .doc-prose h4 {
   font-family: "Outfit", system-ui, -apple-system, sans-serif;
   font-weight: 600;
-  color: #e2e8f0;
+  color: var(--af-text-heading);
   margin-top: 1.5em;
   margin-bottom: 0.5em;
 }
 .doc-prose h1 {
   font-size: 1.35em;
   padding-bottom: 0.35em;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--af-overlay-border);
 }
 .doc-prose h2 {
   font-size: 1.15em;
   padding-bottom: 0.25em;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--af-border);
 }
 .doc-prose h3 {
   font-size: 1.0em;
-  color: #a5b4fc;
+  color: var(--af-accent-text);
 }
 .doc-prose h4 {
   font-size: 0.9em;
-  color: #94a3b8;
+  color: var(--af-text-muted);
 }
 .doc-prose p {
   margin: 0.65em 0;
 }
 .doc-prose a {
-  color: #818cf8;
+  color: var(--af-prose-link);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 .doc-prose a:hover {
-  color: #a5b4fc;
+  color: var(--af-prose-link-hover);
 }
 .doc-prose strong {
-  color: #e2e8f0;
+  color: var(--af-text-heading);
   font-weight: 600;
 }
 .doc-prose em {
-  color: #94a3b8;
+  color: var(--af-text-muted);
   font-style: italic;
 }
 .doc-prose blockquote {
-  border-left: 3px solid rgba(99, 102, 241, 0.4);
+  border-left: 3px solid var(--af-prose-accent);
   padding: 0.3em 0.9em;
   margin: 0.9em 0;
-  color: #94a3b8;
-  background: rgba(99, 102, 241, 0.06);
+  color: var(--af-text-muted);
+  background: var(--af-prose-accent-bg);
   border-radius: 0 6px 6px 0;
 }
 .doc-prose pre {
-  background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--af-input-bg);
+  border: 1px solid var(--af-overlay-border);
   border-radius: 8px;
   padding: 0.9em 1.1em;
   overflow-x: auto;
@@ -172,14 +172,14 @@ select {
 }
 .doc-prose pre code {
   background: none;
-  color: #e2e8f0;
+  color: var(--af-text-heading);
   padding: 0;
   border: none;
   font-size: inherit;
 }
 .doc-prose code {
-  background: rgba(99, 102, 241, 0.12);
-  color: #a5b4fc;
+  background: var(--af-prose-code-bg);
+  color: var(--af-prose-code-text);
   padding: 0.15em 0.4em;
   border-radius: 4px;
   font-size: 12px;
@@ -192,20 +192,20 @@ select {
   font-size: 12.5px;
 }
 .doc-prose th {
-  background: rgba(99, 102, 241, 0.12);
-  color: #a5b4fc;
+  background: var(--af-prose-code-bg);
+  color: var(--af-prose-code-text);
   font-weight: 600;
   padding: 0.5em 0.8em;
   text-align: left;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--af-overlay-border);
 }
 .doc-prose td {
   padding: 0.45em 0.8em;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--af-border);
   vertical-align: top;
 }
 .doc-prose tr:nth-child(even) td {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--af-surface-3);
 }
 .doc-prose ul,
 .doc-prose ol {
@@ -216,70 +216,169 @@ select {
   margin: 0.25em 0;
 }
 .doc-prose ul li::marker {
-  color: rgba(99, 102, 241, 0.7);
+  color: var(--af-prose-accent);
 }
 .doc-prose ol li::marker {
-  color: #a5b4fc;
+  color: var(--af-prose-code-text);
   font-weight: 600;
 }
 .doc-prose hr {
   border: none;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--af-overlay-border);
   margin: 1.5em 0;
 }
 
 /* ─── Theme tokens ────────────────────────────────────────── */
 /* Dark (default) — slate-blue bg · violet primary · pink secondary */
 :root {
+  color-scheme: dark;
+
+  /* Layout */
   --af-bg: #0c0e1c;
   --af-sidebar-from: #111630;
   --af-sidebar-to: #0c0e1c;
-  --af-border: rgba(139, 92, 246, 0.10);
-  --af-surface: rgba(139, 92, 246, 0.06);
-  --af-text-base: #cbd5e1;
-  --af-text-muted: #64748b;
+
+  /* Borders / surfaces */
+  --af-border:        rgba(139, 92, 246, 0.22);   /* ↑ was 0.12 — more visible dividers */
+  --af-border-strong: rgba(139, 92, 246, 0.40);   /* ↑ was 0.24 */
+  --af-surface:       rgba(139, 92, 246, 0.09);
+  --af-surface-2:     rgba(255, 255, 255, 0.08);   /* ↑ was 0.04 — visible card fill */
+  --af-surface-3:     rgba(255, 255, 255, 0.04);   /* ↑ was 0.02 — zebra rows */
+  --af-overlay-bg:    rgba(10, 12, 26, 0.96);      /* dropdowns / modals */
+  --af-overlay-border: rgba(255, 255, 255, 0.15);  /* ↑ was 0.08 */
+
+  /* Cards / inputs */
+  --af-card-bg:   rgba(255, 255, 255, 0.06);   /* ↑ was 0.03 — cards pop from bg */
+  --af-card-ring: rgba(255, 255, 255, 0.13);   /* ↑ was 0.07 */
+  --af-card-ring-hover: rgba(255, 255, 255, 0.22); /* ↑ was 0.12 */
+  --af-input-bg:  rgba(0, 0, 0, 0.40);         /* ↑ was 0.25 — inputs stand out */
+  --af-input-ring: rgba(255, 255, 255, 0.18);  /* ↑ was 0.10 */
+
+  /* Typography */
+  --af-text-base:    #cbd5e1;
+  --af-text-muted:   #a0b0c4;   /* ↑ was #8899a6 — ≈7:1 on dark bg */
+  --af-text-faint:   #7d8fa5;   /* ↑ was #64748b — ≈5.6:1 on dark surfaces (was ~3.9:1) */
   --af-text-heading: #e2e8f0;
+  --af-text-code:    #c4b5fd;
+
   /* Accent — violet + pink */
-  --af-accent:        #8b5cf6;              /* violet-500  */
-  --af-accent-2:      #ec4899;              /* pink-500    */
-  --af-accent-soft:   rgba(139, 92, 246, 0.10);
-  --af-accent-text:   #c4b5fd;              /* violet-300  */
-  --af-accent-text-2: #f9a8d4;              /* pink-300    */
-  --af-logo-grad:     linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%);
-  --af-logo-glow:     rgba(139, 92, 246, 0.45);
+  --af-accent:        #8b5cf6;   /* violet-500  */
+  --af-accent-2:      #ec4899;   /* pink-500    */
+  --af-accent-soft:   rgba(139, 92, 246, 0.12);
+  --af-accent-soft-2: rgba(236,  72, 153, 0.10);
+  --af-accent-text:   #c4b5fd;   /* violet-300  */
+  --af-accent-text-2: #f9a8d4;   /* pink-300    */
+
+  /* Buttons */
+  --af-btn-primary-bg:    #7c3aed;
+  --af-btn-primary-hover: #6d28d9;
+  --af-btn-primary-text:  #ffffff;
+  --af-btn-primary-shadow: rgba(139, 92, 246, 0.30);
+  --af-btn-default-bg:    rgba(255, 255, 255, 0.05);
+  --af-btn-default-ring:  rgba(255, 255, 255, 0.09);
+  --af-btn-default-hover: rgba(255, 255, 255, 0.09);
+  --af-btn-default-text:  #e2e8f0;
+
+  /* Logo / brand */
+  --af-logo-grad: linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%);
+  --af-logo-glow: rgba(139, 92, 246, 0.45);
+
+  /* Background gradient */
   --af-bg-grad: radial-gradient(ellipse 80% 50% at 15% -10%, rgba(139,92,246,0.08) 0%, transparent 60%),
                radial-gradient(ellipse 60% 40% at 82% 108%, rgba(236,72,153,0.06) 0%, transparent 55%);
+
+  /* Doc-prose accent */
+  --af-prose-accent: rgba(139, 92, 246, 0.40);
+  --af-prose-accent-bg: rgba(139, 92, 246, 0.08);
+  --af-prose-code-bg: rgba(139, 92, 246, 0.12);
+  --af-prose-code-text: #c4b5fd;
+  --af-prose-link: #a78bfa;
+  --af-prose-link-hover: #c4b5fd;
+
   /* Utilities */
   --af-scrollbar:       rgba(139, 92, 246, 0.22);
   --af-scrollbar-hover: rgba(139, 92, 246, 0.50);
   --af-selection-bg:    rgba(139, 92, 246, 0.32);
   --af-focus-ring:      rgba(139, 92, 246, 0.60);
+
+  /* Spinner */
+  --af-spinner-track: rgba(139, 92, 246, 0.25);
+  --af-spinner-head:  #8b5cf6;
 }
 
 /* Light — warm-white bg · orange primary · blue secondary */
 html[data-theme="light"] {
+  color-scheme: light;
+
+  /* Layout */
   --af-bg: #fdfaf6;
   --af-sidebar-from: #ffffff;
   --af-sidebar-to: #fef5ec;
-  --af-border: rgba(234, 88, 12, 0.12);
-  --af-surface: rgba(234, 88, 12, 0.05);
-  --af-text-base: #334155;
-  --af-text-muted: #94a3b8;
-  --af-text-heading: #0f172a;
+
+  /* Borders / surfaces */
+  --af-border:        rgba(120, 75, 20, 0.24);     /* ↑ was rgba(180,120,60,0.18) — visible dividers */
+  --af-border-strong: rgba(120, 75, 20, 0.42);     /* ↑ was rgba(180,120,60,0.35) */
+  --af-surface:       rgba(234, 88, 12, 0.07);
+  --af-surface-2:     rgba(0, 0, 0, 0.07);         /* ↑ was 0.04 — visible card fill */
+  --af-surface-3:     rgba(0, 0, 0, 0.04);         /* ↑ was 0.02 — zebra rows */
+  --af-overlay-bg:    #ffffff;                      /* dropdowns / modals */
+  --af-overlay-border: rgba(0, 0, 0, 0.16);        /* ↑ was 0.10 */
+
+  /* Cards / inputs */
+  --af-card-bg:   rgba(255, 255, 255, 0.88);
+  --af-card-ring: rgba(0, 0, 0, 0.14);             /* ↑ was 0.09 */
+  --af-card-ring-hover: rgba(0, 0, 0, 0.24);       /* ↑ was 0.16 */
+  --af-input-bg:  rgba(255, 255, 255, 0.92);
+  --af-input-ring: rgba(0, 0, 0, 0.22);            /* ↑ was 0.14 */
+
+  /* Typography — WCAG AA on #fdfaf6 */
+  --af-text-base:    #374151;   /* gray-700  ≈9.2:1 */
+  --af-text-muted:   #4b5563;   /* gray-600  ≈7.2:1 — ↑ was gray-500 4.6:1, maintains hierarchy */
+  --af-text-faint:   #6b7280;   /* gray-500  ≈4.6:1 — ↑ was gray-400 2.4:1, now passes WCAG AA */
+  --af-text-heading: #111827;   /* gray-900  ≈16:1  */
+  --af-text-code:    #b45309;   /* amber-700 ≈4.8:1 */
+
   /* Accent — orange + blue */
-  --af-accent:        #f97316;              /* orange-500  */
-  --af-accent-2:      #3b82f6;              /* blue-500    */
-  --af-accent-soft:   rgba(249, 115, 22, 0.09);
-  --af-accent-text:   #ea580c;              /* orange-600  */
-  --af-accent-text-2: #2563eb;              /* blue-600    */
-  --af-logo-grad:     linear-gradient(135deg, #f97316 0%, #3b82f6 100%);
-  --af-logo-glow:     rgba(249, 115, 22, 0.30);
-  --af-bg-grad: radial-gradient(ellipse 80% 50% at 15% -10%, rgba(249,115,22,0.05) 0%, transparent 60%),
-               radial-gradient(ellipse 60% 40% at 82% 108%, rgba(59,130,246,0.04) 0%, transparent 55%);
+  --af-accent:        #ea580c;   /* orange-600 (higher contrast than 500) ≈4.5:1 */
+  --af-accent-2:      #2563eb;   /* blue-600  */
+  --af-accent-soft:   rgba(234, 88, 12, 0.09);
+  --af-accent-soft-2: rgba(37, 99, 235, 0.09);
+  --af-accent-text:   #c2410c;   /* orange-700 ≈5.1:1 */
+  --af-accent-text-2: #1d4ed8;   /* blue-700  */
+
+  /* Buttons */
+  --af-btn-primary-bg:    #ea580c;
+  --af-btn-primary-hover: #c2410c;
+  --af-btn-primary-text:  #ffffff;
+  --af-btn-primary-shadow: rgba(234, 88, 12, 0.28);
+  --af-btn-default-bg:    rgba(0, 0, 0, 0.04);
+  --af-btn-default-ring:  rgba(0, 0, 0, 0.12);
+  --af-btn-default-hover: rgba(0, 0, 0, 0.08);
+  --af-btn-default-text:  #374151;
+
+  /* Logo / brand */
+  --af-logo-grad: linear-gradient(135deg, #f97316 0%, #3b82f6 100%);
+  --af-logo-glow: rgba(249, 115, 22, 0.30);
+
+  /* Background gradient */
+  --af-bg-grad: radial-gradient(ellipse 80% 50% at 15% -10%, rgba(249,115,22,0.06) 0%, transparent 60%),
+               radial-gradient(ellipse 60% 40% at 82% 108%, rgba(59,130,246,0.05) 0%, transparent 55%);
+
+  /* Doc-prose accent */
+  --af-prose-accent: rgba(234, 88, 12, 0.40);
+  --af-prose-accent-bg: rgba(234, 88, 12, 0.07);
+  --af-prose-code-bg: rgba(234, 88, 12, 0.08);
+  --af-prose-code-text: #b45309;
+  --af-prose-link: #ea580c;
+  --af-prose-link-hover: #c2410c;
+
   /* Utilities */
-  --af-scrollbar:       rgba(249, 115, 22, 0.22);
-  --af-scrollbar-hover: rgba(249, 115, 22, 0.50);
-  --af-selection-bg:    rgba(249, 115, 22, 0.22);
-  --af-focus-ring:      rgba(249, 115, 22, 0.55);
-  color-scheme: light;
+  --af-scrollbar:       rgba(234, 88, 12, 0.22);
+  --af-scrollbar-hover: rgba(234, 88, 12, 0.45);
+  --af-selection-bg:    rgba(234, 88, 12, 0.18);
+  --af-focus-ring:      rgba(234, 88, 12, 0.50);
+
+  /* Spinner */
+  --af-spinner-track: rgba(234, 88, 12, 0.20);
+  --af-spinner-head:  #ea580c;
 }

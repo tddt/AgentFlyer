@@ -132,6 +132,8 @@ export type MessageContent = TextContent | ToolUseContent | ToolResultContent;
 export interface Message {
   role: MessageRole;
   content: string | MessageContent[];
+  /** Preserved reasoning/thinking content for models that require it to be passed back (e.g. DeepSeek thinking mode). */
+  reasoning_content?: string;
   timestamp?: number;
 }
 
@@ -139,6 +141,11 @@ export interface Message {
 export interface TextDelta {
   type: 'text_delta';
   text: string;
+}
+
+export interface ThinkingDelta {
+  type: 'thinking_delta';
+  thinking: string;
 }
 
 export interface ToolUseDelta {
@@ -167,7 +174,7 @@ export interface ProgressChunk {
   message: string;
 }
 
-export type StreamChunk = TextDelta | ToolUseDelta | StreamDone | StreamError | ProgressChunk;
+export type StreamChunk = TextDelta | ThinkingDelta | ToolUseDelta | StreamDone | StreamError | ProgressChunk;
 
 // ─── Tool types ───────────────────────────────────────────────────────────────
 export interface ToolDefinition {
