@@ -22,7 +22,8 @@ type TabId =
   | 'memory'
   | 'federation'
   | 'guide'
-  | 'about';
+  | 'about'
+  | 'files';
 
 const OverviewTab = lazy(() =>
   import('./tabs/OverviewTab.js').then((m) => ({ default: m.OverviewTab })),
@@ -50,6 +51,9 @@ const FederationTab = lazy(() =>
 );
 const DocsTab = lazy(() => import('./tabs/DocsTab.js').then((m) => ({ default: m.DocsTab })));
 const AboutTab = lazy(() => import('./tabs/AboutTab.js').then((m) => ({ default: m.AboutTab })));
+const FilesTab = lazy(() =>
+  import('./tabs/FilesTab.js').then((m) => ({ default: m.FilesTab })),
+);
 
 const TAB_MAP: Record<TabId, React.ComponentType> = {
   overview: OverviewTab,
@@ -66,6 +70,7 @@ const TAB_MAP: Record<TabId, React.ComponentType> = {
   federation: FederationTab,
   guide: DocsTab,
   about: AboutTab,
+  files: FilesTab,
 };
 
 function Spinner() {
@@ -91,6 +96,17 @@ export function App() {
   const overlayRef = useRef<HTMLDivElement>(null);
   const toastState = useToastState();
   const ActiveTab = TAB_MAP[activeTab];
+
+  useEffect(() => {
+    const onNavigate = (event: Event) => {
+      const custom = event as CustomEvent<{ tab?: TabId }>;
+      const tab = custom.detail?.tab;
+      if (!tab) return;
+      setActiveTab(tab);
+    };
+    window.addEventListener('af:navigate', onNavigate);
+    return () => window.removeEventListener('af:navigate', onNavigate);
+  }, []);
 
   // ── First-run detection ─────────────────────────────────────────────────
   const [setupChecked, setSetupChecked] = useState(false);

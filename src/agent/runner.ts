@@ -54,7 +54,7 @@ const READ_ONLY_TOOLS = new Set([
 
 /** Mutation tools that invalidate the read-only tool result cache. */
 const MUTATION_TOOLS = new Set(['write_file', 'create_file', 'edit_file', 'bash', 'run_terminal']);
-const MAX_RECOVERABLE_STREAM_RETRIES = 1;
+const MAX_RECOVERABLE_STREAM_RETRIES = 3;
 const RECOVERABLE_STREAM_RETRY_DELAY_MS = 1200;
 
 function normalizeFailureSummary(message: string): string {
@@ -1322,7 +1322,10 @@ export class AgentRunner {
             )
           : state.toolRounds > 0
             ? '✅ 任务执行完毕。'
-            : '';
+            : // RATIONALE: thinking-mode models may produce only reasoning_content with no visible
+              // text when the task requires no output (e.g. pure analysis stored in memory).
+              // Emit a neutral marker so the turn doesn't silently vanish in the chat history.
+              '（处理完成）';
       if (closingText) {
         chunks.push({ type: 'text_delta', text: closingText });
         totalText = closingText;

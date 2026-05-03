@@ -50,6 +50,7 @@ export interface ArtifactRef {
   stepLabel?: string;
   stepIndex?: number;
   createdAt: number;
+  category?: string;
 }
 
 export type DeliverableSource =
@@ -123,6 +124,8 @@ export interface DeliverableRecord {
   publications?: DeliverablePublicationTarget[];
   primaryArtifactId?: string;
   metadata?: Record<string, DeliverableMetadataValue>;
+  /** Optional folder/category path for archiving (e.g. "报告/2024" or "media"). */
+  category?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -941,6 +944,153 @@ export class DeliverableStore {
       updatedAt: Date.now(),
     };
     const next = current.map((record, i) => (i === index ? updated : record));
+    await writeFile(deliverablesFile(this.dataDir), JSON.stringify(next, null, 2), 'utf-8');
+    return updated;
+  }
+
+  async delete(id: string): Promise<boolean> {
+    const current = await this.readAll();
+    const next = current.filter((record) => record.id !== id);
+    if (next.length === current.length) return false;
+    await writeFile(deliverablesFile(this.dataDir), JSON.stringify(next, null, 2), 'utf-8');
+    return true;
+  }
+
+  async deleteMany(ids: string[]): Promise<number> {
+    if (ids.length === 0) return 0;
+    const idSet = new Set(ids);
+    const current = await this.readAll();
+    const next = current.filter((record) => !idSet.has(record.id));
+    const deleted = current.length - next.length;
+    if (deleted === 0) return 0;
+    await writeFile(deliverablesFile(this.dataDir), JSON.stringify(next, null, 2), 'utf-8');
+    return deleted;
+  }
+
+  /**
+   * Merge one or more source deliverables into a target deliverable.
+   * Appends all source artifacts (deduped by artifact id) to the target,
+   * then deletes the source records.
+   */
+  async merge(
+    targetId: string,
+    sourceIds: string[],
+    mergedTitle?: string,
+  ): Promise<DeliverableRecord | null> {
+    if (sourceIds.length === 0) return null;
+    const current = await this.readAll();
+    const targetIdx = current.findIndex((r) => r.id === targetId);
+    if (targetIdx < 0) return null;
+    const target = current[targetIdx]!;
+    const sources = sourceIds
+      .map((id) => current.find((r) => r.id === id))
+      .filter((r): r is DeliverableRecord => r !== undefined);
+    if (sources.length === 0) return null;
+
+    const existingArtifactIds = new Set(target.artifacts.map((a) => a.id));
+    const mergedArtifacts = [...target.artifacts];
+    for (const src of sources) {
+      for (const artifact of src.artifacts) {
+        if (!existingArtifactIds.has(artifact.id)) {
+          mergedArtifacts.push(artifact);
+          existingArtifactIds.add(artifact.id);
+        }
+      }
+    }
+
+    const sourceIdSet = new Set(sourceIds);
+    const mergedRecord: DeliverableRecord = {
+      ...target,
+      title: mergedTitle ?? target.title,
+      artifacts: mergedArtifacts,
+      metadata: {
+        ...target.metadata,
+        mergedSourceCount: sources.length,
+        mergedArtifactCount: mergedArtifacts.length,
+      },
+      updatedAt: Date.now(),
+    };
+    const next = [
+      mergedRecord,
+      ...current.filter((r) => r.id !== targetId && !sourceIdSet.has(r.id)),
+    ];
+    await writeFile(deliverablesFile(this.dataDir), JSON.stringify(next, null, 2), 'utf-8');
+    return mergedRecord;
+  }
+
+  async setCategory(id: string, category: string | null): Promise<DeliverableRecord | null> {
+    const current = await this.readAll();
+    const index = current.findIndex((record) => record.id === id);
+    if (index < 0) return null;
+    const existing = current[index]!;
+    const updated: DeliverableRecord = {
+      ...existing,
+      ...(category ? { category } : { category: undefined }),
+      updatedAt: Date.now(),
+    };
+    const next = current.map((record, i) => (i === index ? updated : record));
+    await writeFile(deliverablesFile(this.dataDir), JSON.stringify(next, null, 2), 'utf-8');
+    return updated;
+  }
+
+  async setArtifactCategory(
+    deliverableId: string,
+    artifactId: string,
+    category: string | null,
+  ): Promise<DeliverableRecord | null> {
+    const current = await this.readAll();
+    const index = current.findIndex((r) => r.id === deliverableId);
+    if (index < 0) return null;
+    const existing = current[index]!;
+    const updated: DeliverableRecord = {
+      ...existing,
+      artifacts: existing.artifacts.map((a) =>
+        a.id === artifactId
+          ? { ...a, ...(category ? { category } : { category: undefined }) }
+          : a,
+      ),
+      updatedAt: Date.now(),
+    };
+    const next = current.map((r, i) => (i === index ? updated : r));
+    await writeFile(deliverablesFile(this.dataDir), JSON.stringify(next, null, 2), 'utf-8');
+    return updated;
+  }
+
+  async renameArtifact(
+    deliverableId: string,
+    artifactId: string,
+    newName: string,
+  ): Promise<DeliverableRecord | null> {
+    const current = await this.readAll();
+    const index = current.findIndex((r) => r.id === deliverableId);
+    if (index < 0) return null;
+    const existing = current[index]!;
+    const updated: DeliverableRecord = {
+      ...existing,
+      artifacts: existing.artifacts.map((a) =>
+        a.id === artifactId ? { ...a, name: newName } : a,
+      ),
+      updatedAt: Date.now(),
+    };
+    const next = current.map((r, i) => (i === index ? updated : r));
+    await writeFile(deliverablesFile(this.dataDir), JSON.stringify(next, null, 2), 'utf-8');
+    return updated;
+  }
+
+  async deleteArtifact(
+    deliverableId: string,
+    artifactId: string,
+  ): Promise<DeliverableRecord | null> {
+    const current = await this.readAll();
+    const index = current.findIndex((r) => r.id === deliverableId);
+    if (index < 0) return null;
+    const existing = current[index]!;
+    const updated: DeliverableRecord = {
+      ...existing,
+      artifacts: existing.artifacts.filter((a) => a.id !== artifactId),
+      updatedAt: Date.now(),
+    };
+    const next = current.map((r, i) => (i === index ? updated : r));
     await writeFile(deliverablesFile(this.dataDir), JSON.stringify(next, null, 2), 'utf-8');
     return updated;
   }

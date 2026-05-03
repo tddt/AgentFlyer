@@ -21,8 +21,8 @@ interface ToolLoopEntry {
   toolName: string;
 }
 
-const DEFAULT_WARNING_THRESHOLD = 5;
-const DEFAULT_BLOCK_THRESHOLD = 8;
+const DEFAULT_WARNING_THRESHOLD = 8;
+const DEFAULT_BLOCK_THRESHOLD = 15;
 
 function stableSerialize(value: unknown): string {
   if (value === null || value === undefined) return String(value);

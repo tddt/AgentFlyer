@@ -60,6 +60,15 @@ const ROLE_MAP: Record<string, UserRole> = {
   // Deliverables
   'deliverables.list': 'viewer',
   'deliverables.upsert': 'operator',
+  'deliverable.delete': 'operator',
+  'deliverable.deleteMany': 'operator',
+  'deliverable.merge': 'operator',
+  'deliverable.setCategory': 'operator',
+  // Artifacts
+  'artifact.listAll': 'viewer',
+  'artifact.setCategory': 'operator',
+  'artifact.rename': 'operator',
+  'artifact.delete': 'operator',
   // Inbox
   'inbox.list': 'viewer',
   'inbox.approve': 'operator',

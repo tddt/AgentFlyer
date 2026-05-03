@@ -554,6 +554,14 @@ export interface ArtifactRef {
   stepLabel?: string;
   stepIndex?: number;
   createdAt: number;
+  category?: string;
+}
+
+export interface FlatArtifact extends ArtifactRef {
+  deliverableId: string;
+  deliverableTitle: string;
+  deliverableSource: DeliverableSource;
+  deliverableCreatedAt: number;
 }
 
 export type DeliverableSource =
@@ -608,6 +616,8 @@ export interface DeliverableRecord {
   publications?: DeliverablePublicationTarget[];
   primaryArtifactId?: string;
   metadata?: Record<string, string | number | boolean | null>;
+  /** Optional folder/category path for archiving. */
+  category?: string;
   createdAt: number;
   updatedAt: number;
 }

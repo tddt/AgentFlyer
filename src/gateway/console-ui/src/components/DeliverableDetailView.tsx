@@ -2,6 +2,7 @@ import type { KeyboardEvent as ReactKeyboardEvent, ReactElement } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CellObject as XlsxCellObject } from 'xlsx-js-style';
 import { Badge } from './Badge.js';
+import { Button } from './Button.js';
 import { CopyButton } from './CopyButton.js';
 import { MarkdownView } from './MarkdownView.js';
 import { useLocale } from '../context/i18n.js';
@@ -921,10 +922,12 @@ export function DeliverableDetailView({
   deliverable,
   loading = false,
   onPublished,
+  onOpenFiles,
 }: {
   deliverable: DeliverableRecord | null;
   loading?: boolean;
   onPublished?: () => void;
+  onOpenFiles?: (artifact?: ArtifactRef) => void;
 }) {
   const { t } = useLocale();
   const { toast } = useToast();
@@ -946,6 +949,12 @@ export function DeliverableDetailView({
   const [traceOpen, setTraceOpen] = useState(false);
   const [traceRun, setTraceRun] = useState<WorkflowRunRecord | null>(null);
   const [traceLoading, setTraceLoading] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<ArtifactRef | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [categoryTarget, setCategoryTarget] = useState<ArtifactRef | null>(null);
+  const [categoryValue, setCategoryValue] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<ArtifactRef | null>(null);
+  const [artifactActionBusy, setArtifactActionBusy] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const summaryInputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -960,6 +969,12 @@ export function DeliverableDetailView({
     setAttachPath('');
     setTraceOpen(false);
     setTraceRun(null);
+    setRenameTarget(null);
+    setRenameValue('');
+    setCategoryTarget(null);
+    setCategoryValue('');
+    setDeleteTarget(null);
+    setArtifactActionBusy(false);
   }, [deliverable?.id]);
 
   if (loading) {
@@ -986,6 +1001,13 @@ export function DeliverableDetailView({
     ...publication,
     ...(publicationOverrides[publication.id] ?? {}),
   }));
+  const artifactCategories = Array.from(
+    new Set(
+      artifacts
+        .map((artifact) => artifact.category?.trim())
+        .filter((category): category is string => Boolean(category)),
+    ),
+  ).sort();
 
   const moveArtifactSelection = (nextIndex: number): void => {
     const artifact = artifacts[nextIndex];
@@ -1121,6 +1143,72 @@ export function DeliverableDetailView({
     }
   };
 
+  const saveArtifactRename = async (): Promise<void> => {
+    if (!renameTarget) return;
+    const nextName = renameValue.trim();
+    if (!nextName) return;
+    setArtifactActionBusy(true);
+    try {
+      await rpc('artifact.rename', {
+        deliverableId: deliverable.id,
+        artifactId: renameTarget.id,
+        name: nextName,
+      });
+      toast(t('files.artifact.rename'), 'success');
+      setRenameTarget(null);
+      setRenameValue('');
+      onPublished?.();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : t('deliverables.update.failed'), 'error');
+    } finally {
+      setArtifactActionBusy(false);
+    }
+  };
+
+  const saveArtifactCategory = async (): Promise<void> => {
+    if (!categoryTarget) return;
+    setArtifactActionBusy(true);
+    try {
+      await rpc('artifact.setCategory', {
+        deliverableId: deliverable.id,
+        artifactId: categoryTarget.id,
+        category: categoryValue.trim() || null,
+      });
+      toast(
+        categoryValue.trim() ? t('files.category.set') : t('files.category.clear'),
+        'success',
+      );
+      setCategoryTarget(null);
+      setCategoryValue('');
+      onPublished?.();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : t('deliverables.update.failed'), 'error');
+    } finally {
+      setArtifactActionBusy(false);
+    }
+  };
+
+  const removeArtifact = async (): Promise<void> => {
+    if (!deleteTarget) return;
+    setArtifactActionBusy(true);
+    try {
+      await rpc('artifact.delete', {
+        deliverableId: deliverable.id,
+        artifactId: deleteTarget.id,
+      });
+      if (selectedArtifactId === deleteTarget.id) {
+        setSelectedArtifactId(null);
+      }
+      toast(t('files.artifact.delete'), 'success');
+      setDeleteTarget(null);
+      onPublished?.();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : t('deliverables.update.failed'), 'error');
+    } finally {
+      setArtifactActionBusy(false);
+    }
+  };
+
   return (
     <div className="rounded-[28px] border border-white/10 bg-[radial-gradient(circle_at_top_right,rgba(34,197,94,0.14),transparent_22%),radial-gradient(circle_at_top_left,rgba(59,130,246,0.18),transparent_32%),rgba(2,6,23,0.88)] p-6 shadow-[0_30px_80px_rgba(2,6,23,0.45)] backdrop-blur-xl">
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/8 pb-4">
@@ -1207,7 +1295,14 @@ export function DeliverableDetailView({
             </div>
           </div>
         </div>
-        <CopyButton text={deliverable.previewText || deliverable.summary || deliverable.title} />
+        <div className="flex items-center gap-2">
+          {onOpenFiles && (
+            <Button variant="ghost" size="sm" onClick={() => onOpenFiles()}>
+              {t('nav.files')}
+            </Button>
+          )}
+          <CopyButton text={deliverable.previewText || deliverable.summary || deliverable.title} />
+        </div>
       </div>
 
       <div className="mt-4 grid gap-6 xl:grid-cols-[300px_minmax(0,1fr)]">
@@ -1260,18 +1355,55 @@ export function DeliverableDetailView({
                     <div className="flex items-center justify-between gap-3">
                       <div className="truncate text-sm font-medium text-slate-100">{artifact.name}</div>
                       <div className="flex items-center gap-1.5 shrink-0">
-                        <button
-                          type="button"
-                          className="rounded-full border border-slate-600/40 bg-slate-800/60 px-2 py-0.5 text-[10px] text-slate-300 hover:bg-slate-700/70"
-                          onClick={(e) => { e.stopPropagation(); downloadArtifact(artifact); }}
-                          title={t('deliverables.artifact.download')}
-                        >
-                          ↓
-                        </button>
                         <div className="rounded-full border border-white/8 bg-slate-900/80 px-2 py-0.5 text-[10px] text-slate-400">
                           {index + 1}/{artifacts.length}
                         </div>
                       </div>
+                    </div>
+                    <div className="mt-2 flex items-center justify-end gap-1.5">
+                      <button
+                        type="button"
+                        className="rounded-full border border-slate-600/40 bg-slate-800/60 px-2 py-0.5 text-[10px] text-slate-300 hover:bg-slate-700/70"
+                        onClick={(e) => { e.stopPropagation(); downloadArtifact(artifact); }}
+                        title={t('deliverables.artifact.download')}
+                      >
+                        ↓
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-full border border-slate-600/40 bg-slate-800/60 px-2 py-0.5 text-[10px] text-slate-300 hover:bg-slate-700/70"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setRenameTarget(artifact);
+                          setRenameValue(artifact.name);
+                        }}
+                        title={t('files.artifact.rename')}
+                      >
+                        ✎
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-full border border-slate-600/40 bg-slate-800/60 px-2 py-0.5 text-[10px] text-slate-300 hover:bg-slate-700/70"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setCategoryTarget(artifact);
+                          setCategoryValue(artifact.category ?? '');
+                        }}
+                        title={t('files.category.set')}
+                      >
+                        📁
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-full border border-rose-400/30 bg-rose-500/12 px-2 py-0.5 text-[10px] text-rose-200 hover:bg-rose-500/22"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDeleteTarget(artifact);
+                        }}
+                        title={t('files.artifact.delete')}
+                      >
+                        🗑
+                      </button>
                     </div>
                     <div className="mt-2 flex flex-wrap gap-2">
                       <Badge variant={artifact.role === 'primary' ? 'blue' : 'purple'}>
@@ -1279,6 +1411,7 @@ export function DeliverableDetailView({
                       </Badge>
                       <Badge variant="gray">{artifact.format}</Badge>
                       {sizeLabel && <Badge variant="gray">{sizeLabel}</Badge>}
+                      {artifact.category && <Badge variant="blue">{artifact.category}</Badge>}
                     </div>
                     <div className="mt-2 line-clamp-2 text-xs leading-5 text-slate-400">
                       {artifact.mimeType ?? artifact.filePath ?? ''}
@@ -1356,7 +1489,14 @@ export function DeliverableDetailView({
                   </div>
                 )}
               </div>
-              {preview && <CopyButton text={preview} />}
+              <div className="flex items-center gap-2">
+                {onOpenFiles && activeArtifact && (
+                  <Button variant="ghost" size="sm" onClick={() => onOpenFiles(activeArtifact)}>
+                    {t('nav.files')}
+                  </Button>
+                )}
+                {preview && <CopyButton text={preview} />}
+              </div>
             </div>
             {activeArtifact ? (
               <ArtifactPreviewContent key={activeArtifact.id} artifact={activeArtifact} t={t} />
@@ -1624,6 +1764,166 @@ export function DeliverableDetailView({
           )}
         </div>
       </div>
+
+      {renameTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/65"
+          onClick={() => {
+            if (!artifactActionBusy) {
+              setRenameTarget(null);
+              setRenameValue('');
+            }
+          }}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-white/10 bg-slate-900/95 p-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="text-sm font-semibold text-slate-100">{t('files.artifact.renameTitle')}</div>
+            <div className="mt-1 text-xs text-slate-400">{renameTarget.name}</div>
+            <input
+              autoFocus
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void saveArtifactRename();
+                if (e.key === 'Escape' && !artifactActionBusy) {
+                  setRenameTarget(null);
+                  setRenameValue('');
+                }
+              }}
+              placeholder={t('files.artifact.namePlaceholder')}
+              className="mt-3 w-full rounded-lg border border-slate-600/50 bg-slate-800/70 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-400/45"
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={artifactActionBusy}
+                onClick={() => {
+                  setRenameTarget(null);
+                  setRenameValue('');
+                }}
+              >
+                {t('common.cancel')}
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={artifactActionBusy || !renameValue.trim()}
+                onClick={() => void saveArtifactRename()}
+              >
+                {t('files.category.confirm')}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {categoryTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/65"
+          onClick={() => {
+            if (!artifactActionBusy) {
+              setCategoryTarget(null);
+              setCategoryValue('');
+            }
+          }}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-white/10 bg-slate-900/95 p-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="text-sm font-semibold text-slate-100">{t('files.category.set')}</div>
+            <div className="mt-1 text-xs text-slate-400">{categoryTarget.name}</div>
+            {artifactCategories.length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {artifactCategories.map((category) => (
+                  <button
+                    key={category}
+                    type="button"
+                    className="rounded-md border border-slate-500/40 bg-slate-800/70 px-2 py-0.5 text-[11px] text-slate-300 hover:border-cyan-400/40 hover:text-cyan-200"
+                    onClick={() => setCategoryValue(category)}
+                  >
+                    {category}
+                  </button>
+                ))}
+              </div>
+            )}
+            <input
+              autoFocus
+              value={categoryValue}
+              onChange={(e) => setCategoryValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void saveArtifactCategory();
+                if (e.key === 'Escape' && !artifactActionBusy) {
+                  setCategoryTarget(null);
+                  setCategoryValue('');
+                }
+              }}
+              placeholder={t('files.category.placeholder')}
+              className="mt-3 w-full rounded-lg border border-slate-600/50 bg-slate-800/70 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-400/45"
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={artifactActionBusy}
+                onClick={() => {
+                  setCategoryTarget(null);
+                  setCategoryValue('');
+                }}
+              >
+                {t('common.cancel')}
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={artifactActionBusy}
+                onClick={() => void saveArtifactCategory()}
+              >
+                {t('files.category.confirm')}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/65"
+          onClick={() => {
+            if (!artifactActionBusy) setDeleteTarget(null);
+          }}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-rose-400/20 bg-slate-900/95 p-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="text-sm font-semibold text-rose-200">{t('files.artifact.delete')}</div>
+            <div className="mt-2 text-xs text-slate-400">{t('files.artifact.deleteConfirm')}</div>
+            <div className="mt-2 truncate text-xs text-slate-200">{deleteTarget.name}</div>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={artifactActionBusy}
+                onClick={() => setDeleteTarget(null)}
+              >
+                {t('common.cancel')}
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
+                disabled={artifactActionBusy}
+                onClick={() => void removeArtifact()}
+              >
+                {t('files.artifact.delete')}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

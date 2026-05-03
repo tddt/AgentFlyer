@@ -353,6 +353,14 @@ export type RpcMethod =
   | 'deliverable.update'
   | 'deliverable.attachArtifact'
   | 'deliverable.batchPublish'
+  | 'deliverable.delete'
+  | 'deliverable.deleteMany'
+  | 'deliverable.merge'
+  | 'deliverable.setCategory'
+  | 'artifact.listAll'
+  | 'artifact.setCategory'
+  | 'artifact.rename'
+  | 'artifact.delete'
   | 'memory.search'
   | 'memory.delete'
   | 'memory.federated'
@@ -1903,6 +1911,110 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
           }
         }
         return { id, result: { deliverableId, results, total: pending.length } };
+      }
+
+      case 'deliverable.delete': {
+        const { deliverableId: delId } = (params ?? {}) as { deliverableId?: string };
+        if (!delId) return buildErrorResponse(id, -32602, 'deliverableId is required');
+        const deleted = await ctx.deliverableStore.delete(delId);
+        if (!deleted) return buildErrorResponse(id, 404, `Deliverable not found: ${delId}`);
+        return { id, result: { deleted: true, deliverableId: delId } };
+      }
+
+      case 'deliverable.deleteMany': {
+        const { ids: delIds } = (params ?? {}) as { ids?: string[] };
+        if (!Array.isArray(delIds) || delIds.length === 0) {
+          return buildErrorResponse(id, -32602, 'ids (non-empty array) is required');
+        }
+        const count = await ctx.deliverableStore.deleteMany(delIds);
+        return { id, result: { deleted: count, requested: delIds.length } };
+      }
+
+      case 'deliverable.merge': {
+        const {
+          targetId: mergeTargetId,
+          sourceIds: mergeSourceIds,
+          mergedTitle,
+        } = (params ?? {}) as {
+          targetId?: string;
+          sourceIds?: string[];
+          mergedTitle?: string;
+        };
+        if (!mergeTargetId) return buildErrorResponse(id, -32602, 'targetId is required');
+        if (!Array.isArray(mergeSourceIds) || mergeSourceIds.length === 0) {
+          return buildErrorResponse(id, -32602, 'sourceIds (non-empty array) is required');
+        }
+        const merged = await ctx.deliverableStore.merge(
+          mergeTargetId,
+          mergeSourceIds,
+          mergedTitle,
+        );
+        if (!merged) return buildErrorResponse(id, 404, `Target deliverable not found: ${mergeTargetId}`);
+        return { id, result: merged };
+      }
+
+      case 'deliverable.setCategory': {
+        const { deliverableId: catId, category } = (params ?? {}) as {
+          deliverableId?: string;
+          category?: string | null;
+        };
+        if (!catId) return buildErrorResponse(id, -32602, 'deliverableId is required');
+        const updated = await ctx.deliverableStore.setCategory(catId, category ?? null);
+        if (!updated) return buildErrorResponse(id, 404, `Deliverable not found: ${catId}`);
+        return { id, result: updated };
+      }
+
+      case 'artifact.listAll': {
+        const allRecords = await ctx.deliverableStore.list({});
+        const flat = allRecords.flatMap((rec) =>
+          rec.artifacts.map((a) => ({
+            ...a,
+            deliverableId: rec.id,
+            deliverableTitle: rec.title,
+            deliverableSource: rec.source,
+            deliverableCreatedAt: rec.createdAt,
+          })),
+        );
+        return { id, result: flat };
+      }
+
+      case 'artifact.setCategory': {
+        const { deliverableId: aDelId, artifactId: aId, category: aCat } = (params ?? {}) as {
+          deliverableId?: string;
+          artifactId?: string;
+          category?: string | null;
+        };
+        if (!aDelId) return buildErrorResponse(id, -32602, 'deliverableId is required');
+        if (!aId) return buildErrorResponse(id, -32602, 'artifactId is required');
+        const aUpdated = await ctx.deliverableStore.setArtifactCategory(aDelId, aId, aCat ?? null);
+        if (!aUpdated) return buildErrorResponse(id, 404, `Deliverable not found: ${aDelId}`);
+        return { id, result: aUpdated };
+      }
+
+      case 'artifact.rename': {
+        const { deliverableId: rDelId, artifactId: rId, name: rName } = (params ?? {}) as {
+          deliverableId?: string;
+          artifactId?: string;
+          name?: string;
+        };
+        if (!rDelId) return buildErrorResponse(id, -32602, 'deliverableId is required');
+        if (!rId) return buildErrorResponse(id, -32602, 'artifactId is required');
+        if (!rName?.trim()) return buildErrorResponse(id, -32602, 'name is required');
+        const rUpdated = await ctx.deliverableStore.renameArtifact(rDelId, rId, rName.trim());
+        if (!rUpdated) return buildErrorResponse(id, 404, `Deliverable not found: ${rDelId}`);
+        return { id, result: rUpdated };
+      }
+
+      case 'artifact.delete': {
+        const { deliverableId: dDelId, artifactId: dArtId } = (params ?? {}) as {
+          deliverableId?: string;
+          artifactId?: string;
+        };
+        if (!dDelId) return buildErrorResponse(id, -32602, 'deliverableId is required');
+        if (!dArtId) return buildErrorResponse(id, -32602, 'artifactId is required');
+        const dUpdated = await ctx.deliverableStore.deleteArtifact(dDelId, dArtId);
+        if (!dUpdated) return buildErrorResponse(id, 404, `Deliverable not found: ${dDelId}`);
+        return { id, result: dUpdated };
       }
 
       case 'memory.search': {
