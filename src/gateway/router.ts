@@ -2,12 +2,14 @@ import { createReadStream } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { ulid } from 'ulid';
 import { loadStats } from '../agent/stats.js';
 import { withRequestContext } from '../core/logger.js';
 import { createLogger } from '../core/logger.js';
 import { summarizeSessionErrors } from '../core/session/error-stats.js';
 import { type StreamChunk, asAgentId, parseSessionKey } from '../core/types.js';
 import { getAgentKernelService } from './agent-kernel.js';
+import { isAgentQueueCancelledError } from './agent-queue.js';
 import type { AgentQueueRegistry } from './agent-queue.js';
 import { validateToken } from './auth.js';
 import { captureChatTurnDeliverable } from './chat-deliverables.js';
@@ -91,11 +93,23 @@ function responseContentType(mimeType: string): string {
   return isLikelyTextMime(mimeType) ? `${mimeType}; charset=utf-8` : mimeType;
 }
 
+/** Maximum allowed request body size (10 MiB). Prevents DoS via large payloads. */
+const MAX_BODY_BYTES = 10 * 1024 * 1024;
+
 /** Parse request body as JSON (resolves null on empty body). */
 async function readJson(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on('data', (c: Buffer) => chunks.push(c));
+    let received = 0;
+    req.on('data', (c: Buffer) => {
+      received += c.byteLength;
+      if (received > MAX_BODY_BYTES) {
+        // Abort the connection — oversized payloads are rejected immediately.
+        req.destroy(new Error('Request body too large'));
+        return;
+      }
+      chunks.push(c);
+    });
     req.on('end', () => {
       const body = Buffer.concat(chunks).toString('utf-8').trim();
       if (!body) {
@@ -535,19 +549,42 @@ async function _routeRequest(
       agentId: rawAgentId,
       message,
       thread,
+      runId: requestedRunId,
+      resume,
     } = (body ?? {}) as {
       agentId?: string;
       message?: string;
       thread?: string;
+      runId?: string;
+      resume?: boolean;
     };
-    if (!message) {
+    const resumeRequested = resume === true;
+    const resumeRunId = requestedRunId?.trim();
+    if (!resumeRequested && !message) {
       json(res, 400, { error: 'message is required' });
       return true;
     }
 
+    const agentKernel = await getAgentKernelService(opts.rpcContext);
+    let agentId = rawAgentId;
+    let effectiveThread = thread;
+    if (resumeRequested) {
+      if (!resumeRunId) {
+        json(res, 400, { error: 'runId is required when resume=true' });
+        return true;
+      }
+      const existingRun = agentKernel.getRun(resumeRunId);
+      if (!existingRun) {
+        json(res, 404, { error: `Run not found: ${resumeRunId}` });
+        return true;
+      }
+      agentId = existingRun.agentId;
+      effectiveThread = effectiveThread?.trim() ? effectiveThread : existingRun.threadKey;
+    }
+
     // E6: if agentId omitted, use intent router (falls back to 'main' if no rule matches).
     const mention = resolveMentionedAgent(
-      message,
+      message ?? '',
       opts.rpcContext
         .getConfig()
         .agents.filter((agent) => opts.rpcContext.runners.has(agent.id))
@@ -558,8 +595,8 @@ async function _routeRequest(
         })),
     );
     const inboundMessage = mention.text;
-    let agentId = mention.agentId ?? rawAgentId;
-    if (!agentId && opts.intentRouter) {
+    agentId = resumeRequested ? agentId : mention.agentId ?? rawAgentId;
+    if (!resumeRequested && !agentId && opts.intentRouter) {
       const routed = opts.intentRouter.routeWithFallback(inboundMessage);
       agentId = opts.rpcContext.runners.has(routed.agent) ? routed.agent : routed.fallback;
       logger.debug('Intent router selected agent', {
@@ -591,31 +628,91 @@ async function _routeRequest(
 
     try {
       const startedAt = Date.now();
-      const agentKernel = await getAgentKernelService(opts.rpcContext);
-      const executeStream = async (): Promise<void> => {
-        let replyText = '';
-        const gen = agentKernel.streamTurn({
-          agentId,
-          userMessage: inboundMessage,
-          threadKey: thread,
-        });
-        let next = await gen.next();
-        let finalResult = next.done ? next.value : null;
-        while (!next.done) {
-          const chunk = next.value as StreamChunk;
-          if (chunk.type === 'text_delta' && chunk.text) {
-            replyText += chunk.text;
+      let replyText = '';
+      let sawTerminalErrorChunk = false;
+      const runId = resumeRequested
+        ? (resumeRunId as string)
+        : opts.agentQueues
+          ? (
+              await agentKernel.reserveQueuedTurn({
+                agentId,
+                userMessage: inboundMessage,
+                threadKey: effectiveThread,
+              })
+            ).runId
+          : ulid();
+      const unsubscribe = agentKernel.subscribeRun(runId, (chunk) => {
+        sendEvent({ ...chunk, runId });
+        if (chunk.type === 'text_delta' && chunk.text) {
+          replyText += chunk.text;
+        }
+        if (chunk.type === 'error') {
+          sawTerminalErrorChunk = true;
+        }
+      });
+
+      try {
+        if (resumeRequested) {
+          const resumed = await agentKernel.resumeTurn(runId);
+          if (!resumed) {
+            throw new Error(`Run not found: ${runId}`);
           }
-          sendEvent(chunk);
-          next = await gen.next();
-          if (next.done) {
-            finalResult = next.value;
+          sendEvent({ type: 'started', queueDepth: 0, runId, resumed: true });
+        } else {
+          const agentQueue = opts.agentQueues?.for(agentId);
+          if (agentQueue) {
+            try {
+              await agentQueue.enqueue(
+                async () => {
+                  const queued = agentKernel.getRun(runId);
+                  if (!queued || queued.processStatus !== 'waiting' || queued.phase !== 'pending') {
+                    return { runId };
+                  }
+                  return await agentKernel.startTurn({
+                    runId,
+                    agentId,
+                    userMessage: inboundMessage,
+                    threadKey: effectiveThread,
+                  });
+                },
+                {
+                  taskKey: runId,
+                  onQueued: ({ position }) => {
+                    sendEvent({ type: 'queued', position, runId });
+                  },
+                  onStarted: ({ queueDepth }) => {
+                    sendEvent({ type: 'started', queueDepth, runId });
+                  },
+                },
+              );
+            } catch (error) {
+              if (!isAgentQueueCancelledError(error)) {
+                throw error;
+              }
+            }
+          } else {
+            sendEvent({ type: 'started', queueDepth: 0, runId });
+            await agentKernel.startTurn({
+              runId,
+              agentId,
+              userMessage: inboundMessage,
+              threadKey: effectiveThread,
+            });
+          }
+        }
+
+        let finalResult = null;
+        try {
+          finalResult = await agentKernel.waitForRun(runId);
+        } catch (err) {
+          if (!sawTerminalErrorChunk) {
+            sendEvent({ type: 'error', message: String(err), runId });
           }
         }
         const resolvedThreadKey =
           finalResult && parseSessionKey(finalResult.sessionKey)?.threadKey
             ? (parseSessionKey(finalResult.sessionKey)?.threadKey as unknown as string)
-            : (thread ?? '');
+            : (effectiveThread ?? '');
         if (replyText.trim() && opts.inboxBroadcaster) {
           opts.inboxBroadcaster.publish({
             kind: 'agent_reply',
@@ -633,26 +730,12 @@ async function _routeRequest(
           replyText,
           startedAt,
         });
-      };
-
-      const agentQueue = opts.agentQueues?.for(agentId);
-      if (agentQueue) {
-        await agentQueue.enqueue(executeStream, {
-          onQueued: ({ position }) => {
-            sendEvent({ type: 'queued', position });
-          },
-          onStarted: ({ wasQueued, queueDepth }) => {
-            if (wasQueued) {
-              sendEvent({ type: 'started', queueDepth });
-            }
-          },
-        });
-      } else {
-        await executeStream();
+      } finally {
+        unsubscribe();
       }
     } catch (err) {
       logger.error('Streaming chat error', { agentId, error: String(err) });
-      sendEvent({ type: 'error', message: String(err) });
+      sendEvent({ type: 'error', message: String(err), ...(resumeRunId ? { runId: resumeRunId } : {}) });
     }
     res.write('data: [DONE]\n\n');
     res.end();

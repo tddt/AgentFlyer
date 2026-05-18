@@ -5,7 +5,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { SessionMetaStore } from '../core/session/meta.js';
 import { SessionStore } from '../core/session/store.js';
 import type { StreamChunk } from '../core/types.js';
-import { executeAgentTurnViaKernel } from './kernel-turn-executor.js';
+import {
+  executeAgentTurnViaKernel,
+  getAgentTurnRunViaKernel,
+  resumeAgentTurnViaKernel,
+  startAgentTurnViaKernel,
+} from './kernel-turn-executor.js';
 import type { LLMProvider, RunParams } from './llm/provider.js';
 import { AgentRunner } from './runner.js';
 import { ToolRegistry } from './tools/registry.js';
@@ -62,6 +67,35 @@ class HangingProvider implements LLMProvider {
   }
 }
 
+class FakeRecoverableBlockedLlmProvider implements LLMProvider {
+  readonly id = 'fake-recoverable-blocked-llm';
+
+  constructor(private readonly isBlocked: () => boolean) {}
+
+  async *run(_params: RunParams): AsyncIterable<StreamChunk> {
+    if (this.isBlocked()) {
+      yield { type: 'error', message: '429 insufficient_quota: billing quota exceeded' };
+      return;
+    }
+
+    yield { type: 'text_delta', text: 'quota recovered' };
+    yield {
+      type: 'done',
+      inputTokens: 1,
+      outputTokens: 2,
+      stopReason: 'end_turn',
+    };
+  }
+
+  async countTokens(): Promise<number> {
+    return 0;
+  }
+
+  supports(): boolean {
+    return true;
+  }
+}
+
 function createRunner(
   dataDir: string,
   agentId = 'agent-main',
@@ -94,6 +128,23 @@ function createRunner(
       skillsText: '',
     },
   );
+}
+
+async function waitForRunPhase(
+  dataDir: string,
+  runners: Map<string, AgentRunner>,
+  runId: string,
+  phase: 'suspended' | 'done',
+): Promise<{ phase: 'suspended' | 'done'; error?: { code?: string }; result?: { text?: string } }> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    const run = await getAgentTurnRunViaKernel({ dataDir, runners, runId });
+    if (run?.phase === phase) {
+      return run as { phase: 'suspended' | 'done'; error?: { code?: string }; result?: { text?: string } };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for run ${runId} to reach phase ${phase}`);
 }
 
 describe('executeAgentTurnViaKernel', () => {
@@ -200,5 +251,44 @@ describe('executeAgentTurnViaKernel', () => {
     ).rejects.toThrow("Agent 'agent-main' turn timed out after 20ms");
 
     expect(runner.isRunning).toBe(false);
+  });
+
+  it('exposes suspended runs and resumes them through runId control', async () => {
+    const dataDir = await createTempDir();
+    let blocked = true;
+    const provider = new FakeRecoverableBlockedLlmProvider(() => blocked);
+    const runners = new Map([['agent-main', createRunner(dataDir, 'agent-main', provider)]]);
+
+    const started = await startAgentTurnViaKernel({
+      runners,
+      dataDir,
+      input: {
+        agentId: 'agent-main',
+        userMessage: 'resume after quota recovery',
+        threadKey: 'executor-resume-thread',
+      },
+    });
+
+    const suspended = await waitForRunPhase(dataDir, runners, started.runId, 'suspended');
+    expect(suspended.error?.code).toBe('AGENT_LLM_RESOURCE_BLOCKED');
+
+    const suspendedMeta = (await new SessionMetaStore(join(dataDir, 'sessions')).listAll())[0];
+    expect(suspendedMeta?.status).toBe('suspended');
+    expect(suspendedMeta?.errorCode).toBe('billing');
+
+    blocked = false;
+    const resumed = await resumeAgentTurnViaKernel({
+      runners,
+      dataDir,
+      runId: started.runId,
+    });
+    expect(resumed?.processStatus).toBe('ready');
+
+    const completed = await waitForRunPhase(dataDir, runners, started.runId, 'done');
+    expect(completed.result?.text).toContain('quota recovered');
+
+    const resumedMeta = (await new SessionMetaStore(join(dataDir, 'sessions')).listAll())[0];
+    expect(resumedMeta?.status).toBe('idle');
+    expect(resumedMeta?.errorCode).toBeUndefined();
   });
 });

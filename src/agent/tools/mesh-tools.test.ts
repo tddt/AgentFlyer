@@ -44,6 +44,34 @@ class FakeProvider implements LLMProvider {
   }
 }
 
+class FakeRecoverableBlockedProvider implements LLMProvider {
+  readonly id = 'fake-recoverable-blocked';
+
+  constructor(private readonly isBlocked: () => boolean) {}
+
+  async *run(_params: RunParams): AsyncIterable<StreamChunk> {
+    if (this.isBlocked()) {
+      yield { type: 'error', message: '429 insufficient_quota: billing quota exceeded' };
+      return;
+    }
+    yield { type: 'text_delta', text: 'quota recovered' };
+    yield {
+      type: 'done',
+      inputTokens: 1,
+      outputTokens: 1,
+      stopReason: 'end_turn',
+    };
+  }
+
+  async countTokens(): Promise<number> {
+    return 0;
+  }
+
+  supports(): boolean {
+    return true;
+  }
+}
+
 function createRunner(dataDir: string, agentId = 'agent-main'): AgentRunner {
   return new AgentRunner(
     {
@@ -153,6 +181,79 @@ describe('createMeshTools persistence', () => {
     expect(entry?.status).toBe('error');
     expect(entry?.error).toContain('gateway restart');
     expect(typeof entry?.doneAt).toBe('number');
+  });
+
+  it('surfaces suspended mesh tasks with runId and resumes them', async () => {
+    const dataDir = await createTempDir();
+    let blocked = true;
+    const runners = new Map([
+      [
+        'agent-main',
+        new AgentRunner(
+          {
+            id: 'agent-main',
+            name: 'Agent Main',
+            mentionAliases: [],
+            workspace: dataDir,
+            skills: [],
+            model: 'fake-model',
+            mesh: {
+              role: 'worker',
+              capabilities: [],
+              accepts: ['task', 'query', 'notification'],
+              visibility: 'public',
+              triggers: [],
+            },
+            owners: [],
+            tools: { allow: [], deny: [], approval: [], maxRounds: 4 },
+            persona: { language: 'zh-CN', outputDir: 'output' },
+          },
+          {
+            provider: new FakeRecoverableBlockedProvider(() => blocked),
+            toolRegistry: new ToolRegistry(),
+            sessionStore: new SessionStore(join(dataDir, 'sessions')),
+            metaStore: new SessionMetaStore(join(dataDir, 'sessions')),
+            skillsText: '',
+          },
+        ),
+      ],
+    ]);
+    const spawn = await getToolHandler('mesh_spawn', dataDir, runners);
+    const status = await getToolHandler('mesh_status', dataDir, runners);
+    const resume = await getToolHandler('mesh_resume', dataDir, runners);
+
+    const spawned = await spawn({ agent_id: 'agent-main', message: 'resume after quota recovery' });
+    expect(spawned.isError).toBe(false);
+    const taskId = /ID: (.+)\n/u.exec(spawned.content)?.[1];
+    const runId = /Run ID: (.+)\n/u.exec(spawned.content)?.[1];
+    expect(taskId).toBeTruthy();
+    expect(runId).toBeTruthy();
+
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      const current = await status({ task_id: taskId });
+      if (current.content.includes('Status: suspended')) {
+        expect(current.content).toContain(`Run ID: ${runId}`);
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    blocked = false;
+    const resumed = await resume({ task_id: taskId });
+    expect(resumed.isError).toBe(false);
+    expect(resumed.content).toContain(runId ?? '');
+
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      const current = await status({ task_id: taskId });
+      if (current.content.includes('Status: done')) {
+        expect(current.content).toContain('quota recovered');
+        expect(current.content).toContain(`Run ID: ${runId}`);
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    throw new Error(`Task ${taskId} did not finish after resume`);
   });
 });
 

@@ -8,7 +8,13 @@ import {
   buildScheduledTaskExecutionSummaryById,
   readScheduledTaskHistory,
 } from '../../../scheduler/task-history.js';
-import { executeAgentTurnViaKernel } from '../../kernel-turn-executor.js';
+import {
+  abortAgentTurnViaKernel,
+  executeAgentTurnViaKernel,
+  getAgentTurnRunViaKernel,
+  resumeAgentTurnViaKernel,
+  waitForAgentTurnViaKernel,
+} from '../../kernel-turn-executor.js';
 import type { AgentRunner } from '../../runner.js';
 import type { RegisteredTool } from '../registry.js';
 import {
@@ -30,24 +36,106 @@ function intervalToCron(minutes: number): string {
   return `0 */${hours} * * *`;
 }
 
-/** Drain an AgentRunner turn and return the final text reply. */
+interface ScheduledAgentTurnOutcome {
+  text: string;
+  runId: string;
+  runStatus: 'done' | 'error' | 'suspended';
+}
+
+interface ActiveScheduledRun {
+  agentId: string;
+  runId: string;
+  runStatus: 'running' | 'suspended';
+}
+
+interface ScheduledRunFinalizeOptions {
+  runKey: string;
+  startedAt: number;
+  countAsNewExecution: boolean;
+}
+
+/** Drain an AgentRunner turn and preserve the delegated run metadata. */
 async function runTurn(
   agentId: string,
   runner: AgentRunner,
   message: string,
   thread: string,
   dataDir: string,
-): Promise<string> {
-  const result = await executeAgentTurnViaKernel({
-    runners: new Map([[agentId, runner]]),
-    dataDir,
-    input: {
-      agentId,
-      userMessage: message,
-      threadKey: thread,
-    },
-  });
-  return result.text || '(no output)';
+  runId: string,
+): Promise<ScheduledAgentTurnOutcome> {
+  try {
+    const result = await executeAgentTurnViaKernel({
+      runners: new Map([[agentId, runner]]),
+      dataDir,
+      input: {
+        runId,
+        agentId,
+        userMessage: message,
+        threadKey: thread,
+      },
+    });
+    return {
+      text: result.text || '(no output)',
+      runId,
+      runStatus: 'done',
+    };
+  } catch (err) {
+    const current = await getAgentTurnRunViaKernel({
+      runners: new Map([[agentId, runner]]),
+      dataDir,
+      runId,
+    });
+    if (current?.processStatus === 'suspended' || current?.phase === 'suspended') {
+      return {
+        text: current.error?.message ?? String(err),
+        runId,
+        runStatus: 'suspended',
+      };
+    }
+    return {
+      text: `Error: ${String(err)}`,
+      runId,
+      runStatus: 'error',
+    };
+  }
+}
+
+async function waitForTurn(
+  agentId: string,
+  runner: AgentRunner,
+  dataDir: string,
+  runId: string,
+): Promise<ScheduledAgentTurnOutcome> {
+  try {
+    const result = await waitForAgentTurnViaKernel({
+      runners: new Map([[agentId, runner]]),
+      dataDir,
+      runId,
+    });
+    return {
+      text: result.text || '(no output)',
+      runId,
+      runStatus: 'done',
+    };
+  } catch (err) {
+    const current = await getAgentTurnRunViaKernel({
+      runners: new Map([[agentId, runner]]),
+      dataDir,
+      runId,
+    });
+    if (current?.processStatus === 'suspended' || current?.phase === 'suspended') {
+      return {
+        text: current.error?.message ?? String(err),
+        runId,
+        runStatus: 'suspended',
+      };
+    }
+    return {
+      text: `Error: ${String(err)}`,
+      runId,
+      runStatus: 'error',
+    };
+  }
 }
 
 // ── task metadata store (persistent JSON) ─────────────────────────────────
@@ -133,6 +221,7 @@ class TaskStore {
 }
 
 const sharedTaskStores = new Map<string, TaskStore>();
+const sharedActiveRuns = new Map<string, Map<string, ActiveScheduledRun>>();
 const restoredTaskStores = new Set<string>();
 
 // ── factory ────────────────────────────────────────────────────────────────
@@ -155,6 +244,100 @@ export function createSchedulerTools(
     sharedTaskStores.set(dataDir, store);
   }
   const taskStore = store;
+  let activeRuns = sharedActiveRuns.get(dataDir);
+  if (!activeRuns) {
+    activeRuns = new Map<string, ActiveScheduledRun>();
+    sharedActiveRuns.set(dataDir, activeRuns);
+  }
+
+  async function finalizeTaskRun(
+    current: ScheduledTaskRecord,
+    outcome: ScheduledAgentTurnOutcome,
+    options: ScheduledRunFinalizeOptions,
+  ): Promise<void> {
+    if (outcome.runStatus === 'suspended') {
+      activeRuns.set(current.id, {
+        agentId: current.agentId ?? 'unknown-agent',
+        runId: outcome.runId,
+        runStatus: 'suspended',
+      });
+    } else {
+      activeRuns.delete(current.id);
+    }
+
+    const finishedAt = Date.now();
+    if (options.countAsNewExecution) {
+      taskStore.update(current.id, {
+        runCount: current.runCount + 1,
+      });
+    }
+    const runOk = outcome.runStatus === 'done';
+    await appendScheduledTaskHistoryRecord(dataDir, {
+      taskId: current.id,
+      taskName: current.name,
+      runKey: options.runKey,
+      startedAt: options.startedAt,
+      finishedAt,
+      ok: runOk,
+      result: outcome.text.slice(0, 2000),
+      agentId: current.agentId,
+      agentRunId: outcome.runId,
+      agentRunStatus: outcome.runStatus,
+    }).catch((err) =>
+      logger.warn('Failed to write task run history', {
+        taskId: current.id,
+        error: String(err),
+      }),
+    );
+
+    if (runOk) {
+      logger.info('Scheduled task complete', { taskId: current.id, name: current.name });
+    } else {
+      logger.error('Scheduled task failed', {
+        taskId: current.id,
+        name: current.name,
+        error: outcome.text,
+      });
+    }
+
+    if (current.reportTo) {
+      const reporterRunner = runners.get(current.reportTo);
+      if (reporterRunner) {
+        const reportThread = `sched-report-${current.id}`;
+        const reportMsg =
+          `[定时任务汇报] 任务名称: ${current.name}\n` +
+          `执行智能体: ${current.agentId}\n` +
+          `运行状态: ${outcome.runStatus}\n` +
+          `Run ID: ${outcome.runId}\n\n${outcome.text}`;
+        try {
+          const reportRunId = ulid();
+          const reportTurn = await runTurn(
+            current.reportTo,
+            reporterRunner,
+            reportMsg,
+            reportThread,
+            dataDir,
+            reportRunId,
+          );
+          if (reportTurn.runStatus === 'done') {
+            logger.info('Task report sent', { taskId: current.id, reportTo: current.reportTo });
+          } else {
+            logger.error('Failed to send task report', {
+              taskId: current.id,
+              reportTo: current.reportTo,
+              error: reportTurn.text,
+            });
+          }
+        } catch (err) {
+          logger.error('Failed to send task report', {
+            taskId: current.id,
+            reportTo: current.reportTo,
+            error: String(err),
+          });
+        }
+      }
+    }
+  }
 
   /** Wire up the cron handler for a given task spec (used for new + restored tasks). */
   function scheduleTaskHandler(meta: ScheduledTaskRecord): void {
@@ -170,6 +353,16 @@ export function createSchedulerTools(
         if (!current.agentId || current.workflowId) {
           logger.info('Scheduled task: workflow target, skipping agent runner', {
             taskId: meta.id,
+          });
+          return;
+        }
+
+        const existingActiveRun = activeRuns.get(meta.id);
+        if (existingActiveRun) {
+          logger.info('Scheduled task skipped because previous run is still active', {
+            taskId: meta.id,
+            runId: existingActiveRun.runId,
+            runStatus: existingActiveRun.runStatus,
           });
           return;
         }
@@ -190,63 +383,29 @@ export function createSchedulerTools(
         });
         const thread = `sched-${meta.id}-run-${current.runCount + 1}`;
         const startedAt = Date.now();
-        let result: string;
-        let runOk = false;
-        try {
-          result = await runTurn(current.agentId, workerRunner, current.message, thread, dataDir);
-          runOk = !result.startsWith('Error:');
-        } catch (err) {
-          result = `Error: ${String(err)}`;
-          runOk = false;
-        }
-
-        const finishedAt = Date.now();
-        taskStore.update(meta.id, {
-          runCount: current.runCount + 1,
+        const delegatedRunId = ulid();
+        activeRuns.set(meta.id, {
+          agentId: current.agentId,
+          runId: delegatedRunId,
+          runStatus: 'running',
         });
-        await appendScheduledTaskHistoryRecord(dataDir, {
-          taskId: current.id,
-          taskName: current.name,
+        let result: string;
+        let delegatedRunStatus: 'done' | 'error' | 'suspended' = 'error';
+        const turn = await runTurn(
+          current.agentId,
+          workerRunner,
+          current.message,
+          thread,
+          dataDir,
+          delegatedRunId,
+        );
+        result = turn.text;
+        delegatedRunStatus = turn.runStatus;
+        await finalizeTaskRun(current, turn, {
           runKey: thread,
           startedAt,
-          finishedAt,
-          ok: runOk,
-          result: result.slice(0, 2000),
-          agentId: current.agentId,
-        }).catch((err) =>
-          logger.warn('Failed to write task run history', {
-            taskId: current.id,
-            error: String(err),
-          }),
-        );
-
-        if (runOk) {
-          logger.info('Scheduled task complete', { taskId: meta.id, name: current.name });
-        } else {
-          logger.error('Scheduled task failed', {
-            taskId: meta.id,
-            name: current.name,
-            error: result,
-          });
-        }
-
-        if (current.reportTo) {
-          const reporterRunner = runners.get(current.reportTo);
-          if (reporterRunner) {
-            const reportThread = `sched-report-${meta.id}`;
-            const reportMsg = `[定时任务汇报] 任务名称: ${current.name}\n执行智能体: ${current.agentId}\n\n${result}`;
-            try {
-              await runTurn(current.reportTo, reporterRunner, reportMsg, reportThread, dataDir);
-              logger.info('Task report sent', { taskId: meta.id, reportTo: current.reportTo });
-            } catch (err) {
-              logger.error('Failed to send task report', {
-                taskId: meta.id,
-                reportTo: current.reportTo,
-                error: String(err),
-              });
-            }
-          }
-        }
+          countAsNewExecution: true,
+        });
       },
     });
   }
@@ -399,8 +558,11 @@ export function createSchedulerTools(
       );
       const lines = taskStore.all().map((m) => {
         const summary = summaryByTaskId.get(m.id);
+        const activeRun = activeRuns.get(m.id);
         const lastRunAt = summary?.lastRunAt;
         const lastResult = summary?.lastResult;
+        const lastAgentRunId = summary?.lastAgentRunId;
+        const lastAgentRunStatus = summary?.lastAgentRunStatus;
         const lastRun = lastRunAt ? new Date(lastRunAt).toLocaleString() : 'never';
         const cronJob = scheduler.get(m.id);
         const nextRun = cronJob?.nextRunAt ? new Date(cronJob.nextRunAt).toLocaleString() : 'n/a';
@@ -408,6 +570,12 @@ export function createSchedulerTools(
           `[${m.id}] ${m.name}`,
           `  agent: ${m.agentId} | cron: ${m.cronExpr} | runs: ${m.runCount}`,
           `  last: ${lastRun} | next: ${nextRun}`,
+          activeRun
+            ? `  current agent run: ${activeRun.runStatus} | runId: ${activeRun.runId}`
+            : '',
+          lastAgentRunStatus
+            ? `  last agent run: ${lastAgentRunStatus} | runId: ${lastAgentRunId ?? 'n/a'}`
+            : '',
           m.reportTo ? `  reports to: ${m.reportTo}` : '',
           lastResult ? `  last result preview: ${lastResult.slice(0, 80)}…` : '',
         ]
@@ -415,6 +583,83 @@ export function createSchedulerTools(
           .join('\n');
       });
       return { isError: false, content: lines.join('\n\n') };
+    },
+  };
+
+  const taskResume: RegisteredTool = {
+    category: 'scheduler',
+    definition: {
+      name: 'task_resume',
+      description:
+        'Resume the currently suspended delegated run for a scheduled recurring task.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          task_id: { type: 'string', description: 'Task ID returned by task_schedule' },
+        },
+        required: ['task_id'],
+      },
+    },
+    async handler(input) {
+      const { task_id } = input as { task_id: string };
+      const meta = taskStore.get(task_id);
+      if (!meta) {
+        return { isError: true, content: `Task '${task_id}' not found.` };
+      }
+      const activeRun = activeRuns.get(task_id);
+      if (!activeRun || activeRun.runStatus !== 'suspended') {
+        return {
+          isError: true,
+          content: `Task '${meta.name}' (${task_id}) does not have a suspended run to resume.`,
+        };
+      }
+      const runner = runners.get(activeRun.agentId);
+      if (!runner) {
+        return {
+          isError: true,
+          content: `Agent '${activeRun.agentId}' is no longer available for task '${task_id}'.`,
+        };
+      }
+
+      await resumeAgentTurnViaKernel({
+        runners: new Map([[activeRun.agentId, runner]]),
+        dataDir,
+        runId: activeRun.runId,
+      });
+      activeRuns.set(task_id, {
+        agentId: activeRun.agentId,
+        runId: activeRun.runId,
+        runStatus: 'running',
+      });
+
+      const resumedAt = Date.now();
+      const resumedOutcome = await waitForTurn(activeRun.agentId, runner, dataDir, activeRun.runId);
+      await finalizeTaskRun(meta, resumedOutcome, {
+        runKey: `sched-${task_id}-resume-${resumedAt}`,
+        startedAt: resumedAt,
+        countAsNewExecution: false,
+      });
+
+      if (resumedOutcome.runStatus === 'done') {
+        return {
+          isError: false,
+          content: `Task '${meta.name}' (${task_id}) resumed and completed. Run ID: ${resumedOutcome.runId}`,
+        };
+      }
+      if (resumedOutcome.runStatus === 'suspended') {
+        return {
+          isError: false,
+          content:
+            `Task '${meta.name}' (${task_id}) resumed but is suspended again. ` +
+            `Run ID: ${resumedOutcome.runId}\n${resumedOutcome.text}`,
+        };
+      }
+      return {
+        isError: true,
+        content:
+          `Task '${meta.name}' (${task_id}) resumed but failed. ` +
+          `Run ID: ${resumedOutcome.runId}\n${resumedOutcome.text}`,
+      };
     },
   };
 
@@ -438,11 +683,34 @@ export function createSchedulerTools(
       if (!meta) {
         return { isError: true, content: `Task '${task_id}' not found.` };
       }
+      const activeRun = activeRuns.get(task_id);
+      if (activeRun) {
+        try {
+          await abortAgentTurnViaKernel({
+            runners: new Map([[activeRun.agentId, runners.get(activeRun.agentId)!]]),
+            dataDir,
+            runId: activeRun.runId,
+            message: `Scheduled task '${meta.name}' (${task_id}) cancelled.`,
+          });
+        } catch (err) {
+          logger.warn('Failed to abort active scheduled task run', {
+            taskId: task_id,
+            runId: activeRun.runId,
+            error: String(err),
+          });
+        }
+        activeRuns.delete(task_id);
+      }
       scheduler.cancel(task_id);
       taskStore.delete(task_id);
-      return { isError: false, content: `Task '${meta.name}' (${task_id}) cancelled.` };
+      return {
+        isError: false,
+        content: activeRun
+          ? `Task '${meta.name}' (${task_id}) cancelled and aborted run ${activeRun.runId}.`
+          : `Task '${meta.name}' (${task_id}) cancelled.`,
+      };
     },
   };
 
-  return [taskSchedule, taskList, taskCancel];
+  return [taskSchedule, taskList, taskResume, taskCancel];
 }

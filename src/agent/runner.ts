@@ -5,6 +5,7 @@ import type { ProcessErrorEvent, SyscallRequest, SyscallResolution } from '../co
 import { createLogger } from '../core/logger.js';
 import type { SessionMetaStore } from '../core/session/meta.js';
 import type { SessionErrorCode } from '../core/session/meta.js';
+import { repairTranscript } from '../core/session/repair.js';
 import type { SessionStore, StoredMessage } from '../core/session/store.js';
 import type {
   AgentId,
@@ -17,7 +18,7 @@ import type {
   ToolResultContent,
   ToolUseContent,
 } from '../core/types.js';
-import { asAgentId, asThreadKey, makeSessionKey } from '../core/types.js';
+import { asAgentId, asThreadKey, makeSessionKey, parseSessionKey } from '../core/types.js';
 import type { MemoryOrganizer } from '../memory/organizer.js';
 import type { MemoryStore } from '../memory/store.js';
 import { checkCompactionNeeded, runCompaction } from './compactor/index.js';
@@ -144,10 +145,22 @@ function sanitizeMessages(messages: Message[]): Message[] {
         continue;
       }
 
-      // ── Case A: assistant with tool_calls missing matching tool_results ──
+      // ── Case A+D: assistant with tool_calls ──────────────────────────────
       if (msg.role === 'assistant' && Array.isArray(msg.content)) {
         const toolCalls = (msg.content as MC[]).filter((c) => c.type === 'tool_use') as TUC[];
         if (toolCalls.length > 0) {
+          // Case D: malformed tool_use with empty id or name — must precede Case A
+          if (toolCalls.some((tc) => !tc.id || !tc.name)) {
+            logger.warn('Dropping assistant message with malformed tool_use (missing id/name)', {
+              toolCallIds: toolCalls.map((t) => t.id),
+            });
+            changed = true;
+            const next = current[i + 1];
+            if (next && isToolResultMsg(next)) i++;
+            i++;
+            continue;
+          }
+
           const next = current[i + 1];
           const resultIds = new Set(
             next?.role === 'user' && Array.isArray(next.content)
@@ -261,10 +274,7 @@ export interface SerializedToolResultCacheEntry {
 
 export interface SerializedAgentRunnerState {
   threadKey: string;
-  promptLayerHashes: Array<[number, string]>;
-  cachedSystemPrompt: string | null;
   toolResultCache: SerializedToolResultCacheEntry[];
-  activeKernelRunId: string | null;
 }
 
 export interface SerializedPendingToolCall {
@@ -281,7 +291,7 @@ export interface SerializedToolSyscallResult {
 
 export interface SerializedToolSyscallPayload {
   results: SerializedToolSyscallResult[];
-  runnerState: SerializedAgentRunnerState;
+  toolResultCache: SerializedToolResultCacheEntry[];
 }
 
 export interface SerializedLlmSyscallPayload {
@@ -300,6 +310,7 @@ export interface SerializedApprovalSyscallPayload {
 
 export interface SerializedAgentTurnExecutionState {
   runId: string;
+  sessionKey: SessionKey;
   userMessage: string;
   options?: RunnerOptions;
   model: string;
@@ -439,13 +450,14 @@ export class AgentRunner {
   private agentId: AgentId;
   private threadKey: ThreadKey;
   private sessionKey: SessionKey;
+  private pendingCategoryReplacements = new Map<string, RegisteredTool[]>();
   // RATIONALE: hash each base layer per turn to skip full buildSystemPrompt
   // when prompts layers are unchanged — avoids string trimming work.
   private promptLayerHashes = new Map<number, string>();
   private cachedSystemPrompt: string | null = null;
   // RATIONALE: cache read-only tool results within a thread to avoid
   // redundant I/O calls on repeated reads of the same file/query.
-  private toolResultCache = new Map<string, unknown>();
+  private toolResultCache = new Map<string, ToolCallResult>();
   // RATIONALE: prevent concurrent turns from corrupting shared instance state
   // (threadKey, sessionKey, promptLayerHashes, toolResultCache). A single runner
   // processes one turn at a time; callers should check isRunning before calling.
@@ -463,6 +475,9 @@ export class AgentRunner {
 
   /** Change the active thread (creates a new session file). */
   setThread(threadKey: string): void {
+    if (this.isRunning) {
+      throw new Error(`Agent '${this.agentId}' cannot change thread while a turn is active`);
+    }
     this.threadKey = asThreadKey(threadKey);
     this.sessionKey = makeSessionKey(this.agentId, this.threadKey);
     this.promptLayerHashes.clear();
@@ -473,28 +488,38 @@ export class AgentRunner {
   serializeState(): SerializedAgentRunnerState {
     return {
       threadKey: this.threadKey,
-      promptLayerHashes: Array.from(this.promptLayerHashes.entries()),
-      cachedSystemPrompt: this.cachedSystemPrompt,
-      toolResultCache: Array.from(this.toolResultCache.entries()).map(([key, value]) => ({
-        key,
-        value: value as ToolCallResult,
-      })),
-      activeKernelRunId: this.activeKernelRunId,
+      toolResultCache: this.serializeToolResultCache(this.toolResultCache),
     };
   }
 
-  restoreState(state: SerializedAgentRunnerState): void {
-    this.threadKey = asThreadKey(state.threadKey);
-    this.sessionKey = makeSessionKey(this.agentId, this.threadKey);
-    this.promptLayerHashes = new Map(state.promptLayerHashes);
-    this.cachedSystemPrompt = state.cachedSystemPrompt;
+  private serializeToolResultCache(
+    toolResultCache: ReadonlyMap<string, ToolCallResult>,
+  ): SerializedToolResultCacheEntry[] {
+    return Array.from(toolResultCache.entries()).map(([key, value]) => ({ key, value }));
+  }
+
+  private restoreToolResultCache(entries: SerializedToolResultCacheEntry[] | undefined): void {
     this.toolResultCache = new Map(
-      state.toolResultCache.map(
-        (entry) => [entry.key, entry.value] satisfies [string, ToolCallResult],
-      ),
+      (entries ?? []).map((entry) => [entry.key, entry.value] satisfies [string, ToolCallResult]),
     );
-    this.activeKernelRunId = state.activeKernelRunId;
+  }
+
+  syncRuntimeState(
+    threadKey: string,
+    runId: string | null,
+    toolResultCacheEntries?: SerializedToolResultCacheEntry[],
+  ): void {
+    this.threadKey = asThreadKey(threadKey);
+    this.sessionKey = makeSessionKey(this.agentId, this.threadKey);
+    this.promptLayerHashes.clear();
+    this.cachedSystemPrompt = null;
+    this.restoreToolResultCache(toolResultCacheEntries);
+    this.activeKernelRunId = runId;
     this._running = false;
+  }
+
+  restoreState(state: SerializedAgentRunnerState): void {
+    this.syncRuntimeState(state.threadKey, null, state.toolResultCache);
   }
 
   get currentSessionKey(): SessionKey {
@@ -515,7 +540,22 @@ export class AgentRunner {
   }
 
   replaceToolsForCategory(category: string, tools: RegisteredTool[]): void {
+    if (this.isRunning) {
+      this.pendingCategoryReplacements.set(category, tools);
+      return;
+    }
     this.deps.toolRegistry.replaceCategory(category, tools);
+    this.toolResultCache.clear();
+  }
+
+  private flushPendingCategoryReplacements(): void {
+    if (this.isRunning || this.pendingCategoryReplacements.size === 0) {
+      return;
+    }
+    for (const [category, tools] of this.pendingCategoryReplacements) {
+      this.deps.toolRegistry.replaceCategory(category, tools);
+    }
+    this.pendingCategoryReplacements.clear();
     this.toolResultCache.clear();
   }
 
@@ -523,13 +563,18 @@ export class AgentRunner {
    * Force-clear the busy flag after an orphaned turn (e.g. LLM provider unreachable).
    * Only call when you are certain the previous turn will never complete.
    */
-  forceReset(): void {
+  forceReset(expectedRunId?: string): void {
+    if (expectedRunId && this.activeKernelRunId !== expectedRunId) {
+      return;
+    }
     if (this._running || this.activeKernelRunId !== null) {
       logger.warn('AgentRunner.forceReset(): clearing orphaned running flag', {
         agentId: this.agentId,
+        ...(expectedRunId ? { runId: expectedRunId } : {}),
       });
       this._running = false;
       this.activeKernelRunId = null;
+      this.flushPendingCategoryReplacements();
     }
   }
 
@@ -660,6 +705,7 @@ export class AgentRunner {
 
     this.activeKernelRunId = runId;
     try {
+      const sessionKey = this.sessionKey;
       const { provider, sessionStore, metaStore } = this.deps;
       const configModel =
         typeof this.config.model === 'object' ? this.config.model.primary : this.config.model;
@@ -717,34 +763,43 @@ export class AgentRunner {
           ],
           this.deps.systemPromptMaxTokens,
         ));
-        newLayerHashes.forEach((hash, index) => this.promptLayerHashes.set(index, hash));
-        this.cachedSystemPrompt = systemPrompt;
+        if (!opts.taskContext) {
+          newLayerHashes.forEach((hash, index) => this.promptLayerHashes.set(index, hash));
+          this.cachedSystemPrompt = systemPrompt;
+        }
       }
 
-      const history = await sessionStore.readAll(this.sessionKey);
-      let messages: Message[] = sanitizeMessages(
-        history
-          .filter((entry) => entry.content != null)
-          .map((entry) => ({
-            role: entry.role,
-            content: entry.content,
-            ...(entry.reasoning_content ? { reasoning_content: entry.reasoning_content } : {}),
-          })),
-      );
+      const history = await sessionStore.readAll(sessionKey);
+      const rawMessages = history
+        .filter((entry) => entry.content != null)
+        .map((entry) => ({
+          role: entry.role,
+          content: entry.content,
+          ...(entry.reasoning_content ? { reasoning_content: entry.reasoning_content } : {}),
+        }));
+      const { repaired: preRepaired, removedCount: storeRepairCount } =
+        repairTranscript(rawMessages);
+      if (storeRepairCount > 0) {
+        logger.info('Session history pre-repaired from store', {
+          sessionKey,
+          removedCount: storeRepairCount,
+        });
+      }
+      let messages: Message[] = sanitizeMessages(preRepaired);
 
       const userMsg: StoredMessage = {
         id: ulid(),
-        sessionKey: this.sessionKey,
+        sessionKey,
         role: 'user',
         content: userMessage,
         timestamp: Date.now(),
       };
-      await sessionStore.append(this.sessionKey, userMsg);
+      await sessionStore.append(sessionKey, userMsg);
       messages = [...messages, { role: 'user', content: userMessage }];
 
       const compactionCheck = checkCompactionNeeded(messages, { model });
       if (compactionCheck.shouldCompact) {
-        logger.info('Compacting conversation', { sessionKey: this.sessionKey });
+        logger.info('Compacting conversation', { sessionKey });
         const compacted = await runCompaction(messages, async (prompt) => {
           let text = '';
           for await (const chunk of provider.run({
@@ -761,14 +816,15 @@ export class AgentRunner {
           return text;
         });
         messages = [compacted.summaryMessage, ...compacted.keptMessages];
-        await metaStore.update(this.sessionKey, {
-          compactionCount: ((await metaStore.get(this.sessionKey))?.compactionCount ?? 0) + 1,
+        await metaStore.update(sessionKey, {
+          compactionCount: ((await metaStore.get(sessionKey))?.compactionCount ?? 0) + 1,
           lastCompactionAt: Date.now(),
         });
       }
 
       return {
         runId,
+        sessionKey,
         userMessage,
         options: opts,
         model,
@@ -955,13 +1011,13 @@ export class AgentRunner {
     if (assistantToolUse.length > 0 || accText.trim().length > 0 || accThinking.trim().length > 0) {
       const assistantMsg: StoredMessage = {
         id: ulid(),
-        sessionKey: this.sessionKey,
+        sessionKey: state.sessionKey,
         role: 'assistant',
         content: assistantContent,
         ...(accThinking ? { reasoning_content: accThinking } : {}),
         timestamp: Date.now(),
       };
-      await sessionStore.append(this.sessionKey, assistantMsg);
+      await sessionStore.append(state.sessionKey, assistantMsg);
       state.messages = [
         ...state.messages,
         {
@@ -985,7 +1041,7 @@ export class AgentRunner {
           'AGENT_LLM_RESOURCE_BLOCKED',
           `${failure.summary} 当前运行已挂起，可在外部条件恢复后继续。`,
         );
-        await this.persistSuspendedSession(suspended);
+        await this.persistSuspendedSession(state.sessionKey, suspended);
         return {
           state,
           chunks,
@@ -1030,6 +1086,7 @@ export class AgentRunner {
     state: SerializedAgentTurnExecutionState,
     request: SyscallRequest,
     resolvedAt: number,
+    toolResultCacheEntries?: SerializedToolResultCacheEntry[],
   ): Promise<SyscallResolution> {
     const pendingToolCalls = state.pendingToolCalls ?? [];
     if (request.kind !== 'tool.call') {
@@ -1059,6 +1116,11 @@ export class AgentRunner {
 
     const { toolRegistry } = this.deps;
     const toolResults: SerializedToolSyscallResult[] = [];
+    const toolResultCache = new Map(
+      (toolResultCacheEntries ?? this.serializeToolResultCache(this.toolResultCache)).map(
+        (entry) => [entry.key, entry.value] satisfies [string, ToolCallResult],
+      ),
+    );
 
     for (const toolCall of pendingToolCalls) {
       const parsedInput = parseToolCallInput(toolCall.inputJson);
@@ -1070,17 +1132,17 @@ export class AgentRunner {
       } else {
         const cacheKey = `${toolCall.name}|${toolCall.inputJson}`;
         const cachedResult = READ_ONLY_TOOLS.has(toolCall.name)
-          ? (this.toolResultCache.get(cacheKey) as ToolCallResult | undefined)
+          ? toolResultCache.get(cacheKey)
           : undefined;
         if (cachedResult !== undefined) {
           callResult = cachedResult;
         } else {
           callResult = await toolRegistry.execute(toolCall.name, parsedInput);
           if (READ_ONLY_TOOLS.has(toolCall.name) && !callResult.isError) {
-            this.toolResultCache.set(cacheKey, callResult);
+            toolResultCache.set(cacheKey, callResult);
           }
           if (MUTATION_TOOLS.has(toolCall.name)) {
-            this.toolResultCache.clear();
+            toolResultCache.clear();
           }
         }
       }
@@ -1097,7 +1159,7 @@ export class AgentRunner {
       ok: true,
       payload: {
         results: toolResults,
-        runnerState: this.serializeState(),
+        toolResultCache: this.serializeToolResultCache(toolResultCache),
       } satisfies SerializedToolSyscallPayload,
       resolvedAt,
     };
@@ -1173,7 +1235,7 @@ export class AgentRunner {
           'AGENT_TOOL_APPROVAL_DENIED',
           `工具调用需要审批，当前处于挂起状态：${toolCall.name}`,
         );
-        await this.persistSuspendedSession(suspended);
+        await this.persistSuspendedSession(state.sessionKey, suspended);
         return {
           state,
           chunks,
@@ -1213,8 +1275,8 @@ export class AgentRunner {
     }
 
     const payload = resolution.payload as SerializedToolSyscallPayload | undefined;
-    if (payload?.runnerState) {
-      this.restoreState(payload.runnerState);
+    if (payload?.toolResultCache) {
+      this.restoreToolResultCache(payload.toolResultCache);
     }
 
     const resultMap = new Map(payload?.results?.map((result) => [result.toolUseId, result]) ?? []);
@@ -1268,12 +1330,12 @@ export class AgentRunner {
 
     const toolResultMsg: StoredMessage = {
       id: ulid(),
-      sessionKey: this.sessionKey,
+      sessionKey: state.sessionKey,
       role: 'user',
       content: toolResults,
       timestamp: Date.now(),
     };
-    await sessionStore.append(this.sessionKey, toolResultMsg);
+    await sessionStore.append(state.sessionKey, toolResultMsg);
     state.messages = [...state.messages, { role: 'user', content: toolResults }];
 
     if (state.finalFailureMessage) {
@@ -1308,12 +1370,12 @@ export class AgentRunner {
       totalText += failureText;
       const failureMsg: StoredMessage = {
         id: ulid(),
-        sessionKey: this.sessionKey,
+        sessionKey: state.sessionKey,
         role: 'assistant',
         content: failureText,
         timestamp: Date.now(),
       };
-      await this.deps.sessionStore.append(this.sessionKey, failureMsg);
+      await this.deps.sessionStore.append(state.sessionKey, failureMsg);
     } else if (!totalText) {
       const closingText =
         state.toolFailureMessages.length > 0
@@ -1331,18 +1393,18 @@ export class AgentRunner {
         totalText = closingText;
         const closingMsg: StoredMessage = {
           id: ulid(),
-          sessionKey: this.sessionKey,
+          sessionKey: state.sessionKey,
           role: 'assistant',
           content: closingText,
           timestamp: Date.now(),
         };
-        await this.deps.sessionStore.append(this.sessionKey, closingMsg);
+        await this.deps.sessionStore.append(state.sessionKey, closingMsg);
       }
     }
 
-    await metaStore.update(this.sessionKey, {
+    await metaStore.update(state.sessionKey, {
       agentId: this.agentId,
-      threadKey: this.threadKey,
+      threadKey: parseSessionKey(state.sessionKey)?.threadKey ?? this.threadKey,
       status: state.finalFailureMessage ? 'error' : 'idle',
       lastActivity: Date.now(),
       contextTokensEstimate: state.totalInputTokens,
@@ -1364,6 +1426,7 @@ export class AgentRunner {
 
     void this.deps.memoryOrganizer?.maybeOrganize();
     this.activeKernelRunId = null;
+    this.flushPendingCategoryReplacements();
 
     return {
       state: {
@@ -1373,7 +1436,7 @@ export class AgentRunner {
       chunks,
       done: true,
       result: {
-        sessionKey: this.sessionKey,
+        sessionKey: state.sessionKey,
         text: totalText,
         inputTokens: state.totalInputTokens,
         outputTokens: state.totalOutputTokens,
@@ -1414,7 +1477,7 @@ export class AgentRunner {
       yield { type: 'error', message: step.suspended.message };
       yield { type: 'text_delta', text: suspendedText };
       return {
-        sessionKey: this.sessionKey,
+        sessionKey: step.state.sessionKey,
         text: suspendedText,
         inputTokens: step.state.totalInputTokens,
         outputTokens: step.state.totalOutputTokens,
@@ -1469,13 +1532,15 @@ export class AgentRunner {
     } catch (err) {
       const failure = classifyAgentFailure(err instanceof Error ? err.message : String(err));
       const failureText = formatFailureReply(failure.summary);
+      const sessionKey = executionState?.sessionKey ?? this.sessionKey;
+      const threadKey = parseSessionKey(sessionKey)?.threadKey ?? this.threadKey;
       logger.error('Agent turn failed unexpectedly', {
         agentId: this.agentId,
         error: err instanceof Error ? (err.stack ?? err.message) : String(err),
       });
-      await this.deps.metaStore.update(this.sessionKey, {
+      await this.deps.metaStore.update(sessionKey, {
         agentId: this.agentId,
-        threadKey: this.threadKey,
+        threadKey,
         status: 'error',
         lastActivity: Date.now(),
         error: failureText,
@@ -1483,15 +1548,15 @@ export class AgentRunner {
       });
       const failureMsg: StoredMessage = {
         id: ulid(),
-        sessionKey: this.sessionKey,
+        sessionKey,
         role: 'assistant',
         content: failureText,
         timestamp: Date.now(),
       };
-      await this.deps.sessionStore.append(this.sessionKey, failureMsg).catch(() => undefined);
+      await this.deps.sessionStore.append(sessionKey, failureMsg).catch(() => undefined);
       yield { type: 'text_delta', text: failureText };
       return {
-        sessionKey: this.sessionKey,
+        sessionKey,
         text: failureText,
         inputTokens: executionState?.totalInputTokens ?? 0,
         outputTokens: executionState?.totalOutputTokens ?? 0,
@@ -1501,6 +1566,7 @@ export class AgentRunner {
       if (this.activeKernelRunId?.startsWith('direct:')) {
         this.activeKernelRunId = null;
       }
+      this.flushPendingCategoryReplacements();
     }
   }
 
@@ -1516,6 +1582,9 @@ export class AgentRunner {
 
   /** Clear the current thread's conversation history. */
   async clearHistory(): Promise<void> {
+    if (this.isRunning) {
+      throw new Error(`Agent '${this.agentId}' cannot clear history while a turn is active`);
+    }
     await this.deps.sessionStore.overwrite(this.sessionKey, []);
     await this.deps.metaStore.update(this.sessionKey, {
       messageCount: 0,
@@ -1524,11 +1593,14 @@ export class AgentRunner {
     });
   }
 
-  private async persistSuspendedSession(error: ProcessErrorEvent): Promise<void> {
+  private async persistSuspendedSession(
+    sessionKey: SessionKey,
+    error: ProcessErrorEvent,
+  ): Promise<void> {
     const suspended = toSuspendedSessionError(error);
-    await this.deps.metaStore.update(this.sessionKey, {
+    await this.deps.metaStore.update(sessionKey, {
       agentId: this.agentId,
-      threadKey: this.threadKey,
+      threadKey: parseSessionKey(sessionKey)?.threadKey ?? this.threadKey,
       status: 'suspended',
       lastActivity: Date.now(),
       error: suspended.error,

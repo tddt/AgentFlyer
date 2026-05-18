@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AgentQueue } from './agent-queue.js';
+import { AgentQueue, AgentQueueCancelledError } from './agent-queue.js';
 
 describe('AgentQueue hooks', () => {
   it('reports queued position and queued start when work is already in progress', async () => {
@@ -75,7 +75,7 @@ describe('AgentQueue hooks', () => {
       pendingCount: 0,
       busy: true,
     });
-    await expect(secondTask).resolves.toBeUndefined();
+    await expect(secondTask).rejects.toEqual(new AgentQueueCancelledError('queued-run-2'));
 
     releaseFirst();
     await expect(firstTask).resolves.toBe('first');

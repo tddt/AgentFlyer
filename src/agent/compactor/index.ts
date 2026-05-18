@@ -22,6 +22,8 @@ export interface CompactorOptions {
   maxTokens?: number;
   /** Fill fraction at which compaction is triggered (0.0–1.0). Defaults to 0.75. */
   threshold?: number;
+  /** Number of recent messages to always keep after compaction. Defaults to 20. */
+  keepRecent?: number;
 }
 
 export interface CompactionTrigger {
@@ -58,8 +60,10 @@ export function checkCompactionNeeded(
 export async function runCompaction(
   messages: Message[],
   callLLM: (prompt: string) => Promise<string>,
+  opts?: Pick<CompactorOptions, 'keepRecent'>,
 ): Promise<CompactionResult> {
-  const { toCompact, toKeep } = splitForCompaction(messages, KEEP_RECENT);
+  const keepCount = opts?.keepRecent ?? KEEP_RECENT;
+  const { toCompact, toKeep } = splitForCompaction(messages, keepCount);
 
   if (toCompact.length === 0) {
     return {
@@ -84,11 +88,11 @@ export async function runCompaction(
     raw = await callLLM(prompt);
   } catch (err) {
     logger.error('Compaction LLM call failed', { error: String(err) });
-    // Emergency: just drop old messages, no summary
+    // Emergency: drop old messages with a timestamped marker
     return {
       summaryMessage: {
         role: 'user',
-        content: '[Prior conversation history truncated due to context length]',
+        content: `[Prior ${toCompact.length} messages truncated due to context length at ${new Date().toISOString()}]`,
       },
       keptMessages: toKeep,
       compactedCount: toCompact.length,

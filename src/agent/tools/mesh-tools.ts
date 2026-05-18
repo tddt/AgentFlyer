@@ -4,7 +4,17 @@ import { join } from 'node:path';
 import { ulid } from 'ulid';
 import type { AgentConfig } from '../../core/config/schema.js';
 import { createLogger } from '../../core/logger.js';
-import { executeAgentTurnViaKernel } from '../kernel-turn-executor.js';
+import { asAgentId } from '../../core/types.js';
+import { getGlobalBus } from '../../mesh/bus.js';
+import { buildEnvelope } from '../../mesh/protocol.js';
+import {
+  abortAgentTurnViaKernel,
+  executeAgentTurnViaKernel,
+  getAgentTurnRunViaKernel,
+  resumeAgentTurnViaKernel,
+  startAgentTurnViaKernel,
+  waitForAgentTurnViaKernel,
+} from '../kernel-turn-executor.js';
 import type { AgentRunner } from '../runner.js';
 import type { RegisteredTool } from './registry.js';
 
@@ -14,6 +24,11 @@ const logger = createLogger('tools:mesh');
 // a remote agent turn. 5 min is generous for agentic tasks; callers may pass
 // timeout_s to mesh_send/mesh_spawn to override.
 const DEFAULT_TASK_TIMEOUT_MS = 5 * 60 * 1_000; // 5 minutes
+
+// RATIONALE: cap concurrent background tasks per target agent to prevent a single
+// coordinator from queuing an unbounded workload on one worker. Callers that need
+// higher parallelism should split work across multiple agents.
+const MESH_MAX_CONCURRENT_PER_AGENT = 5;
 
 async function runMeshTurn(options: {
   agentId: string;
@@ -69,7 +84,8 @@ interface TaskEntry {
   agentId: string;
   message: string;
   threadKey: string;
-  status: 'pending' | 'running' | 'done' | 'error' | 'cancelled';
+  status: 'pending' | 'running' | 'suspended' | 'done' | 'error' | 'cancelled';
+  runId?: string;
   result?: string;
   error?: string;
   startedAt: number;
@@ -160,7 +176,11 @@ class MeshTaskStore {
   normalizeInterrupted(now = Date.now()): Promise<void> {
     let mutated = false;
     for (const entry of this.tasks.values()) {
-      if (entry.status === 'pending' || entry.status === 'running') {
+      if (
+        entry.status === 'pending' ||
+        entry.status === 'running' ||
+        entry.status === 'suspended'
+      ) {
         entry.status = 'error';
         entry.error = 'Task interrupted by gateway restart before completion.';
         entry.doneAt = now;
@@ -219,6 +239,92 @@ export function createMeshTools(
 
   // Build a quick lookup for names/roles
   const configMap = new Map(agentConfigs.map((c) => [c.id, c]));
+
+  const watchTaskRun = (taskId: string, agentId: string, timeoutMs: number): void => {
+    const runner = runners.get(agentId);
+    const entry = taskStore.get(taskId);
+    if (!runner || !entry?.runId) {
+      return;
+    }
+    const runId = entry.runId;
+    void (async () => {
+      const startedAt = Date.now();
+      try {
+        const output = await withTimeout(
+          waitForAgentTurnViaKernel({
+            runners: new Map([[agentId, runner]]),
+            dataDir,
+            runId,
+          }).then((result) => result.text || '(no output)'),
+          timeoutMs,
+          `mesh_spawn ${taskId}`,
+        );
+        const durationMs = Date.now() - startedAt;
+        taskStore.update(taskId, {
+          status: 'done',
+          result: output || '(no output)',
+          error: undefined,
+          doneAt: Date.now(),
+        });
+        logger.info('mesh_spawn: task done', { taskId, agent_id: agentId, runId });
+        try {
+          getGlobalBus().publish(
+            buildEnvelope('task.result', asAgentId(agentId), '*', {
+              taskId,
+              runId,
+              success: true,
+              output: output || '(no output)',
+              durationMs,
+            }),
+          );
+        } catch (busErr) {
+          logger.warn('mesh_spawn: failed to publish task.result to bus', {
+            taskId,
+            error: String(busErr),
+          });
+        }
+      } catch (err) {
+        const durationMs = Date.now() - startedAt;
+        const current = await getAgentTurnRunViaKernel({
+          runners: new Map([[agentId, runner]]),
+          dataDir,
+          runId,
+        });
+        if (current?.processStatus === 'suspended' || current?.phase === 'suspended') {
+          taskStore.update(taskId, {
+            status: 'suspended',
+            error: current.error?.message ?? String(err),
+            doneAt: undefined,
+          });
+          logger.info('mesh_spawn: task suspended', { taskId, agent_id: agentId, runId });
+          return;
+        }
+        taskStore.update(taskId, {
+          status: 'error',
+          error: String(err),
+          doneAt: Date.now(),
+        });
+        logger.error('mesh_spawn: task error', { taskId, agent_id: agentId, error: String(err) });
+        try {
+          getGlobalBus().publish(
+            buildEnvelope('task.result', asAgentId(agentId), '*', {
+              taskId,
+              runId,
+              success: false,
+              output: '',
+              errorMessage: String(err),
+              durationMs,
+            }),
+          );
+        } catch (busErr) {
+          logger.warn('mesh_spawn: failed to publish error task.result to bus', {
+            taskId,
+            error: String(busErr),
+          });
+        }
+      }
+    })().catch(() => undefined);
+  };
 
   // ── mesh_list ───────────────────────────────────────────────────────────
   const meshList: RegisteredTool = {
@@ -377,6 +483,25 @@ export function createMeshTools(
         };
       }
 
+      // RATIONALE: guard against runaway parallel spawning on a single agent.
+      // Count how many tasks are still pending/running for this target.
+      const activeCount = taskStore
+        .all()
+        .filter(
+          (t) =>
+            t.agentId === agent_id &&
+            (t.status === 'pending' || t.status === 'running' || t.status === 'suspended'),
+        )
+        .length;
+      if (activeCount >= MESH_MAX_CONCURRENT_PER_AGENT) {
+        return {
+          isError: true,
+          content:
+            `Agent '${agent_id}' already has ${activeCount} active task(s). ` +
+            `Limit is ${MESH_MAX_CONCURRENT_PER_AGENT}. Wait for existing tasks to finish before spawning more.`,
+        };
+      }
+
       const timeoutMs = typeof timeout_s === 'number' ? timeout_s * 1_000 : DEFAULT_TASK_TIMEOUT_MS;
       const taskId = ulid();
       const taskThread = `mesh-spawn-${taskId}`;
@@ -390,41 +515,37 @@ export function createMeshTools(
         timeoutMs,
       });
 
-      // Run asynchronously — do NOT await
-      (async () => {
-        const entry = taskStore.get(taskId);
-        if (!entry) return;
-        taskStore.update(taskId, { status: 'running' });
-        try {
-          const output = await runMeshTurn({
+      try {
+        const started = await startAgentTurnViaKernel({
+          runners: new Map([[agent_id, runner]]),
+          dataDir,
+          input: {
             agentId: agent_id,
-            runner,
-            message,
+            userMessage: message,
             threadKey: taskThread,
-            dataDir,
-            timeoutMs,
-            label: `mesh_spawn ${taskId}`,
-          });
-          taskStore.update(taskId, {
-            status: 'done',
-            result: output || '(no output)',
-            doneAt: Date.now(),
-          });
-          logger.info('mesh_spawn: task done', { taskId, agent_id });
-        } catch (err) {
-          taskStore.update(taskId, {
-            status: 'error',
-            error: String(err),
-            doneAt: Date.now(),
-          });
-          logger.error('mesh_spawn: task error', { taskId, agent_id, error: String(err) });
-        }
-      })().catch(() => undefined);
-
-      return {
-        isError: false,
-        content: `Task spawned. ID: ${taskId}\nUse mesh_status to check progress.`,
-      };
+          },
+        });
+        taskStore.update(taskId, {
+          status: 'running',
+          runId: started.runId,
+          error: undefined,
+        });
+        watchTaskRun(taskId, agent_id, timeoutMs);
+        return {
+          isError: false,
+          content: `Task spawned. ID: ${taskId}\nRun ID: ${started.runId}\nUse mesh_status to check progress.`,
+        };
+      } catch (err) {
+        taskStore.update(taskId, {
+          status: 'error',
+          error: String(err),
+          doneAt: Date.now(),
+        });
+        return {
+          isError: true,
+          content: `Failed to start task '${taskId}': ${String(err)}`,
+        };
+      }
     },
   };
 
@@ -469,15 +590,88 @@ export function createMeshTools(
 
       const elapsed = Math.round(((current.doneAt ?? Date.now()) - current.startedAt) / 1000);
       if (current.status === 'done') {
-        return { isError: false, content: `Status: done (${elapsed}s)\n\n${current.result}` };
+        return {
+          isError: false,
+          content: `Status: done (${elapsed}s)\nRun ID: ${current.runId ?? 'n/a'}\n\n${current.result}`,
+        };
       }
       if (current.status === 'error') {
-        return { isError: true, content: `Status: error (${elapsed}s)\n${current.error}` };
+        return {
+          isError: true,
+          content: `Status: error (${elapsed}s)\nRun ID: ${current.runId ?? 'n/a'}\n${current.error}`,
+        };
       }
       if (current.status === 'cancelled') {
-        return { isError: false, content: `Status: cancelled (${elapsed}s elapsed)` };
+        return {
+          isError: false,
+          content: `Status: cancelled (${elapsed}s elapsed)\nRun ID: ${current.runId ?? 'n/a'}`,
+        };
       }
-      return { isError: false, content: `Status: ${current.status} (${elapsed}s elapsed)` };
+      if (current.status === 'suspended') {
+        return {
+          isError: false,
+          content:
+            `Status: suspended (${elapsed}s elapsed)\n` +
+            `Run ID: ${current.runId ?? 'n/a'}\n` +
+            `${current.error ?? 'Task is waiting for external recovery. Use mesh_resume to continue.'}`,
+        };
+      }
+      return {
+        isError: false,
+        content: `Status: ${current.status} (${elapsed}s elapsed)\nRun ID: ${current.runId ?? 'n/a'}`,
+      };
+    },
+  };
+
+  const meshResume: RegisteredTool = {
+    category: 'mesh',
+    definition: {
+      name: 'mesh_resume',
+      description:
+        'Resume a suspended mesh_spawn task after the external blocking condition is resolved.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          task_id: { type: 'string', description: 'Task ID returned by mesh_spawn' },
+        },
+        required: ['task_id'],
+      },
+    },
+    async handler(input) {
+      const { task_id } = input as { task_id: string };
+      const entry = taskStore.get(task_id);
+      if (!entry) {
+        return { isError: true, content: `Task '${task_id}' not found.` };
+      }
+      if (entry.status !== 'suspended' || !entry.runId) {
+        return {
+          isError: true,
+          content: `Task '${task_id}' is not suspended and cannot be resumed (status: ${entry.status}).`,
+        };
+      }
+      const runner = runners.get(entry.agentId);
+      if (!runner) {
+        return { isError: true, content: `Agent '${entry.agentId}' is no longer available.` };
+      }
+      try {
+        const resumed = await resumeAgentTurnViaKernel({
+          runners: new Map([[entry.agentId, runner]]),
+          dataDir,
+          runId: entry.runId,
+        });
+        taskStore.update(task_id, {
+          status: 'running',
+          error: undefined,
+          doneAt: undefined,
+        });
+        watchTaskRun(task_id, entry.agentId, entry.timeoutMs);
+        return {
+          isError: false,
+          content: `Task '${task_id}' resumed. Run ID: ${resumed?.runId ?? entry.runId}`,
+        };
+      } catch (err) {
+        return { isError: true, content: `Failed to resume task '${task_id}': ${String(err)}` };
+      }
     },
   };
 
@@ -726,8 +920,20 @@ export function createMeshTools(
       } else if (entry.status === 'done' || entry.status === 'error') {
         parts.push(`Task '${task_id}' already finished (status: ${entry.status}).`);
       } else {
+        if (entry.runId) {
+          const runner = runners.get(entry.agentId);
+          if (runner) {
+            await abortAgentTurnViaKernel({
+              runners: new Map([[entry.agentId, runner]]),
+              dataDir,
+              runId: entry.runId,
+              message: `Mesh task '${task_id}' was cancelled.`,
+            }).catch(() => undefined);
+          }
+        }
         taskStore.update(task_id, {
           status: 'cancelled',
+          error: undefined,
           doneAt: Date.now(),
         });
         logger.info('mesh_cancel: task cancelled', { task_id });
@@ -940,6 +1146,7 @@ export function createMeshTools(
     meshSend,
     meshSpawn,
     meshStatus,
+    meshResume,
     meshBroadcast,
     meshDiscuss,
     meshCancel,
@@ -970,6 +1177,7 @@ export function createMeshToolStubs(): RegisteredTool[] {
     stub('mesh_spawn', 'Spawn a sub-agent on the mesh to handle a delegated task.'),
     stub('mesh_send', 'Send a task to a specific agent on the mesh by agent ID.'),
     stub('mesh_status', 'Query the status of a previously spawned mesh task.'),
+    stub('mesh_resume', 'Resume a suspended mesh task once the blocking condition is resolved.'),
     stub('mesh_broadcast', 'Broadcast a message to all agents in parallel and collect responses.'),
     stub('mesh_discuss', 'Run a structured multi-turn discussion between multiple agents.'),
     stub(

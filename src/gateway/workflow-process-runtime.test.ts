@@ -176,6 +176,72 @@ describe('WorkflowProcessRuntime', () => {
     expect(result.state.run.stepResults[0]?.error).toBe('fatal failure');
   });
 
+  it('suspends on delegated agent suspension and resumes the same delegated run', async () => {
+    const calls: Array<{ delegatedRunId?: string }> = [];
+    const workflow = createWorkflow({
+      steps: [
+        {
+          id: 'agent-step',
+          type: 'agent',
+          agentId: 'agent-main',
+          messageTemplate: 'hello',
+          condition: 'on_success',
+        },
+      ],
+    });
+
+    const runtime = new WorkflowProcessRuntime({
+      async runAgentStep(request) {
+        calls.push({ delegatedRunId: request.delegatedRunId });
+        if (!request.delegatedRunId) {
+          throw Object.assign(new Error('quota blocked'), {
+            delegatedAgentId: 'agent-main',
+            delegatedRunId: 'delegated-run-1',
+            delegatedRunStatus: 'suspended' as const,
+          });
+        }
+        return {
+          output: 'agent success',
+          delegatedAgentId: 'agent-main',
+          delegatedRunId: request.delegatedRunId,
+          delegatedRunStatus: 'done' as const,
+        };
+      },
+    });
+
+    const suspended = await runtime.step(
+      runtime.createInitialState({ runId: 'run-suspend', workflow, input: '' }),
+      {
+        pid: 'pid-suspend' as never,
+        now: 35,
+        runCount: 0,
+        retryCount: 0,
+        metadata: {},
+      },
+    );
+
+    expect(suspended.signal).toBe('SUSPENDED');
+    expect(suspended.state.run.status).toBe('suspended');
+    expect(suspended.state.run.stepResults[0]?.delegatedRunId).toBe('delegated-run-1');
+    expect(suspended.state.run.stepResults[0]?.delegatedRunStatus).toBe('suspended');
+
+    const resumed = await runtime.step(suspended.state, {
+      pid: 'pid-suspend' as never,
+      now: 36,
+      runCount: 1,
+      retryCount: 0,
+      metadata: {},
+    });
+
+    expect(resumed.signal).toBe('DONE');
+    expect(resumed.state.run.status).toBe('done');
+    expect(resumed.state.run.stepResults).toHaveLength(1);
+    expect(resumed.state.run.stepResults[0]?.output).toBe('agent success');
+    expect(resumed.state.run.stepResults[0]?.delegatedRunId).toBe('delegated-run-1');
+    expect(resumed.state.run.stepResults[0]?.delegatedRunStatus).toBe('done');
+    expect(calls).toEqual([{ delegatedRunId: undefined }, { delegatedRunId: 'delegated-run-1' }]);
+  });
+
   it('supports explicit nextStepId routing for non-condition steps', async () => {
     const workflow = createWorkflow({
       steps: [

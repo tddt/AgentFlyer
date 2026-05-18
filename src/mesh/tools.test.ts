@@ -46,7 +46,39 @@ class FakeProvider implements LLMProvider {
   }
 }
 
-function createRunner(dataDir: string, agentId = 'agent-main'): AgentRunner {
+class FakeRecoverableBlockedProvider implements LLMProvider {
+  readonly id = 'fake-recoverable-blocked';
+
+  constructor(private readonly isBlocked: () => boolean) {}
+
+  async *run(_params: RunParams): AsyncIterable<StreamChunk> {
+    if (this.isBlocked()) {
+      yield { type: 'error', message: '429 insufficient_quota: billing quota exceeded' };
+      return;
+    }
+    yield { type: 'text_delta', text: 'quota recovered' };
+    yield {
+      type: 'done',
+      inputTokens: 1,
+      outputTokens: 1,
+      stopReason: 'end_turn',
+    };
+  }
+
+  async countTokens(): Promise<number> {
+    return 0;
+  }
+
+  supports(): boolean {
+    return true;
+  }
+}
+
+function createRunner(
+  dataDir: string,
+  agentId = 'agent-main',
+  provider: LLMProvider = new FakeProvider(),
+): AgentRunner {
   return new AgentRunner(
     {
       id: agentId,
@@ -67,7 +99,7 @@ function createRunner(dataDir: string, agentId = 'agent-main'): AgentRunner {
       persona: { language: 'zh-CN', outputDir: 'output' },
     },
     {
-      provider: new FakeProvider(),
+      provider,
       toolRegistry: new ToolRegistry(),
       sessionStore: new SessionStore(join(dataDir, 'sessions')),
       metaStore: new SessionMetaStore(join(dataDir, 'sessions')),
@@ -79,7 +111,7 @@ function createRunner(dataDir: string, agentId = 'agent-main'): AgentRunner {
 async function waitForTaskStatus(
   dispatcher: MeshTaskDispatcher,
   taskId: string,
-  status: 'done' | 'error',
+  status: 'done' | 'error' | 'suspended',
 ): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const task = dispatcher.getTask(taskId as never);
@@ -139,5 +171,31 @@ describe('MeshTaskDispatcher persistence', () => {
     const entry = parsed.find((item) => item.taskId === 'task-restart');
     expect(entry?.status).toBe('error');
     expect(entry?.error).toContain('gateway restart');
+  });
+
+  it('preserves suspended tasks with runId and resumes them', async () => {
+    const dataDir = await createTempDir();
+    let blocked = true;
+    const dispatcher = new MeshTaskDispatcher(new MeshBus(), { dataDir });
+    dispatcher.registerRunner(
+      asAgentId('agent-main'),
+      createRunner(dataDir, 'agent-main', new FakeRecoverableBlockedProvider(() => blocked)),
+    );
+
+    const taskId = await dispatcher.spawn(asAgentId('agent-main'), 'resume me');
+    await waitForTaskStatus(dispatcher, taskId, 'suspended');
+
+    const suspended = dispatcher.getTask(taskId as never);
+    expect(suspended?.runId).toBeTruthy();
+    expect(suspended?.error).toContain('当前运行已挂起');
+
+    blocked = false;
+    const resumed = await dispatcher.resume(taskId as never);
+    expect(resumed?.status).toBe('running');
+
+    await waitForTaskStatus(dispatcher, taskId, 'done');
+    const completed = dispatcher.getTask(taskId as never);
+    expect(completed?.output).toContain('quota recovered');
+    expect(completed?.runId).toBe(suspended?.runId);
   });
 });

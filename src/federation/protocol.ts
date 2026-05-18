@@ -10,6 +10,8 @@ export type FederationMessageType =
   | 'ANNOUNCE'
   | 'MEMORY_QUERY'
   | 'MEMORY_RESULT'
+  | 'TASK_DELEGATE'
+  | 'TASK_RESULT'
   | 'PING'
   | 'PONG'
   | 'GOODBYE';
@@ -75,10 +77,40 @@ export interface GoodbyePayload {
   reason?: string;
 }
 
+/**
+ * Sent to a remote node to delegate an agent turn.
+ * The receiving node looks up `agentId` in its local runners and executes
+ * the `instruction` as a mesh task, then replies with TASK_RESULT.
+ */
+export interface TaskDelegatePayload {
+  /** Correlation ID — matched against TASK_RESULT.requestId. */
+  requestId: string;
+  /** Target agent ID on the remote node. */
+  agentId: string;
+  /** Instruction / user message for the agent turn. */
+  instruction: string;
+  /** How long the sender is willing to wait (ms). */
+  timeoutMs: number;
+}
+
+/**
+ * Reply to TASK_DELEGATE carrying the completed output or error.
+ */
+export interface TaskResultPayload {
+  /** Matches TaskDelegatePayload.requestId. */
+  requestId: string;
+  success: boolean;
+  output: string;
+  errorMessage?: string;
+  durationMs: number;
+}
+
 export type FederationPayload =
   | AnnouncePayload
   | MemoryQueryPayload
   | MemoryResultPayload
+  | TaskDelegatePayload
+  | TaskResultPayload
   | PingPayload
   | PongPayload
   | GoodbyePayload;

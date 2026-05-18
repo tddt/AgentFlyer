@@ -13,6 +13,7 @@ import type {
   AgentActivityInfo,
   AgentInfo,
   AgentListResult,
+  AgentRunInfo,
   ChatChunk,
   InboxEvent,
   InboxEventKind,
@@ -1145,20 +1146,35 @@ function resolveMentionTarget(message: string, agents: AgentInfo[], fallbackAgen
   return exact?.agentId ?? fallbackAgentId;
 }
 
+function chunkRunId(chunk: ChatChunk): string | null {
+  if ('runId' in chunk && typeof chunk.runId === 'string' && chunk.runId.trim()) {
+    return chunk.runId;
+  }
+  return null;
+}
+
 function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocusTarget }: AgentPanelProps) {
   const { t } = useLocale();
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
   const [pendingStatus, setPendingStatus] = useState<string | null>(null);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [resumableRunId, setResumableRunId] = useState<string | null>(null);
   const [confirmRecoverySend, setConfirmRecoverySend] = useState(false);
   const [currentThread, setCurrentThread] = useState(`console:${agent.agentId}`);
   const [visibleRecoveryContext, setVisibleRecoveryContext] = useState<ChatRecoveryContext | null>(null);
   const [focusedMessageId, setFocusedMessageId] = useState<string | null>(null);
   const [expandedContextPanel, setExpandedContextPanel] = useState<'recovery' | 'hub' | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const activeRunIdRef = useRef<string | null>(null);
   const focusedRecoveryEventIdRef = useRef<number | null>(null);
   const messageRefs = useRef(new Map<string, HTMLDivElement>());
+
+  const updateActiveRunId = (runId: string | null) => {
+    activeRunIdRef.current = runId;
+    setActiveRunId(runId);
+  };
 
   useEffect(() => {
     if (initialThreadKey) {
@@ -1207,6 +1223,8 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
   const loadSession = (session: SessionMetaInfo) => {
     setCurrentThread(session.threadKey);
     setShowSessions(false);
+    updateActiveRunId(null);
+    setResumableRunId(null);
   };
 
   const startNewThread = () => {
@@ -1214,234 +1232,29 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
     setCurrentThread(newThread);
     setMessages([]);
     setShowSessions(false);
+    updateActiveRunId(null);
+    setResumableRunId(null);
   };
 
-  useEffect(() => {
-    if (visibleRecoveryContext && currentThread !== visibleRecoveryContext.threadKey) {
-      setVisibleRecoveryContext(null);
-    }
-  }, [currentThread, visibleRecoveryContext]);
-
-  useEffect(() => {
-    setConfirmRecoverySend(false);
-  }, [visibleRecoveryContext?.eventId, currentThread]);
-
-  useEffect(() => {
-    if (!confirmRecoverySend) {
-      return;
-    }
-    const timer = window.setTimeout(() => setConfirmRecoverySend(false), 2500);
-    return () => window.clearTimeout(timer);
-  }, [confirmRecoverySend]);
-
-  useEffect(() => {
-    if (!visibleRecoveryContext?.eventId) {
-      return;
-    }
-    if (focusedRecoveryEventIdRef.current === visibleRecoveryContext.eventId) {
-      return;
-    }
-    focusedRecoveryEventIdRef.current = visibleRecoveryContext.eventId;
-    const frame = window.requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      const caret = inputRef.current?.value.length ?? 0;
-      inputRef.current?.setSelectionRange(caret, caret);
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [visibleRecoveryContext]);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  useEffect(() => {
-    if (!hubFocusTarget?.eventId) {
-      setFocusedMessageId(null);
-      return;
-    }
-    if (hubFocusTarget.threadKey && hubFocusTarget.threadKey !== currentThread) {
-      setFocusedMessageId(null);
-      return;
-    }
-    const matchedId = findHubMessageMatch(messages, hubFocusTarget);
-    setFocusedMessageId(matchedId);
-    if (matchedId) {
-      const element = messageRefs.current.get(matchedId);
-      if (element) {
-        window.requestAnimationFrame(() => {
-          element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        });
-      }
-    }
-  }, [messages, currentThread, hubFocusTarget]);
-
-  const applyHubContextToInput = (startNew = false) => {
-    if (!hubFocusTarget) {
-      return;
-    }
-    const nextValue = buildHubContextPrompt(hubFocusTarget, t);
-    if (startNew) {
-      const newThread = createConsoleThreadKey(agent.agentId);
-      setCurrentThread(newThread);
-      setMessages([]);
-      setFocusedMessageId(null);
-      setInput(nextValue);
-    } else {
-      setInput((prev) => (prev.trim() ? `${prev.trimEnd()}\n\n${nextValue}` : nextValue));
-    }
-    window.requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      const caret = inputRef.current?.value.length ?? 0;
-      inputRef.current?.setSelectionRange(caret, caret);
-    });
-  };
-
-  // RATIONALE: Memoize all expensive message-scanning computations so they only
-  // recompute when messages/visibleRecoveryContext change, not on every keystroke.
-  const recoveryEvidence = useMemo(() => getRecoveryEvidenceContext(messages), [messages]);
-  const recoveryPatterns = useMemo(() => detectToolResultPatterns(messages), [messages]);
-  const recoveryPatternMetas = useMemo(
-    () =>
-      recoveryPatterns
-        .map((pattern) => getToolResultPatternMeta(pattern, t))
-        .filter(
-          (
-            meta,
-          ): meta is { label: string; variant: 'green' | 'blue' | 'yellow' | 'red' | 'purple' | 'gray' } =>
-            Boolean(meta),
-        ),
-    [recoveryPatterns, t],
-  );
-  const inputPlaceholder = useMemo(
-    () => getRecoveryInputPlaceholder(visibleRecoveryContext, t),
-    [visibleRecoveryContext, t],
-  );
-  const suggestedRecoveryMessage = useMemo(
-    () => (visibleRecoveryContext ? getRecoverySuggestedMessage(visibleRecoveryContext, messages, t) : ''),
-    [visibleRecoveryContext, messages, t],
-  );
-  const structuredRecoveryMessage = useMemo(
-    () =>
-      visibleRecoveryContext
-        ? getStructuredRecoverySuggestion(
-            recoveryEvidence.userContext,
-            suggestedRecoveryMessage,
-            recoveryEvidence.toolResultContext,
-            recoveryPatterns,
-            t,
-          )
-        : '',
-    [visibleRecoveryContext, recoveryEvidence, suggestedRecoveryMessage, recoveryPatterns, t],
-  );
-  const structuredRecoveryVariants = useMemo(
-    () =>
-      visibleRecoveryContext
-        ? getStructuredRecoveryVariants(recoveryEvidence.userContext, recoveryPatterns, t)
-        : [],
-    [visibleRecoveryContext, recoveryEvidence.userContext, recoveryPatterns, t],
-  );
-  const recoveryEvidenceEntries = useMemo(() => buildRecoveryEvidenceEntries(messages, t), [messages, t]);
-  const participantAliases = useMemo(() => agent.mentionAliases?.slice(0, 3) ?? [], [agent.mentionAliases]);
-  const showRecoveryPanel = Boolean(visibleRecoveryContext);
-  const showHubContextPanel = Boolean(hubFocusTarget);
-
-  const buildRecoverySuggestionInput = (baseInput: string): string => {
-    if (!suggestedRecoveryMessage) {
-      return baseInput;
-    }
-    const trimmed = baseInput.trim();
-    if (!trimmed) {
-      return suggestedRecoveryMessage;
-    }
-    if (baseInput.includes(suggestedRecoveryMessage)) {
-      return baseInput;
-    }
-    return `${baseInput.trimEnd()}\n\n${suggestedRecoveryMessage}`;
-  };
-
-  const buildStructuredRecoveryInput = (baseInput: string): string => {
-    if (!structuredRecoveryMessage) {
-      return baseInput;
-    }
-    const trimmed = baseInput.trim();
-    if (!trimmed) {
-      return structuredRecoveryMessage;
-    }
-    if (baseInput.includes(structuredRecoveryMessage)) {
-      return baseInput;
-    }
-    return `${baseInput.trimEnd()}\n\n${structuredRecoveryMessage}`;
-  };
-
-  const buildCustomStructuredInput = (baseInput: string, template: string): string => {
-    if (!template) {
-      return baseInput;
-    }
-    const trimmed = baseInput.trim();
-    if (!trimmed) {
-      return template;
-    }
-    if (baseInput.includes(template)) {
-      return baseInput;
-    }
-    return `${baseInput.trimEnd()}\n\n${template}`;
-  };
-
-  const applyRecoverySuggestion = () => {
-    if (!suggestedRecoveryMessage) {
-      return;
-    }
-    setInput((prev) => buildRecoverySuggestionInput(prev));
-    window.requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      const caret = inputRef.current?.value.length ?? 0;
-      inputRef.current?.setSelectionRange(caret, caret);
-    });
-  };
-
-  const applyStructuredRecoverySuggestion = () => {
-    if (!structuredRecoveryMessage) {
-      return;
-    }
-    setInput((prev) => buildStructuredRecoveryInput(prev));
-    window.requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      const caret = inputRef.current?.value.length ?? 0;
-      inputRef.current?.setSelectionRange(caret, caret);
-    });
-  };
-
-  const applyStructuredRecoveryVariant = (template: string) => {
-    if (!template) {
-      return;
-    }
-    setInput((prev) => buildCustomStructuredInput(prev, template));
-    window.requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      const caret = inputRef.current?.value.length ?? 0;
-      inputRef.current?.setSelectionRange(caret, caret);
-    });
-  };
-
-  const sendMessage = async (messageText = input) => {
-    const text = messageText.trim();
-    if (!text || busy) return;
-    setInput('');
-    setPendingStatus(null);
-    setMessages((prev) => [...prev, { role: 'user', content: text }]);
-    setBusy(true);
-
-    const TOKEN = window.__AF_TOKEN__;
-
+  const fetchRunStatus = async (runId: string): Promise<AgentRunInfo | null> => {
     try {
-      const targetAgentId = resolveMentionTarget(text, agents, agent.agentId);
+      return await rpc<AgentRunInfo | null>('agent.runStatus', { runId });
+    } catch {
+      return null;
+    }
+  };
+
+  const streamChatRequest = async (requestBody: Record<string, unknown>): Promise<void> => {
+    const TOKEN = window.__AF_TOKEN__;
+    setBusy(true);
+    try {
       const res = await fetch(`${window.location.origin}/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${TOKEN}`,
         },
-        body: JSON.stringify({ agentId: targetAgentId, message: text, thread: currentThread }),
+        body: JSON.stringify(requestBody),
       });
 
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
@@ -1472,13 +1285,18 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
             continue;
           }
 
+          const nextRunId = chunkRunId(chunk);
+          if (nextRunId) {
+            updateActiveRunId(nextRunId);
+          }
+
           if (chunk.type === 'queued') {
             setPendingStatus(t('chat.queue.waiting', { position: String(chunk.position) }));
             continue;
           }
 
           if (chunk.type === 'started') {
-            setPendingStatus(null);
+            setPendingStatus(chunk.resumed ? t('chat.run.resuming') : null);
             continue;
           }
 
@@ -1493,7 +1311,10 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
               }
               return next;
             });
-          } else if (chunk.type === 'thinking' || chunk.type === 'thinking_delta') {
+            continue;
+          }
+
+          if (chunk.type === 'thinking' || chunk.type === 'thinking_delta') {
             setPendingStatus(null);
             thinkingContent += chunk.text;
             setMessages((prev) => {
@@ -1529,7 +1350,10 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
               }
               return next;
             });
-          } else if (chunk.type === 'tool_use_start') {
+            continue;
+          }
+
+          if (chunk.type === 'tool_use_start') {
             setPendingStatus(null);
             pendingTools.set(chunk.id, { id: chunk.id, name: chunk.name, input: '' });
             setMessages((prev) => {
@@ -1547,14 +1371,20 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
               }
               return next;
             });
-          } else if (chunk.type === 'tool_use_delta') {
+            continue;
+          }
+
+          if (chunk.type === 'tool_use_delta') {
             setPendingStatus(null);
             const tool = pendingTools.get(chunk.id);
             if (tool) {
               tool.input += chunk.inputJson;
               pendingTools.set(chunk.id, tool);
             }
-          } else if (chunk.type === 'tool_result') {
+            continue;
+          }
+
+          if (chunk.type === 'tool_result') {
             setPendingStatus(null);
             setMessages((prev) => {
               const next = [...prev];
@@ -1566,7 +1396,10 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
               }
               return next;
             });
-          } else if (chunk.type === 'done') {
+            continue;
+          }
+
+          if (chunk.type === 'done') {
             setPendingStatus(null);
             setMessages((prev) => {
               const next = [...prev];
@@ -1593,8 +1426,13 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
               if (thinkIdx >= 0) next[thinkIdx] = { ...next[thinkIdx]!, streaming: false };
               return next;
             });
-          } else if (chunk.type === 'error') {
-            throw new Error(chunk.message);
+            continue;
+          }
+
+          if (chunk.type === 'error') {
+            throw Object.assign(new Error(chunk.message), {
+              runId: chunk.runId ?? activeRunIdRef.current,
+            });
           }
         }
 
@@ -1612,8 +1450,25 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
         }
         return next;
       });
-    } catch (e) {
       setPendingStatus(null);
+      updateActiveRunId(null);
+      setResumableRunId(null);
+    } catch (e) {
+      const failedRunId =
+        e instanceof Error && 'runId' in e && typeof e.runId === 'string'
+          ? e.runId
+          : activeRunIdRef.current;
+      const runInfo = failedRunId ? await fetchRunStatus(failedRunId) : null;
+      const suspended = runInfo?.processStatus === 'suspended' || runInfo?.phase === 'suspended';
+      if (suspended && failedRunId) {
+        updateActiveRunId(failedRunId);
+        setResumableRunId(failedRunId);
+        setPendingStatus(t('chat.run.suspended'));
+      } else {
+        setPendingStatus(null);
+        updateActiveRunId(null);
+        setResumableRunId(null);
+      }
       setMessages((prev) => {
         const next = [...prev];
         if (next[next.length - 1]?.streaming) next.pop();
@@ -1623,9 +1478,37 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
         ];
       });
     } finally {
-      setPendingStatus(null);
       setBusy(false);
     }
+  };
+
+  useEffect(() => {
+    if (visibleRecoveryContext && currentThread !== visibleRecoveryContext.threadKey) {
+      setVisibleRecoveryContext(null);
+    }
+  }, [currentThread, visibleRecoveryContext]);
+
+  const resumeSuspendedRun = async () => {
+    if (!resumableRunId || busy) {
+      return;
+    }
+    setPendingStatus(t('chat.run.resuming'));
+    setResumableRunId(null);
+    updateActiveRunId(resumableRunId);
+    await streamChatRequest({ runId: resumableRunId, resume: true, thread: currentThread });
+  };
+
+  const sendMessage = async (messageText = input) => {
+    const text = messageText.trim();
+    if (!text || busy) return;
+    setInput('');
+    setPendingStatus(null);
+    setResumableRunId(null);
+    updateActiveRunId(null);
+    setMessages((prev) => [...prev, { role: 'user', content: text }]);
+
+    const targetAgentId = resolveMentionTarget(text, agents, agent.agentId);
+    await streamChatRequest({ agentId: targetAgentId, message: text, thread: currentThread });
   };
 
   const sendRecoverySuggestion = async () => {
@@ -1950,9 +1833,23 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
       </div>
 
       <div className="pt-3 shrink-0 border-t border-white/6 mt-3">
-        {pendingStatus ? (
+        {pendingStatus || activeRunId || resumableRunId ? (
           <div className="mb-2 rounded-2xl border border-cyan-400/14 bg-cyan-950/12 px-3 py-2 text-xs text-cyan-100/85">
-            {pendingStatus}
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="min-w-0">
+                {pendingStatus ? <div>{pendingStatus}</div> : null}
+                {activeRunId ? (
+                  <div className="mt-1 font-mono text-[10px] text-cyan-200/75 break-all">
+                    {t('chat.run.handle', { runId: activeRunId })}
+                  </div>
+                ) : null}
+              </div>
+              {resumableRunId ? (
+                <Button size="sm" variant="default" onClick={() => void resumeSuspendedRun()} disabled={busy}>
+                  {t('chat.run.resume')}
+                </Button>
+              ) : null}
+            </div>
           </div>
         ) : null}
         <div

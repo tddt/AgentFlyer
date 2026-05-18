@@ -1,5 +1,10 @@
 import { ulid } from 'ulid';
-import { executeAgentTurnViaKernel } from '../agent/kernel-turn-executor.js';
+import {
+  executeAgentTurnViaKernel,
+  getAgentTurnRunViaKernel,
+  resumeAgentTurnViaKernel,
+  waitForAgentTurnViaKernel,
+} from '../agent/kernel-turn-executor.js';
 import type { AgentRunner } from '../agent/runner.js';
 import {
   AgentKernel,
@@ -91,6 +96,7 @@ export class WorkflowKernelService {
   private readonly runnerSnapshots = new Map<string, Map<string, AgentRunner>>();
   private readonly finalizing = new Set<string>();
   private readonly completionWaiters = new Map<string, Array<(run: WorkflowRunRecord) => void>>();
+  private readonly completedRuns = new Map<string, WorkflowRunRecord>();
   private readonly streamBroadcasters = new Map<string, WorkflowRunStreamBroadcaster>();
   private initPromise: Promise<void> | null = null;
   private pumpPromise: Promise<void> | null = null;
@@ -128,26 +134,63 @@ export class WorkflowKernelService {
 
         const seenToolIds = new Set<string>();
         const execute = async (): Promise<string> => {
-          const result = await executeAgentTurnViaKernel({
-            runners: new Map([[request.agentId, runner]]),
-            dataDir: options.dataDir,
-            timeoutMs: workflowAgentStepTimeoutMs,
-            onChunk: (chunk) => {
-              if (chunk.type === 'text_delta' && chunk.text) {
-                request.onToken?.(chunk.text);
-                broadcaster.push({ type: 'token', text: chunk.text });
-              } else if (chunk.type === 'tool_use_delta' && !seenToolIds.has(chunk.id)) {
-                seenToolIds.add(chunk.id);
-                broadcaster.push({ type: 'tool_call', name: chunk.name, id: chunk.id });
-              }
-            },
-            input: {
-              agentId: request.agentId,
-              userMessage: request.message,
-              threadKey: request.threadKey,
-            },
-          });
-          return result.text || '';
+          const delegatedRunId = request.delegatedRunId ?? ulid();
+          try {
+            const result = request.delegatedRunId
+              ? await (async () => {
+                  await resumeAgentTurnViaKernel({
+                    runners: new Map([[request.agentId, runner]]),
+                    dataDir: options.dataDir,
+                    runId: delegatedRunId,
+                  });
+                  return await waitForAgentTurnViaKernel({
+                    runners: new Map([[request.agentId, runner]]),
+                    dataDir: options.dataDir,
+                    runId: delegatedRunId,
+                  });
+                })()
+              : await executeAgentTurnViaKernel({
+                  runners: new Map([[request.agentId, runner]]),
+                  dataDir: options.dataDir,
+                  timeoutMs: workflowAgentStepTimeoutMs,
+                  onChunk: (chunk) => {
+                    if (chunk.type === 'text_delta' && chunk.text) {
+                      request.onToken?.(chunk.text);
+                      broadcaster.push({ type: 'token', text: chunk.text });
+                    } else if (chunk.type === 'tool_use_delta' && !seenToolIds.has(chunk.id)) {
+                      seenToolIds.add(chunk.id);
+                      broadcaster.push({ type: 'tool_call', name: chunk.name, id: chunk.id });
+                    }
+                  },
+                  input: {
+                    runId: delegatedRunId,
+                    agentId: request.agentId,
+                    userMessage: request.message,
+                    threadKey: request.threadKey,
+                  },
+                });
+            return {
+              output: result.text || '',
+              delegatedAgentId: request.agentId,
+              delegatedRunId,
+              delegatedRunStatus: 'done' as const,
+            } as const;
+          } catch (error) {
+            const current = await getAgentTurnRunViaKernel({
+              runners: new Map([[request.agentId, runner]]),
+              dataDir: options.dataDir,
+              runId: delegatedRunId,
+            });
+            const message = error instanceof Error ? error.message : String(error);
+            throw Object.assign(new Error(message), {
+              delegatedAgentId: request.agentId,
+              delegatedRunId,
+              delegatedRunStatus:
+                current?.processStatus === 'suspended' || current?.phase === 'suspended'
+                  ? ('suspended' as const)
+                  : ('error' as const),
+            });
+          }
         };
         return await service.workflowAgentQueues.for(request.agentId).enqueue(execute);
       },
@@ -230,7 +273,7 @@ export class WorkflowKernelService {
     if (!current) {
       return null;
     }
-    if (current.status !== 'running') {
+    if (current.status !== 'running' && current.status !== 'suspended') {
       return current;
     }
     const cancelled = {
@@ -244,7 +287,33 @@ export class WorkflowKernelService {
     return cancelled;
   }
 
+  async resumeRun(runId: string): Promise<WorkflowRunRecord | null> {
+    await this.initialize();
+    const snapshot = this.kernel.getSnapshot(asProcessId(runId));
+    if (!snapshot) {
+      return this.getRun(runId);
+    }
+    if (snapshot.status !== 'suspended') {
+      return this.snapshotToRun(snapshot);
+    }
+    const resumed = await this.kernel.resumeProcess(snapshot.pid);
+    const run = this.snapshotToRun(resumed);
+    if (run) {
+      const running = {
+        ...run,
+        status: 'running' as const,
+      };
+      this.forcedRunStates.set(runId, cloneRun(running));
+    }
+    this.schedulePump(0);
+    return run ? { ...run, status: 'running' } : null;
+  }
+
   async waitForCompletion(runId: string): Promise<WorkflowRunRecord> {
+    const completed = this.completedRuns.get(runId);
+    if (completed) {
+      return cloneRun(completed);
+    }
     const current = this.getRun(runId);
     if (current && current.status !== 'running') {
       return current;
@@ -459,6 +528,7 @@ export class WorkflowKernelService {
         run.status = forcedStatus;
         run.finishedAt = run.finishedAt ?? Date.now();
       }
+      this.completedRuns.set(runId, cloneRun(run));
       await this.callbacks.onRunComplete(state.workflow, run);
       await this.kernel.deleteProcess(snapshot.pid);
       this.cancelRequested.delete(runId);

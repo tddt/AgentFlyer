@@ -41,6 +41,7 @@ import {
 import { scanSkillsDir } from '../skills/registry.js';
 import { getAgentKernelService } from './agent-kernel.js';
 import type { AgentActiveRunSummary, AgentQueuedRunSummary } from './agent-kernel.js';
+import { isAgentQueueCancelledError } from './agent-queue.js';
 import type { AgentQueueRegistry, AgentQueueSnapshot } from './agent-queue.js';
 import type { ContentStore } from './content-store.js';
 import {
@@ -77,6 +78,22 @@ interface AgentActivityStatus {
   pendingCount: number;
   activeRun?: AgentActiveRunSummary;
   queuedRuns: AgentQueuedRunSummary[];
+}
+
+interface SchedulerRunningTaskInfo {
+  taskId: string;
+  taskName: string;
+  startedAt: number;
+  agentId?: string;
+  workflowId?: string;
+  agentRunId?: string;
+  agentRunStatus?: 'running' | 'suspended';
+}
+
+interface SchedulerAgentTaskOutcome {
+  text: string;
+  runId: string;
+  runStatus: 'done' | 'error' | 'suspended';
 }
 
 function buildAgentActivityStatus(
@@ -339,6 +356,7 @@ export type RpcMethod =
   | 'scheduler.update'
   | 'scheduler.preview'
   | 'scheduler.runNow'
+  | 'scheduler.resume'
   | 'scheduler.cancel'
   | 'scheduler.running'
   | 'scheduler.history'
@@ -443,10 +461,7 @@ export interface RpcContext {
   /** MCP registry status snapshot — used for mcp.status. */
   getMcpStatus?: () => McpServerRuntimeStatus[];
   /** In-memory registry of currently executing scheduler tasks (cleared on restart). */
-  runningTasks: Map<
-    string,
-    { taskId: string; taskName: string; startedAt: number; agentId?: string; workflowId?: string }
-  >;
+  runningTasks: Map<string, SchedulerRunningTaskInfo>;
 }
 
 function sanitizeConfig(cfg: unknown): unknown {
@@ -651,16 +666,52 @@ async function runAgentTask(
   ctx: RpcContext,
   task: ScheduledTaskRecord,
   thread: string,
-): Promise<string> {
+  options?: {
+    resumeRunId?: string;
+    onRunState?: (patch: Pick<SchedulerRunningTaskInfo, 'agentRunId' | 'agentRunStatus'>) => void;
+  },
+): Promise<SchedulerAgentTaskOutcome> {
   const agentId = task.agentId;
   if (!agentId) throw new Error(`Task ${task.id} has no agentId`);
   const agentKernel = await getAgentKernelService(ctx);
-  const result = await agentKernel.executeTurn({
-    agentId,
-    userMessage: task.message,
-    threadKey: thread,
-  });
-  return result.text || '(no output)';
+  const runId = options?.resumeRunId
+    ? options.resumeRunId
+    : (
+        await agentKernel.startTurn({
+          agentId,
+          userMessage: task.message,
+          threadKey: thread,
+        })
+      ).runId;
+  if (options?.resumeRunId) {
+    const resumed = await agentKernel.resumeTurn(runId);
+    if (!resumed) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+  }
+  options?.onRunState?.({ agentRunId: runId, agentRunStatus: 'running' });
+  try {
+    const result = await agentKernel.waitForRun(runId);
+    return {
+      text: result.text || '(no output)',
+      runId,
+      runStatus: 'done',
+    };
+  } catch (err) {
+    const current = agentKernel.getRun(runId);
+    if (current?.processStatus === 'suspended' || current?.phase === 'suspended') {
+      return {
+        text: current.error?.message ?? String(err),
+        runId,
+        runStatus: 'suspended',
+      };
+    }
+    return {
+      text: `Error: ${String(err)}`,
+      runId,
+      runStatus: 'error',
+    };
+  }
 }
 
 async function createSchedulerDeliverableRecord(
@@ -731,6 +782,8 @@ function scheduleRuntimeTask(ctx: RpcContext, taskId: string): void {
         let result = '';
         let runOk = false;
         let workflowRunId: string | undefined;
+        let agentRunId: string | undefined;
+        let agentRunStatus: 'done' | 'error' | 'suspended' | undefined;
         try {
           if (current.workflowId) {
             const workflowResult = await runWorkflowForScheduler(
@@ -741,19 +794,42 @@ function scheduleRuntimeTask(ctx: RpcContext, taskId: string): void {
             result = workflowResult.output;
             workflowRunId = workflowResult.workflowRunId;
           } else {
-            result = await runAgentTask(
+            const agentOutcome = await runAgentTask(
               ctx,
               current,
               `sched-${current.id}-run-${current.runCount + 1}`,
+              {
+                onRunState: (patch) => {
+                  const running = ctx.runningTasks.get(task.id);
+                  if (!running) {
+                    return;
+                  }
+                  ctx.runningTasks.set(task.id, { ...running, ...patch });
+                },
+              },
             );
+            result = agentOutcome.text;
+            agentRunId = agentOutcome.runId;
+            agentRunStatus = agentOutcome.runStatus;
           }
-          runOk = !result.startsWith('Error:');
+          runOk = current.workflowId ? !result.startsWith('Error:') : agentRunStatus === 'done';
         } catch (err) {
           result = `Error: ${String(err)}`;
           runOk = false;
         }
 
-        ctx.runningTasks.delete(task.id);
+        if (agentRunStatus === 'suspended') {
+          const running = ctx.runningTasks.get(task.id);
+          if (running) {
+            ctx.runningTasks.set(task.id, {
+              ...running,
+              agentRunId,
+              agentRunStatus: 'suspended',
+            });
+          }
+        } else {
+          ctx.runningTasks.delete(task.id);
+        }
         const finishedAt = Date.now();
         const deliverable = await createSchedulerDeliverableRecord(
           ctx,
@@ -779,6 +855,8 @@ function scheduleRuntimeTask(ctx: RpcContext, taskId: string): void {
           ok: runOk,
           result: result.slice(0, 2000),
           agentId: current.agentId,
+          agentRunId,
+          agentRunStatus,
           workflowId: current.workflowId,
           workflowRunId,
           deliverableId: deliverable?.id,
@@ -896,6 +974,19 @@ export function buildErrorResponse(
   message: string,
 ): RpcResponse {
   return { id, error: { code, message } };
+}
+
+function isActiveTurnMutationError(err: unknown): err is Error {
+  return err instanceof Error && err.message.includes('while a turn is active');
+}
+
+function isSessionKeyActiveInRunner(ctx: RpcContext, sessionKey: string): boolean {
+  for (const runner of ctx.runners.values()) {
+    if (runner.isRunning && runner.currentSessionKey === sessionKey) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -1121,6 +1212,9 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
               { taskKey: reserved.runId },
             )
             .catch((error) => {
+              if (isAgentQueueCancelledError(error)) {
+                return;
+              }
               logger.error('Queued agent.run failed to start', {
                 agentId,
                 runId: reserved.runId,
@@ -1143,28 +1237,20 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
           return buildErrorResponse(id, -32602, 'runId is required');
         }
         const agentKernel = await getAgentKernelService(ctx);
-        const current = agentKernel.getRun(runId);
-        if (!current) {
+        const cancelled = await agentKernel.cancelRun(runId, {
+          cancelPending: (agentId, queuedRunId) => {
+            ctx.agentQueues?.cancelPending(agentId, queuedRunId);
+          },
+        });
+        if (!cancelled) {
           return buildErrorResponse(id, 404, `Run not found: ${runId}`);
-        }
-        if (current.processStatus === 'waiting' && current.phase === 'pending') {
-          ctx.agentQueues?.cancelPending(current.agentId, runId);
-          const cancelled = await agentKernel.cancelQueuedTurn(runId);
-          return { id, result: { cancelled: Boolean(cancelled), runId } };
-        }
-        if (current.processStatus === 'ready') {
-          // RATIONALE: startTurn may have been called before agent.cancel arrived
-          // (the queue snapshot.set is synchronous), so the run is 'ready' but not
-          // yet pumped. Cancel it here before any LLM call can happen.
-          const cancelled = agentKernel.cancelReadyRun(runId);
-          return { id, result: { cancelled: Boolean(cancelled), runId } };
         }
         return {
           id,
           result: {
-            cancelled: false,
+            cancelled: cancelled.cancelled,
             runId,
-            reason: 'Only queued runs can be cancelled currently.',
+            reason: cancelled.reason,
           },
         };
       }
@@ -1286,6 +1372,13 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         // Clear by explicit sessionKey if provided
         if (sessionKey) {
           const safeSessionKey = asSessionKey(sessionKey);
+          if (isSessionKeyActiveInRunner(ctx, safeSessionKey)) {
+            return buildErrorResponse(
+              id,
+              409,
+              `Session '${safeSessionKey}' cannot be cleared while its runner turn is active`,
+            );
+          }
           await ctx.sessionStore.overwrite(safeSessionKey, []);
           await ctx.metaStore.update(safeSessionKey, buildClearedSessionUpdates());
           return { id, result: { cleared: true, sessionKey: safeSessionKey } };
@@ -1320,7 +1413,14 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
 
         const runner = agentId ? ctx.runners.get(agentId) : undefined;
         if (!runner) return buildErrorResponse(id, 404, `Agent not found: ${agentId}`);
-        await runner.clearHistory();
+        try {
+          await runner.clearHistory();
+        } catch (err) {
+          if (isActiveTurnMutationError(err)) {
+            return buildErrorResponse(id, 409, err.message);
+          }
+          throw err;
+        }
         return { id, result: { cleared: true, agentId } };
       }
 
@@ -1595,6 +1695,8 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         let result = '';
         let runOk = false;
         let workflowRunId: string | undefined;
+        let agentRunId: string | undefined;
+        let agentRunStatus: 'done' | 'error' | 'suspended' | undefined;
         try {
           if (current.workflowId) {
             const workflowResult = await runWorkflowForScheduler(
@@ -1605,15 +1707,42 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
             result = workflowResult.output;
             workflowRunId = workflowResult.workflowRunId;
           } else {
-            result = await runAgentTask(ctx, current, `sched-${current.id}-manual-${startedAt}`);
+            const agentOutcome = await runAgentTask(
+              ctx,
+              current,
+              `sched-${current.id}-manual-${startedAt}`,
+              {
+                onRunState: (patch) => {
+                  const running = ctx.runningTasks.get(taskId);
+                  if (!running) {
+                    return;
+                  }
+                  ctx.runningTasks.set(taskId, { ...running, ...patch });
+                },
+              },
+            );
+            result = agentOutcome.text;
+            agentRunId = agentOutcome.runId;
+            agentRunStatus = agentOutcome.runStatus;
           }
-          runOk = !result.startsWith('Error:');
+          runOk = current.workflowId ? !result.startsWith('Error:') : agentRunStatus === 'done';
         } catch (err) {
           result = `Error: ${String(err)}`;
           runOk = false;
         }
 
-        ctx.runningTasks.delete(taskId);
+        if (agentRunStatus === 'suspended') {
+          const running = ctx.runningTasks.get(taskId);
+          if (running) {
+            ctx.runningTasks.set(taskId, {
+              ...running,
+              agentRunId,
+              agentRunStatus: 'suspended',
+            });
+          }
+        } else {
+          ctx.runningTasks.delete(taskId);
+        }
         const finishedAt = Date.now();
         const deliverable = await createSchedulerDeliverableRecord(
           ctx,
@@ -1639,6 +1768,8 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
           ok: runOk,
           result: result.slice(0, 2000),
           agentId: current.agentId,
+          agentRunId,
+          agentRunStatus,
           workflowId: current.workflowId,
           workflowRunId,
           deliverableId: deliverable?.id,
@@ -1675,7 +1806,104 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
             ok: runOk,
             taskId,
             channel,
+            runId: agentRunId,
+            runStatus: agentRunStatus,
             result: result.slice(0, 500),
+            deliverableId: deliverable?.id,
+          },
+        };
+      }
+
+      case 'scheduler.resume': {
+        const { taskId } = (params ?? {}) as { taskId?: string };
+        if (!taskId) return buildErrorResponse(id, -32602, 'taskId is required');
+
+        const tasks = await readTasksFile(ctx.dataDir);
+        const current = tasks.find((t) => t.id === taskId);
+        if (!current) return buildErrorResponse(id, 404, `Task not found: ${taskId}`);
+        if (current.workflowId) {
+          return buildErrorResponse(id, 400, 'workflow-targeted scheduler tasks cannot be resumed');
+        }
+
+        const running = ctx.runningTasks.get(taskId);
+        if (!running?.agentRunId || running.agentRunStatus !== 'suspended') {
+          return buildErrorResponse(id, 409, `Task '${taskId}' does not have a suspended run to resume`);
+        }
+
+        const startedAt = Date.now();
+        ctx.runningTasks.set(taskId, {
+          ...running,
+          startedAt,
+          agentRunStatus: 'running',
+        });
+
+        const agentOutcome = await runAgentTask(
+          ctx,
+          current,
+          `sched-${current.id}-resume-${startedAt}`,
+          {
+            resumeRunId: running.agentRunId,
+            onRunState: (patch) => {
+              const currentRunning = ctx.runningTasks.get(taskId);
+              if (!currentRunning) {
+                return;
+              }
+              ctx.runningTasks.set(taskId, { ...currentRunning, ...patch });
+            },
+          },
+        );
+
+        if (agentOutcome.runStatus === 'suspended') {
+          const currentRunning = ctx.runningTasks.get(taskId);
+          if (currentRunning) {
+            ctx.runningTasks.set(taskId, {
+              ...currentRunning,
+              agentRunId: agentOutcome.runId,
+              agentRunStatus: 'suspended',
+            });
+          }
+        } else {
+          ctx.runningTasks.delete(taskId);
+        }
+
+        const finishedAt = Date.now();
+        const runOk = agentOutcome.runStatus === 'done';
+        const deliverable = await createSchedulerDeliverableRecord(
+          ctx,
+          current,
+          startedAt,
+          finishedAt,
+          runOk,
+          agentOutcome.text,
+        ).catch((e) => {
+          logger.warn('Failed to create scheduler deliverable', {
+            taskId: current.id,
+            error: String(e),
+          });
+          return null;
+        });
+        await appendScheduledTaskHistoryRecord(ctx.dataDir, {
+          taskId: current.id,
+          taskName: current.name,
+          runKey: makeSchedulerRunKey(current.id, startedAt),
+          startedAt,
+          finishedAt,
+          ok: runOk,
+          result: agentOutcome.text.slice(0, 2000),
+          agentId: current.agentId,
+          agentRunId: agentOutcome.runId,
+          agentRunStatus: agentOutcome.runStatus,
+          deliverableId: deliverable?.id,
+        }).catch((e) => logger.warn('Failed to write task run history', { error: String(e) }));
+
+        return {
+          id,
+          result: {
+            ok: runOk,
+            taskId,
+            runId: agentOutcome.runId,
+            runStatus: agentOutcome.runStatus,
+            result: agentOutcome.text.slice(0, 500),
             deliverableId: deliverable?.id,
           },
         };
@@ -1684,13 +1912,37 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
       case 'scheduler.cancel': {
         const { taskId } = (params ?? {}) as { taskId?: string };
         if (!taskId) return buildErrorResponse(id, -32602, 'taskId is required');
-        const ok = ctx.scheduler.cancel(taskId);
         const tasks = await readTasksFile(ctx.dataDir);
+        const current = tasks.find((t) => t.id === taskId);
+        const running = ctx.runningTasks.get(taskId);
+        let cancelledRunId: string | undefined;
+        let abortedActiveRun = false;
+        if (current && running?.agentRunId) {
+          const agentKernel = await getAgentKernelService(ctx);
+          const cancelled = await agentKernel.cancelRun(running.agentRunId, {
+            cancelPending: (agentId, queuedRunId) => {
+              ctx.agentQueues?.cancelPending(agentId, queuedRunId);
+            },
+            activeMessage: `Scheduled task '${current.name}' (${taskId}) cancelled.`,
+          });
+          abortedActiveRun = cancelled?.cancelled ?? false;
+          cancelledRunId = running.agentRunId;
+        }
+        ctx.runningTasks.delete(taskId);
+        const ok = ctx.scheduler.cancel(taskId);
         await writeTasksFile(
           ctx.dataDir,
           tasks.filter((t) => t.id !== taskId),
         );
-        return { id, result: { cancelled: ok, taskId } };
+        return {
+          id,
+          result: {
+            cancelled: ok,
+            taskId,
+            runId: cancelledRunId,
+            abortedActiveRun,
+          },
+        };
       }
 
       case 'scheduler.running':
@@ -2168,6 +2420,7 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
       case 'workflow.run':
       case 'workflow.runStatus':
       case 'workflow.cancel':
+      case 'workflow.resume':
       case 'workflow.history':
         return dispatchWorkflowRpc(method, id, params, ctx);
 

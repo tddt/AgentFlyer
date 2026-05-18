@@ -21,6 +21,8 @@ export interface ScheduledTaskRecord {
 export interface ScheduledTaskExecutionSummary {
   lastRunAt?: number;
   lastResult?: string;
+  lastAgentRunId?: string;
+  lastAgentRunStatus?: 'done' | 'error' | 'suspended';
   latestDeliverableId?: string;
 }
 
@@ -33,6 +35,8 @@ export function stripTaskExecutionSummary(
   const {
     lastRunAt: _lastRunAt,
     lastResult: _lastResult,
+    lastAgentRunId: _lastAgentRunId,
+    lastAgentRunStatus: _lastAgentRunStatus,
     latestDeliverableId: _latestDeliverableId,
     ...rest
   } = normalized;

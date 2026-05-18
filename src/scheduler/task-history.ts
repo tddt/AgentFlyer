@@ -11,6 +11,8 @@ export interface ScheduledTaskRunRecord {
   ok: boolean;
   result: string;
   agentId?: string;
+  agentRunId?: string;
+  agentRunStatus?: 'done' | 'error' | 'suspended';
   workflowId?: string;
   workflowRunId?: string;
   deliverableId?: string;
@@ -19,6 +21,8 @@ export interface ScheduledTaskRunRecord {
 export interface ScheduledTaskExecutionSummaryData {
   lastRunAt: number;
   lastResult: string;
+  lastAgentRunId?: string;
+  lastAgentRunStatus?: 'done' | 'error' | 'suspended';
   latestDeliverableId?: string;
 }
 
@@ -68,6 +72,8 @@ export function buildScheduledTaskExecutionSummaryById(
     summaryByTaskId.set(record.taskId, {
       lastRunAt: record.finishedAt,
       lastResult: record.result.slice(0, 500),
+      lastAgentRunId: record.agentRunId,
+      lastAgentRunStatus: record.agentRunStatus,
       latestDeliverableId: record.deliverableId,
     });
   }

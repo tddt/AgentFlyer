@@ -33,6 +33,8 @@ import {
   type FederationMessage,
   type MemoryQueryPayload,
   type MemoryResultPayload,
+  type TaskDelegatePayload,
+  type TaskResultPayload,
   signPayload,
   verifyMessage,
 } from './protocol.js';
@@ -56,6 +58,13 @@ export interface FederationNodeDeps {
   gatewayVersion: string;
   /** Optional memory store — when present, MEMORY_QUERY messages are answered. */
   memoryStore?: MemoryStore;
+  /**
+   * Optional handler for inbound TASK_DELEGATE messages from remote peers.
+   * When provided, this node accepts delegated agent turns and replies with TASK_RESULT.
+   * The callback should execute the instruction against the named local agent and return
+   * the agent’s output text.  Throw to indicate failure (peer gets TASK_RESULT.success=false).
+   */
+  onTaskDelegate?: (agentId: string, instruction: string, timeoutMs: number) => Promise<string>;
 }
 
 export class FederationNode {
@@ -67,6 +76,15 @@ export class FederationNode {
   private readonly federationPort: number;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
   private mdnsDiscovery: ReturnType<typeof createMdnsDiscovery> | null = null;
+  /** In-flight TASK_DELEGATE requests waiting for a TASK_RESULT reply from a remote peer. */
+  private readonly pendingTaskRequests = new Map<
+    string,
+    {
+      resolve: (output: string) => void;
+      reject: (err: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
 
   constructor(private readonly deps: FederationNodeDeps) {
     this.federationPort = deps.gatewayPort + FEDERATION_WS_PORT_OFFSET;
@@ -194,6 +212,47 @@ export class FederationNode {
         break;
       }
 
+      case 'TASK_DELEGATE': {
+        if (!this.deps.onTaskDelegate) break;
+        const d = msg.payload as TaskDelegatePayload;
+        const t0 = Date.now();
+        try {
+          const output = await this.deps.onTaskDelegate(d.agentId, d.instruction, d.timeoutMs);
+          const result: TaskResultPayload = {
+            requestId: d.requestId,
+            success: true,
+            output,
+            durationMs: Date.now() - t0,
+          };
+          await this.transport.send(fromPeerId, this.buildMessage('TASK_RESULT', result));
+        } catch (err) {
+          const result: TaskResultPayload = {
+            requestId: d.requestId,
+            success: false,
+            output: '',
+            errorMessage: String(err),
+            durationMs: Date.now() - t0,
+          };
+          await this.transport.send(fromPeerId, this.buildMessage('TASK_RESULT', result));
+        }
+        break;
+      }
+
+      case 'TASK_RESULT': {
+        const r = msg.payload as TaskResultPayload;
+        const pending = this.pendingTaskRequests.get(r.requestId);
+        if (pending) {
+          clearTimeout(pending.timer);
+          this.pendingTaskRequests.delete(r.requestId);
+          if (r.success) {
+            pending.resolve(r.output);
+          } else {
+            pending.reject(new Error(r.errorMessage ?? 'Remote task failed'));
+          }
+        }
+        break;
+      }
+
       default:
         break;
     }
@@ -316,5 +375,51 @@ export class FederationNode {
       this.nodeId,
       this.privateKeyPem,
     );
+  }
+
+  /**
+   * Delegate an agent turn to a specific remote peer.
+   * Sends TASK_DELEGATE and waits for TASK_RESULT, timing out after `timeoutMs`.
+   *
+   * @param peerNodeId  The remote node’s nodeId (from listPeers()).
+   * @param agentId     Target agent ID on the remote node.
+   * @param instruction User message / instruction to pass to the remote agent.
+   * @param opts        Optional `{ timeoutMs }` override (default 5 min).
+   * @returns           The remote agent’s output text.
+   * @throws            If the remote task fails or the request times out.
+   */
+  async delegateTask(
+    peerNodeId: string,
+    agentId: string,
+    instruction: string,
+    opts: { timeoutMs?: number } = {},
+  ): Promise<string> {
+    const requestId = ulid();
+    const timeoutMs = opts.timeoutMs ?? 5 * 60_000;
+
+    return new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingTaskRequests.delete(requestId);
+        reject(
+          new Error(
+            `delegateTask timed out after ${Math.round(timeoutMs / 1000)}s ` +
+              `(peer: ${peerNodeId}, agent: ${agentId})`,
+          ),
+        );
+      }, timeoutMs);
+
+      this.pendingTaskRequests.set(requestId, { resolve, reject, timer });
+
+      this.transport
+        .send(
+          peerNodeId,
+          this.buildMessage('TASK_DELEGATE', { requestId, agentId, instruction, timeoutMs }),
+        )
+        .catch((err: unknown) => {
+          clearTimeout(timer);
+          this.pendingTaskRequests.delete(requestId);
+          reject(err instanceof Error ? err : new Error(String(err)));
+        });
+    });
   }
 }

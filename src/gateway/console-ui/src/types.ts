@@ -118,6 +118,8 @@ export interface TaskInfo {
   lastRunAt?: number;
   nextRunAt?: number;
   lastResult?: string;
+  lastAgentRunId?: string;
+  lastAgentRunStatus?: 'done' | 'error' | 'suspended';
   latestDeliverableId?: string;
   advisory?: SchedulerTargetAdvisory;
 }
@@ -132,6 +134,8 @@ export interface RunningTaskInfo {
   startedAt: number;
   agentId?: string;
   workflowId?: string;
+  agentRunId?: string;
+  agentRunStatus?: 'running' | 'suspended';
 }
 
 export interface TaskRunRecord {
@@ -176,8 +180,8 @@ export interface LogEntry {
 
 export type ChatChunk =
   | { type: 'text_delta'; text: string }
-  | { type: 'queued'; position: number }
-  | { type: 'started'; queueDepth?: number }
+  | { type: 'queued'; position: number; runId?: string }
+  | { type: 'started'; queueDepth?: number; runId?: string; resumed?: boolean }
   | { type: 'thinking'; text: string }
   | { type: 'thinking_delta'; text: string }
   | { type: 'tool_use_delta'; id: string; name: string; inputJson: string }
@@ -191,7 +195,7 @@ export type ChatChunk =
       cacheWriteTokens?: number;
       stopReason: 'end_turn' | 'tool_use' | 'max_tokens' | 'stop_sequence';
     }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string; runId?: string };
 
 export interface SessionMetaInfo {
   sessionKey: string;

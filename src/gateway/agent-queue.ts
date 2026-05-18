@@ -7,6 +7,20 @@
  * Architecture ref: docs/04-technical-architecture.md §5.1
  * "同一 Agent 同时只运行一个任务（防止 LLM 上下文混乱）"
  */
+export class AgentQueueCancelledError extends Error {
+  readonly taskKey?: string;
+
+  constructor(taskKey?: string) {
+    super(taskKey ? `Queued task cancelled before start: ${taskKey}` : 'Queued task cancelled');
+    this.name = 'AgentQueueCancelledError';
+    this.taskKey = taskKey;
+  }
+}
+
+export function isAgentQueueCancelledError(error: unknown): error is AgentQueueCancelledError {
+  return error instanceof AgentQueueCancelledError;
+}
+
 export class AgentQueue {
   private _busy = false;
   private readonly _pending: Array<QueuedTask<unknown>> = [];
@@ -32,7 +46,7 @@ export class AgentQueue {
         hooks,
         taskKey: hooks?.taskKey,
         cancel: (): void => {
-          resolve(undefined as T);
+          reject(new AgentQueueCancelledError(hooks?.taskKey));
         },
         run: async (): Promise<void> => {
           try {

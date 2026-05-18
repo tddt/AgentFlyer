@@ -408,6 +408,10 @@ export function SchedulerTab() {
       ),
     [tasks],
   );
+  const runningByTaskId = useMemo(
+    () => new Map(runningTasks.map((task) => [task.taskId, task] as const)),
+    [runningTasks],
+  );
   const taskModalAgentAdvisory = useMemo(() => {
     if (!taskModal || taskModal.form.targetType !== 'agent') {
       return null;
@@ -565,6 +569,16 @@ export function SchedulerTab() {
     }
   };
 
+  const resumeTask = async (taskId: string) => {
+    try {
+      await rpc('scheduler.resume', { taskId });
+      toast('Task resumed', 'success');
+      refetch();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Resume failed', 'error');
+    }
+  };
+
   const removeTask = async (taskId: string) => {
     try {
       await rpc('scheduler.cancel', { taskId });
@@ -645,6 +659,7 @@ export function SchedulerTab() {
               const elapsedSec = Math.floor((nowTs - rt.startedAt) / 1000);
               const mins = Math.floor(elapsedSec / 60);
               const secs = elapsedSec % 60;
+              const suspended = rt.agentRunStatus === 'suspended';
               return (
                 <div
                   key={rt.taskId}
@@ -657,13 +672,39 @@ export function SchedulerTab() {
                     <span className="ml-2 text-xs" style={{ color: 'var(--af-text-faint)' }}>
                       {rt.workflowId ? `⚡ ${rt.workflowId}` : describeAgentTarget(rt.agentId, agents)}
                     </span>
+                    {rt.agentRunId ? (
+                      <div className="mt-1 font-mono text-[11px]" style={{ color: 'var(--af-text-faint)' }}>
+                        {t('scheduler.runId', { runId: rt.agentRunId })}
+                      </div>
+                    ) : null}
                   </div>
                   <span className="text-xs text-emerald-400 font-mono shrink-0">
                     {mins > 0 ? `${mins}m ` : ''}
                     {String(secs).padStart(2, '0')}s
                   </span>
-                  <span className="text-xs shrink-0" style={{ color: 'var(--af-text-faint)' }}>
-                  </span>
+                  <Badge variant={suspended ? 'yellow' : 'green'}>
+                    {suspended ? t('scheduler.status.suspended') : t('scheduler.status.running')}
+                  </Badge>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {suspended ? (
+                      <Button size="sm" variant="ghost" onClick={() => void resumeTask(rt.taskId)}>
+                        {t('scheduler.resume')}
+                      </Button>
+                    ) : null}
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      onClick={() =>
+                        setConfirmState({
+                          title: t('scheduler.confirm.deleteTitle'),
+                          message: t('scheduler.confirm.deleteMsg', { name: rt.taskName }),
+                          onConfirm: () => removeTask(rt.taskId),
+                        })
+                      }
+                    >
+                      {t('scheduler.delete')}
+                    </Button>
+                  </div>
                 </div>
               );
             })}
@@ -749,6 +790,9 @@ export function SchedulerTab() {
                   <td className="px-4 py-3 text-xs max-w-[360px]" style={{ color: 'var(--af-text-muted)' }}>
                     <div className="line-clamp-3">{task.lastResult ?? '—'}</div>
                     <div className="mt-1" style={{ color: 'var(--af-text-faint)' }}>
+                      {task.lastAgentRunStatus && task.lastAgentRunId
+                        ? `${task.lastAgentRunStatus} · ${task.lastAgentRunId}`
+                        : ''}
                     </div>
                     {task.latestDeliverableId && (
                       <button
@@ -761,6 +805,11 @@ export function SchedulerTab() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap gap-2">
+                      {runningByTaskId.get(task.id)?.agentRunStatus === 'suspended' ? (
+                        <Button size="sm" variant="ghost" onClick={() => void resumeTask(task.id)}>
+                          {t('scheduler.resume')}
+                        </Button>
+                      ) : null}
                       <Button size="sm" variant="ghost" onClick={() => openEdit(task)}>
                         {t('scheduler.edit')}
                       </Button>

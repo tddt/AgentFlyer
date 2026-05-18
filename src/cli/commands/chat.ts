@@ -153,8 +153,13 @@ export const chatCommand = defineCommand({
         const text = msg.text;
 
         if (text === '/clear') {
-          await runner.clearHistory();
-          process.stdout.write(chalk.gray('History cleared.\n'));
+          try {
+            await runner.clearHistory();
+            process.stdout.write(chalk.gray('History cleared.\n'));
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            process.stdout.write(chalk.yellow(`${message}\n`));
+          }
           return;
         }
         if (text === '/stats') {

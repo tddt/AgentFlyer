@@ -61,8 +61,16 @@ export interface WorkflowAgentStepRequest {
   agentId: string;
   message: string;
   threadKey: string;
+  delegatedRunId?: string;
   /** Called for each streamed text token from the LLM during this step. */
   onToken?: (token: string) => void;
+}
+
+export interface WorkflowAgentStepExecutionResult {
+  output: string;
+  delegatedAgentId?: string;
+  delegatedRunId?: string;
+  delegatedRunStatus?: 'ready' | 'waiting' | 'suspended' | 'done' | 'error';
 }
 
 export interface WorkflowHttpStepRequest {
@@ -74,7 +82,9 @@ export interface WorkflowHttpStepRequest {
 }
 
 export interface WorkflowRuntimeHandlers {
-  runAgentStep?(request: WorkflowAgentStepRequest): Promise<string>;
+  runAgentStep?(
+    request: WorkflowAgentStepRequest,
+  ): Promise<string | WorkflowAgentStepExecutionResult>;
   runHttpStep?(request: WorkflowHttpStepRequest): Promise<string>;
   /** Optional: called for each streamed text token from a running agent step. */
   onToken?(runId: string, stepId: string, token: string): void;
@@ -100,6 +110,9 @@ function cloneStepResults(stepResults: WorkflowStepResult[]): WorkflowStepResult
 interface WorkflowStepExecutionResult {
   output: string;
   superNodeTrace?: WorkflowStepResult['superNodeTrace'];
+  delegatedAgentId?: string;
+  delegatedRunId?: string;
+  delegatedRunStatus?: 'ready' | 'waiting' | 'suspended' | 'done' | 'error';
 }
 
 class WorkflowSuperNodeExecutionError extends Error {
@@ -116,6 +129,32 @@ function workflowThreadKey(runId: string, stepIndex: number, suffix?: string): s
   return suffix
     ? `workflow:${runId}:step${stepIndex}:${suffix}`
     : `workflow:${runId}:step${stepIndex}`;
+}
+
+function normalizeWorkflowAgentStepExecutionResult(
+  result: string | WorkflowAgentStepExecutionResult,
+): WorkflowAgentStepExecutionResult {
+  return typeof result === 'string' ? { output: result } : result;
+}
+
+function upsertStepResult(
+  stepResults: WorkflowStepResult[],
+  nextResult: WorkflowStepResult,
+): WorkflowStepResult[] {
+  const next = cloneStepResults(stepResults);
+  for (let index = next.length - 1; index >= 0; index -= 1) {
+    const current = next[index];
+    if (
+      current?.stepId === nextResult.stepId &&
+      current.delegatedRunStatus === 'suspended' &&
+      current.delegatedRunId === nextResult.delegatedRunId
+    ) {
+      next[index] = nextResult;
+      return next;
+    }
+  }
+  next.push(nextResult);
+  return next;
 }
 
 export class WorkflowProcessRuntime
@@ -283,16 +322,26 @@ export class WorkflowProcessRuntime
       extractStepVars(execution.output, step.id, step, stepVars, globals);
       prevOutputs.push(execution.output);
 
-      stepResults.push(
-        this.buildSuccessStepResult(step.id, execution.output, stepVars, execution.superNodeTrace, {
+      const successStepResult = this.buildSuccessStepResult(
+        step.id,
+        execution.output,
+        stepVars,
+        execution.superNodeTrace,
+        {
           startedAt: stepStartedAt,
           finishedAt: stepFinishedAt,
-        }),
+        },
+        {
+          delegatedAgentId: execution.delegatedAgentId,
+          delegatedRunId: execution.delegatedRunId,
+          delegatedRunStatus: execution.delegatedRunStatus,
+        },
       );
+      const nextStepResults = upsertStepResult(stepResults, successStepResult);
       const nextState = this.advanceState(
         state,
         {
-          stepResults,
+          stepResults: nextStepResults,
           prevOutputs,
           stepVars: serializeStepVars(stepVars),
         },
@@ -308,7 +357,39 @@ export class WorkflowProcessRuntime
       const messageText = error instanceof Error ? error.message : String(error);
       const superNodeTrace =
         error instanceof WorkflowSuperNodeExecutionError ? error.trace : undefined;
+      const delegated =
+        error && typeof error === 'object'
+          ? (error as {
+              delegatedAgentId?: string;
+              delegatedRunId?: string;
+              delegatedRunStatus?: 'ready' | 'waiting' | 'suspended' | 'done' | 'error';
+            })
+          : null;
       const errorFinishedAt = Date.now();
+      if (delegated?.delegatedRunStatus === 'suspended') {
+        return {
+          signal: 'SUSPENDED',
+          state: {
+            ...state,
+            currentAttempt: 0,
+            run: {
+              ...state.run,
+              status: 'suspended',
+              stepResults: upsertStepResult(stepResults, {
+                stepId: step.id,
+                error: messageText,
+                ...(delegated.delegatedAgentId
+                  ? { delegatedAgentId: delegated.delegatedAgentId }
+                  : {}),
+                ...(delegated.delegatedRunId ? { delegatedRunId: delegated.delegatedRunId } : {}),
+                delegatedRunStatus: 'suspended',
+                finishedAt: errorFinishedAt,
+                ...(superNodeTrace ? { superNodeTrace } : {}),
+              }),
+            },
+          },
+        };
+      }
       if (state.currentAttempt < maxRetries) {
         return {
           signal: 'RETRYABLE_ERROR',
@@ -321,12 +402,18 @@ export class WorkflowProcessRuntime
         };
       }
 
-      stepResults.push({
+      const failedStepResult: WorkflowStepResult = {
         stepId: step.id,
         error: messageText,
+        ...(delegated?.delegatedAgentId ? { delegatedAgentId: delegated.delegatedAgentId } : {}),
+        ...(delegated?.delegatedRunId ? { delegatedRunId: delegated.delegatedRunId } : {}),
+        ...(delegated?.delegatedRunStatus
+          ? { delegatedRunStatus: delegated.delegatedRunStatus }
+          : {}),
         finishedAt: errorFinishedAt,
         ...(superNodeTrace ? { superNodeTrace } : {}),
-      });
+      };
+      const nextStepResults = upsertStepResult(stepResults, failedStepResult);
       if (step.condition === 'on_success') {
         const finalError = buildError('WORKFLOW_STEP_FATAL_ERROR', messageText, false);
         return {
@@ -336,7 +423,7 @@ export class WorkflowProcessRuntime
             ...this.failState(state, finalError, errorFinishedAt),
             run: {
               ...state.run,
-              stepResults,
+              stepResults: nextStepResults,
               status: 'error',
               finishedAt: errorFinishedAt,
             },
@@ -348,7 +435,7 @@ export class WorkflowProcessRuntime
       const nextState = this.advanceState(
         state,
         {
-          stepResults,
+          stepResults: nextStepResults,
           prevOutputs: [
             ...prevOutputs,
             this.buildContinuationOutput(step.id, messageText, superNodeTrace),
@@ -407,17 +494,25 @@ export class WorkflowProcessRuntime
         const onToken = this.handlers.onToken
           ? (token: string) => this.handlers.onToken?.(state.run.runId, step.id, token)
           : undefined;
+        const execution = normalizeWorkflowAgentStepExecutionResult(
+          await this.handlers.runAgentStep({
+            runId: state.run.runId,
+            stepId: step.id,
+            agentId,
+            message: applyFormatInstruction(step, message),
+            threadKey: workflowThreadKey(state.run.runId, currentStepIndex),
+            delegatedRunId:
+              state.run.stepResults.findLast(
+                (result) =>
+                  result.stepId === step.id && result.delegatedRunStatus === 'suspended',
+              )?.delegatedRunId,
+            onToken,
+          }),
+        );
         return {
-          output: (
-            await this.handlers.runAgentStep({
-              runId: state.run.runId,
-              stepId: step.id,
-              agentId,
-              message: applyFormatInstruction(step, message),
-              threadKey: workflowThreadKey(state.run.runId, currentStepIndex),
-              onToken,
-            })
-          ).trim(),
+          ...execution,
+          delegatedAgentId: execution.delegatedAgentId ?? agentId,
+          output: execution.output.trim(),
         };
       }
       case 'transform': {
@@ -503,7 +598,8 @@ export class WorkflowProcessRuntime
       participantAgentIds.map(async (agentId, index) => {
         const rolePrompt = rolePrompts[index] ?? `补充视角 ${index + 1}`;
         try {
-          const output = await this.handlers.runAgentStep?.({
+          const execution = normalizeWorkflowAgentStepExecutionResult(
+            await this.handlers.runAgentStep?.({
             runId: state.run.runId,
             stepId: `${step.id}:participant:${index + 1}`,
             agentId,
@@ -520,12 +616,13 @@ export class WorkflowProcessRuntime
               currentStepIndex,
               `participant-${index + 1}`,
             ),
-          });
+            }),
+          );
 
           return {
             agentId,
             prompt: rolePrompt,
-            output: (output ?? '').trim(),
+            output: execution.output.trim(),
           };
         } catch (error) {
           return {
@@ -559,16 +656,19 @@ export class WorkflowProcessRuntime
     });
 
     try {
+      const execution = normalizeWorkflowAgentStepExecutionResult(
+        await this.handlers.runAgentStep({
+          runId: state.run.runId,
+          stepId: step.id,
+          agentId: coordinatorAgentId,
+          message: applyFormatInstruction(step, coordinatorPrompt),
+          threadKey: workflowThreadKey(state.run.runId, currentStepIndex, 'coordinator'),
+        }),
+      );
       return {
-        output: (
-          await this.handlers.runAgentStep({
-            runId: state.run.runId,
-            stepId: step.id,
-            agentId: coordinatorAgentId,
-            message: applyFormatInstruction(step, coordinatorPrompt),
-            threadKey: workflowThreadKey(state.run.runId, currentStepIndex, 'coordinator'),
-          })
-        ).trim(),
+        ...execution,
+        delegatedAgentId: execution.delegatedAgentId ?? coordinatorAgentId,
+        output: execution.output.trim(),
         superNodeTrace: trace,
       };
     } catch (error) {
@@ -660,12 +760,21 @@ export class WorkflowProcessRuntime
     stepVars: ReturnType<typeof deserializeStepVars>,
     superNodeTrace?: WorkflowStepResult['superNodeTrace'],
     timing?: { startedAt: number; finishedAt: number },
+    delegated?: Pick<
+      WorkflowStepResult,
+      'delegatedAgentId' | 'delegatedRunId' | 'delegatedRunStatus'
+    >,
   ): WorkflowStepResult {
     const varsSnapshot = snapshotVars(stepVars);
     return {
       stepId,
       output,
       ...(timing ? { startedAt: timing.startedAt, finishedAt: timing.finishedAt } : {}),
+      ...(delegated?.delegatedAgentId ? { delegatedAgentId: delegated.delegatedAgentId } : {}),
+      ...(delegated?.delegatedRunId ? { delegatedRunId: delegated.delegatedRunId } : {}),
+      ...(delegated?.delegatedRunStatus
+        ? { delegatedRunStatus: delegated.delegatedRunStatus }
+        : {}),
       ...(superNodeTrace ? { superNodeTrace } : {}),
       ...(Object.keys(varsSnapshot).length > 0 ? { varsSnapshot } : {}),
     };

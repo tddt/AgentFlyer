@@ -117,6 +117,14 @@ export interface AgentQueuedRunSummary {
   updatedAt: number;
 }
 
+export interface AgentCancelRunResult {
+  cancelled: boolean;
+  runId: string;
+  mode: 'queued' | 'ready' | 'active' | 'noop';
+  run?: AgentKernelRunRecord | null;
+  reason?: string;
+}
+
 type CompletionOutcome = { ok: true; result: TurnResult } | { ok: false; message: string };
 
 export interface AgentKernelServiceOptions {
@@ -242,12 +250,7 @@ export class AgentKernelService {
   async reserveQueuedTurn(input: AgentKernelTurnInput): Promise<{ runId: string }> {
     await this.initialize();
     const runId = input.runId ?? ulid();
-    const runner = this.runners.get(input.agentId);
-    const threadKey = input.threadKey?.trim()
-      ? input.threadKey
-      : runner
-        ? (runner.currentSessionKey as unknown as string).split(':').slice(2).join(':') || 'default'
-        : 'default';
+    const threadKey = input.threadKey?.trim() ? input.threadKey : 'default';
     const now = Date.now();
     this.queuedRuns.set(runId, {
       runId,
@@ -330,6 +333,8 @@ export class AgentKernelService {
     const pid = asProcessId(runId);
     const snapshot = this.kernel.getSnapshot(pid);
     if (snapshot) {
+      const runner = this.runners.get(snapshot.metadata.agentId ?? '');
+      runner?.forceReset(runId);
       // Mark as error in runRecords so future waiters see it immediately
       const errorRecord: AgentKernelRunRecord = {
         runId,
@@ -368,16 +373,27 @@ export class AgentKernelService {
     //
     // A 5-second per-run timeout is used so that a hung process in tests never
     // blocks afterEach indefinitely.
+    const DRAIN_TIMEOUT_MS = 5_000;
     const liveRunIds = this.kernel
       .listSnapshots()
       .filter((s) => s.processType === this.runtime.type)
       .map((s) => String(s.pid));
     if (liveRunIds.length > 0) {
-      const DRAIN_TIMEOUT_MS = 5_000;
       await Promise.allSettled(
         liveRunIds.map((runId) =>
           Promise.race([
             this.waitForCompletion(runId).catch(() => undefined),
+            new Promise<void>((resolve) => setTimeout(resolve, DRAIN_TIMEOUT_MS)),
+          ]),
+        ),
+      );
+    }
+    const inFlightSyscalls = Array.from(this.activeSyscallPromises);
+    if (inFlightSyscalls.length > 0) {
+      await Promise.allSettled(
+        inFlightSyscalls.map((promise) =>
+          Promise.race([
+            promise,
             new Promise<void>((resolve) => setTimeout(resolve, DRAIN_TIMEOUT_MS)),
           ]),
         ),
@@ -465,6 +481,90 @@ export class AgentKernelService {
     return cancelledRecord;
   }
 
+  async abortTurn(runId: string, message: string): Promise<void> {
+    await this.initialize();
+    const snapshot = this.kernel.getSnapshot(asProcessId(runId));
+    if (snapshot) {
+      try {
+        const state = this.snapshotToState(snapshot);
+        const agentId = state?.agentId ?? snapshot.metadata.agentId ?? '';
+        const runner = this.runners.get(agentId);
+        if (runner && state) {
+          runner.syncRuntimeState(state.threadKey, runId, state.runnerState.toolResultCache);
+          runner.forceReset(runId);
+        }
+        this.rememberRunRecord({
+          runId,
+          agentId,
+          threadKey: state?.threadKey ?? '',
+          processStatus: 'error',
+          phase: 'error',
+          createdAt: snapshot.createdAt,
+          updatedAt: Date.now(),
+          error: {
+            code: 'AGENT_TURN_ABORTED',
+            message,
+            retryable: false,
+          },
+        });
+      } catch {
+        // Best effort: abort should still complete even if state restore fails.
+      }
+      await this.kernel.deleteProcess(snapshot.pid);
+      this.activeSyscalls.delete(snapshot.pid);
+    }
+    this.completeRun(runId, { ok: false, message });
+  }
+
+  async cancelRun(
+    runId: string,
+    options?: {
+      cancelPending?: (agentId: string, runId: string) => void;
+      activeMessage?: string;
+    },
+  ): Promise<AgentCancelRunResult | null> {
+    await this.initialize();
+    const current = this.getRun(runId);
+    if (!current) {
+      return null;
+    }
+    if (current.processStatus === 'waiting' && current.phase === 'pending') {
+      options?.cancelPending?.(current.agentId, runId);
+      const cancelled = await this.cancelQueuedTurn(runId);
+      return {
+        cancelled: Boolean(cancelled),
+        runId,
+        mode: 'queued',
+        run: cancelled ?? current,
+      };
+    }
+    if (current.processStatus === 'ready') {
+      const cancelled = this.cancelReadyRun(runId);
+      return {
+        cancelled: Boolean(cancelled),
+        runId,
+        mode: 'ready',
+        run: cancelled ?? current,
+      };
+    }
+    if (options?.activeMessage) {
+      await this.abortTurn(runId, options.activeMessage);
+      return {
+        cancelled: true,
+        runId,
+        mode: 'active',
+        run: this.getRun(runId) ?? current,
+      };
+    }
+    return {
+      cancelled: false,
+      runId,
+      mode: 'noop',
+      run: current,
+      reason: 'Only queued runs can be cancelled currently.',
+    };
+  }
+
   async resumeTurn(runId: string): Promise<AgentKernelRunRecord | null> {
     await this.initialize();
     if (this.pumpPromise) {
@@ -484,6 +584,19 @@ export class AgentKernelService {
     const record = this.snapshotToRunRecord(resumed);
     this.schedulePump(0);
     return record;
+  }
+
+  subscribeRun(runId: string, listener: (chunk: StreamChunk) => void): () => void {
+    const subscriberSet = this.subscribers.get(runId) ?? new Set();
+    subscriberSet.add(listener);
+    this.subscribers.set(runId, subscriberSet);
+    return () => {
+      const current = this.subscribers.get(runId);
+      current?.delete(listener);
+      if (current && current.size === 0) {
+        this.subscribers.delete(runId);
+      }
+    };
   }
 
   async *streamTurn(input: AgentKernelTurnInput): AsyncGenerator<StreamChunk, TurnResult | null> {
@@ -506,9 +619,7 @@ export class AgentKernelService {
     };
 
     const started = await this.startTurn(input);
-    const subscriberSet = this.subscribers.get(started.runId) ?? new Set();
-    subscriberSet.add(pushChunk);
-    this.subscribers.set(started.runId, subscriberSet);
+    const unsubscribe = this.subscribeRun(started.runId, pushChunk);
 
     try {
       const completionPromise = this.waitForCompletion(started.runId)
@@ -524,11 +635,7 @@ export class AgentKernelService {
         });
       return yield* this.consumeQueuedStream(queue, waitForChunk, () => ended, completionPromise);
     } finally {
-      const current = this.subscribers.get(started.runId);
-      current?.delete(pushChunk);
-      if (current && current.size === 0) {
-        this.subscribers.delete(started.runId);
-      }
+      unsubscribe();
     }
   }
 

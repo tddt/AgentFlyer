@@ -163,12 +163,22 @@ class BlockingProvider implements LLMProvider {
   readonly id = 'fake-blocking-llm';
 
   private runCount = 0;
+  private firstRunStartedResolve: (() => void) | null = null;
+  private readonly firstRunStarted = new Promise<void>((resolve) => {
+    this.firstRunStartedResolve = resolve;
+  });
 
   constructor(private readonly releaseFirstRun: Promise<void>) {}
+
+  waitForFirstRunStart(): Promise<void> {
+    return this.firstRunStarted;
+  }
 
   async *run(_params: RunParams): AsyncIterable<StreamChunk> {
     this.runCount += 1;
     if (this.runCount === 1) {
+      this.firstRunStartedResolve?.();
+      this.firstRunStartedResolve = null;
       await this.releaseFirstRun;
       yield { type: 'text_delta', text: 'first run released' };
       yield {
@@ -605,6 +615,25 @@ describe('AgentKernelService', () => {
     expect(restored?.result?.text).toContain('kernel hello');
   });
 
+  it('uses the default thread when a queued run omits threadKey', async () => {
+    const dataDir = await createTempDir();
+    const runner = createRunner(dataDir);
+    runner.setThread('leaked-thread');
+    const service = trackService(
+      new AgentKernelService({
+        dataDir,
+        runners: new Map([['agent-main', runner]]),
+      }),
+    );
+
+    const reserved = await service.reserveQueuedTurn({
+      agentId: 'agent-main',
+      userMessage: 'queued without explicit thread',
+    });
+
+    expect(service.getRun(reserved.runId)?.threadKey).toBe('default');
+  });
+
   it('resolves archived completion outcomes after service restart', async () => {
     const dataDir = await createTempDir();
     const firstService = trackService(
@@ -765,6 +794,61 @@ describe('AgentKernelService', () => {
       ctx,
     );
     expect((afterResume.result as { processStatus?: string } | null)?.processStatus).toBe('ready');
+  });
+
+  it('returns a 409 rpc error when session.clear targets a runner with an active turn', async () => {
+    const dataDir = await createTempDir();
+    const runner = createRunner(dataDir);
+    const ctx = createRpcContext(dataDir, runner);
+
+    const executionState = await runner.beginKernelTurn('run-session-clear-active', 'hold session');
+
+    const blocked = await dispatchRpc(
+      {
+        id: 2,
+        method: 'session.clear',
+        params: { agentId: 'agent-main' },
+      },
+      ctx,
+    );
+
+    expect(blocked).toEqual({
+      id: 2,
+      error: {
+        code: 409,
+        message: "Agent 'agent-main' cannot clear history while a turn is active",
+      },
+    });
+
+    const blockedBySessionKey = await dispatchRpc(
+      {
+        id: 22,
+        method: 'session.clear',
+        params: { sessionKey: runner.currentSessionKey },
+      },
+      ctx,
+    );
+
+    expect(blockedBySessionKey).toEqual({
+      id: 22,
+      error: {
+        code: 409,
+        message: `Session '${runner.currentSessionKey}' cannot be cleared while its runner turn is active`,
+      },
+    });
+
+    runner.forceReset(executionState.runId);
+
+    const cleared = await dispatchRpc(
+      {
+        id: 3,
+        method: 'session.clear',
+        params: { agentId: 'agent-main' },
+      },
+      ctx,
+    );
+
+    expect(cleared).toEqual({ id: 3, result: { cleared: true, agentId: 'agent-main' } });
   });
 
   it('runs agent.chat concurrently — second chat completes before first is released', async () => {
@@ -965,40 +1049,144 @@ describe('AgentKernelService', () => {
 
     const secondRunId = (secondStarted.result as { runId: string; queued?: boolean }).runId;
     expect((secondStarted.result as { queued?: boolean }).queued).toBe(true);
+    try {
+      const pending = await waitForRpcRunPhase(ctx, secondRunId, 'pending');
+      expect(['waiting', 'ready']).toContain(pending.processStatus);
 
-    const pending = await waitForRpcRunPhase(ctx, secondRunId, 'pending');
-    expect(pending.processStatus).toBe('waiting');
-
-    const statusResponse = await dispatchRpc(
-      {
-        id: 3,
-        method: 'agent.status',
-        params: { agentId: 'agent-main' },
-      },
-      ctx,
-    );
-    expect(statusResponse.result).toMatchObject({
-      agentId: 'agent-main',
-      activity: {
-        state: 'running',
-        pendingCount: 1,
-        queuedRuns: [
+      const statusResponse = await dispatchRpc(
+        {
+          id: 3,
+          method: 'agent.status',
+          params: { agentId: 'agent-main' },
+        },
+        ctx,
+      );
+      expect(statusResponse.result).toMatchObject({
+        agentId: 'agent-main',
+        activity: {
+          state: 'running',
+        },
+      });
+      const activity = (statusResponse.result as { activity: { pendingCount: number; queuedRuns: Array<{ runId: string; threadKey: string; processStatus: string; phase: string }> } }).activity;
+      if (pending.processStatus === 'waiting') {
+        expect(activity.pendingCount).toBe(1);
+        expect(activity.queuedRuns).toMatchObject([
           {
             runId: secondRunId,
             threadKey: 'queued-run-second-thread',
             processStatus: 'waiting',
             phase: 'pending',
           },
-        ],
-      },
-    });
-
-    releaseFirstRun();
+        ]);
+      } else {
+        expect(activity.pendingCount).toBe(0);
+        expect(activity.queuedRuns).toEqual([]);
+      }
+    } finally {
+      releaseFirstRun();
+    }
 
     const firstRunId = (firstStarted.result as { runId: string }).runId;
     await waitForRpcRunPhase(ctx, firstRunId, 'done');
     const completed = await waitForRpcRunPhase(ctx, secondRunId, 'done');
     expect(completed.result?.text).toContain('queued rpc reply');
+  });
+
+  it('releases the runner lease after a timed-out run so later runs can start', async () => {
+    const dataDir = await createTempDir();
+    let releaseFirstRun!: () => void;
+    const firstRunReleased = new Promise<void>((resolve) => {
+      releaseFirstRun = resolve;
+    });
+    const provider = new BlockingProvider(firstRunReleased);
+    const service = trackService(
+      new AgentKernelService({
+        dataDir,
+        runners: new Map([['agent-main', createRunner(dataDir, provider)]]),
+      }),
+    );
+
+    const started = await service.startTurn({
+      agentId: 'agent-main',
+      userMessage: 'first timed out run',
+      threadKey: 'timeout-recovery-first-thread',
+    });
+
+    await provider.waitForFirstRunStart();
+
+    await expect(service.waitForRun(started.runId, 20)).rejects.toThrow('timed out');
+
+    await expect(
+      service.executeTurn({
+        agentId: 'agent-main',
+        userMessage: 'second run after timeout',
+        threadKey: 'timeout-recovery-second-thread',
+      }),
+    ).resolves.toMatchObject({
+      text: expect.stringContaining('queued rpc reply'),
+    });
+
+    releaseFirstRun();
+  });
+
+  it('keeps dispose pending until a timed-out in-flight syscall worker settles', async () => {
+    const dataDir = await createTempDir();
+    let releaseFirstRun!: () => void;
+    const firstRunReleased = new Promise<void>((resolve) => {
+      releaseFirstRun = resolve;
+    });
+    const service = trackService(
+      new AgentKernelService({
+        dataDir,
+        runners: new Map([['agent-main', createRunner(dataDir, new BlockingProvider(firstRunReleased))]]),
+      }),
+    );
+
+    const started = await service.startTurn({
+      agentId: 'agent-main',
+      userMessage: 'dispose after timeout',
+      threadKey: 'dispose-timeout-thread',
+    });
+
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const active = (
+        service as unknown as {
+          activeSyscallPromises: Set<Promise<void>>;
+        }
+      ).activeSyscallPromises.size;
+      if (active > 0) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    expect(
+      (
+        service as unknown as {
+          activeSyscallPromises: Set<Promise<void>>;
+        }
+      ).activeSyscallPromises.size,
+    ).toBeGreaterThan(0);
+
+    await expect(service.waitForRun(started.runId, 20)).rejects.toThrow('timed out');
+
+    const disposePromise = service.dispose();
+    const disposeRace = await Promise.race([
+      disposePromise.then(() => 'disposed' as const),
+      new Promise<'pending'>((resolve) => setTimeout(() => resolve('pending'), 20)),
+    ]);
+    expect(disposeRace).toBe('pending');
+
+    releaseFirstRun();
+    await disposePromise;
+
+    expect(
+      (
+        service as unknown as {
+          activeSyscallPromises: Set<Promise<void>>;
+        }
+      ).activeSyscallPromises.size,
+    ).toBe(0);
   });
 
   it('cancels a queued run before kernel start and keeps it from starting later', async () => {

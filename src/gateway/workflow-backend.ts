@@ -161,6 +161,9 @@ export interface WorkflowStepResult {
   /** Streaming-in-progress or final output text. */
   output?: string;
   error?: string;
+  delegatedAgentId?: string;
+  delegatedRunId?: string;
+  delegatedRunStatus?: 'ready' | 'waiting' | 'suspended' | 'done' | 'error';
   /** Unix timestamp (ms) when this step started executing. */
   startedAt?: number;
   /** Unix timestamp (ms) when this step finished (success or error). */
@@ -186,7 +189,7 @@ export interface WorkflowRunRecord {
   input: string;
   startedAt: number;
   finishedAt?: number;
-  status: 'running' | 'done' | 'error' | 'cancelled';
+  status: 'running' | 'suspended' | 'done' | 'error' | 'cancelled';
   stepResults: WorkflowStepResult[];
   latestDeliverableId?: string;
   /** If this run was forked from another, the source run ID. */
@@ -1085,6 +1088,7 @@ export type WorkflowRpcMethod =
   | 'workflow.run'
   | 'workflow.runStatus'
   | 'workflow.cancel'
+  | 'workflow.resume'
   | 'workflow.history'
   | 'workflow.retryFromStep'
   | 'workflow.skipStep';
@@ -1213,6 +1217,22 @@ export async function dispatchWorkflowRpc(
       }
       await service.cancelRun(runId);
       return ok(id, { cancelled: true, runId });
+    }
+
+    case 'workflow.resume': {
+      const { runId } = (params ?? {}) as { runId?: string };
+      if (!runId) return err(id, -32602, 'runId is required');
+      const service = await getWorkflowKernelService(ctx);
+      const liveRun = service.getRun(runId);
+      if (!liveRun) return err(id, 404, `Run not found: ${runId}`);
+      if (liveRun.status !== 'suspended') {
+        return ok(id, {
+          resumed: false,
+          reason: `Run status is already '${liveRun.status}'`,
+        });
+      }
+      const resumed = await service.resumeRun(runId);
+      return ok(id, { resumed: true, runId, status: resumed?.status ?? 'running' });
     }
 
     case 'workflow.history': {

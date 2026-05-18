@@ -8,6 +8,7 @@ import {
 } from '../core/kernel/index.js';
 import type { StreamChunk } from '../core/types.js';
 import { asProcessId } from '../core/types.js';
+import type { ProcessStatus } from '../core/kernel/types.js';
 import { drainWaitingAgentSyscalls } from './kernel-syscall-broker.js';
 import {
   type AgentTurnProcessInput,
@@ -50,6 +51,24 @@ export interface ExecuteAgentTurnViaKernelOptions {
   onChunk?: (chunk: StreamChunk) => void;
 }
 
+export interface AgentTurnKernelControlOptions {
+  runners: AgentRunnerResolver;
+  dataDir?: string;
+}
+
+export interface AgentTurnKernelRunRecord {
+  runId: string;
+  agentId: string;
+  threadKey: string;
+  processStatus: ProcessStatus;
+  phase: AgentTurnProcessState['phase'];
+  createdAt: number;
+  updatedAt: number;
+  result?: TurnResult;
+  sessionKey?: string;
+  error?: AgentTurnProcessState['error'];
+}
+
 function resolveRunner(runners: AgentRunnerResolver, agentId: string): AgentRunner | undefined {
   return runners instanceof Map ? runners.get(agentId) : runners(agentId);
 }
@@ -77,6 +96,7 @@ class AgentKernelTurnExecutor {
   >();
   private readonly finalizing = new Set<string>();
   private readonly suspendedRuns = new Set<string>();
+  private readonly runRecords = new Map<string, AgentTurnKernelRunRecord>();
   private resolveRunnerFn: (agentId: string) => AgentRunner | undefined;
   private readonly chunkSubscribers = new Map<string, Set<(chunk: StreamChunk) => void>>();
   private readonly activitySubscribers = new Map<string, Set<() => void>>();
@@ -163,6 +183,38 @@ class AgentKernelTurnExecutor {
     return await this.waitForCompletion(started.runId);
   }
 
+  async waitForRun(runId: string): Promise<TurnResult> {
+    return await this.waitForCompletion(runId);
+  }
+
+  getRun(runId: string): AgentTurnKernelRunRecord | null {
+    const snapshot = this.kernel.getSnapshot(asProcessId(runId));
+    if (snapshot) {
+      return this.snapshotToRunRecord(snapshot);
+    }
+    return this.runRecords.get(runId) ?? null;
+  }
+
+  async resumeTurn(runId: string): Promise<AgentTurnKernelRunRecord | null> {
+    await this.initialize();
+    if (this.pumpPromise) {
+      await this.pumpPromise;
+    }
+    const pid = asProcessId(runId);
+    const snapshot = this.kernel.getSnapshot(pid);
+    if (!snapshot) {
+      return this.runRecords.get(runId) ?? null;
+    }
+    const current = this.snapshotToRunRecord(snapshot);
+    if (snapshot.status !== 'suspended') {
+      return current;
+    }
+    this.runRecords.delete(runId);
+    const resumed = await this.kernel.resumeProcess(pid);
+    this.schedulePump(0);
+    return this.snapshotToRunRecord(resumed);
+  }
+
   async abortTurn(runId: string, message: string): Promise<void> {
     await this.initialize();
     const snapshot = this.kernel.getSnapshot(asProcessId(runId));
@@ -171,9 +223,23 @@ class AgentKernelTurnExecutor {
         const state = this.runtime.deserialize(snapshot.state) as AgentTurnProcessState;
         const runner = this.resolveRunnerFn(state.agentId);
         if (runner) {
-          runner.restoreState(state.runnerState);
-          runner.forceReset();
+          runner.syncRuntimeState(state.threadKey, runId, state.runnerState.toolResultCache);
+          runner.forceReset(runId);
         }
+        this.runRecords.set(runId, {
+          runId,
+          agentId: state.agentId,
+          threadKey: state.threadKey,
+          processStatus: 'error',
+          phase: 'error',
+          createdAt: snapshot.createdAt,
+          updatedAt: Date.now(),
+          error: {
+            code: 'AGENT_TURN_ABORTED',
+            message,
+            retryable: false,
+          },
+        });
       } catch {
         // Best effort: timeout cleanup should not fail if lease recovery is unavailable.
       }
@@ -289,24 +355,38 @@ class AgentKernelTurnExecutor {
       .listSnapshots()
       .filter((snapshot) => snapshot.processType === this.runtime.type);
     for (const snapshot of snapshots) {
+      const runId = String(snapshot.pid);
+      const previousRecord = this.runRecords.get(runId) ?? null;
       if (snapshot.status !== 'suspended') {
-        this.suspendedRuns.delete(String(snapshot.pid));
+        this.suspendedRuns.delete(runId);
+      }
+      if (snapshot.status === 'suspended') {
+        this.runRecords.set(runId, this.snapshotToRunRecord(snapshot));
+      } else if (snapshot.status !== 'done' && snapshot.status !== 'error') {
+        this.runRecords.delete(runId);
       }
       if (snapshot.status === 'done' || snapshot.status === 'error') {
         await this.finalizeSnapshot(snapshot);
       } else if (snapshot.status === 'suspended') {
-        this.completeSuspendedSnapshot(snapshot);
+        this.completeSuspendedSnapshot(snapshot, previousRecord);
       }
     }
   }
 
-  private completeSuspendedSnapshot(snapshot: KernelProcessSnapshot): void {
+  private completeSuspendedSnapshot(
+    snapshot: KernelProcessSnapshot,
+    previousRecord: AgentTurnKernelRunRecord | null,
+  ): void {
     const runId = String(snapshot.pid);
-    if (this.suspendedRuns.has(runId)) {
+    if (
+      this.suspendedRuns.has(runId) &&
+      previousRecord?.processStatus === 'suspended' &&
+      previousRecord.updatedAt === snapshot.updatedAt
+    ) {
       return;
     }
     this.suspendedRuns.add(runId);
-    const state = this.runtime.deserialize(snapshot.state) as AgentTurnProcessState;
+    const state = this.snapshotToState(snapshot);
     this.completeRun(runId, {
       ok: false,
       message: state.error?.message ?? 'Agent turn suspended',
@@ -320,7 +400,8 @@ class AgentKernelTurnExecutor {
     }
     this.finalizing.add(runId);
     try {
-      const state = this.runtime.deserialize(snapshot.state) as AgentTurnProcessState;
+      const state = this.snapshotToState(snapshot);
+      this.runRecords.set(runId, this.snapshotToRunRecord(snapshot));
       if (state.phase === 'done' && state.result) {
         this.completeRun(runId, { ok: true, result: state.result });
       } else {
@@ -352,6 +433,13 @@ class AgentKernelTurnExecutor {
   }
 
   private async waitForCompletion(runId: string): Promise<TurnResult> {
+    const archivedOutcome = this.getArchivedCompletionOutcome(runId);
+    if (archivedOutcome) {
+      if (archivedOutcome.ok) {
+        return archivedOutcome.result;
+      }
+      throw new Error(archivedOutcome.message);
+    }
     const outcome = this.completions.get(runId);
     if (outcome) {
       this.completions.delete(runId);
@@ -375,11 +463,55 @@ class AgentKernelTurnExecutor {
       this.completionWaiters.set(runId, waiters);
     });
   }
+
+  private getArchivedCompletionOutcome(
+    runId: string,
+  ): { ok: true; result: TurnResult } | { ok: false; message: string } | null {
+    const record = this.runRecords.get(runId);
+    if (!record) {
+      return null;
+    }
+    if (record.phase === 'done' && record.result) {
+      return { ok: true, result: record.result };
+    }
+    if (
+      record.processStatus === 'error' ||
+      record.processStatus === 'suspended' ||
+      record.phase === 'error' ||
+      record.phase === 'suspended'
+    ) {
+      return {
+        ok: false,
+        message: record.error?.message ?? 'Agent turn failed',
+      };
+    }
+    return null;
+  }
+
+  private snapshotToState(snapshot: KernelProcessSnapshot): AgentTurnProcessState {
+    return this.runtime.deserialize(snapshot.state) as AgentTurnProcessState;
+  }
+
+  private snapshotToRunRecord(snapshot: KernelProcessSnapshot): AgentTurnKernelRunRecord {
+    const state = this.snapshotToState(snapshot);
+    return {
+      runId: String(snapshot.pid),
+      agentId: state.agentId,
+      threadKey: state.threadKey,
+      processStatus: snapshot.status,
+      phase: state.phase,
+      createdAt: snapshot.createdAt,
+      updatedAt: snapshot.updatedAt,
+      result: state.result,
+      sessionKey: state.result?.sessionKey,
+      error: state.error,
+    };
+  }
 }
 
 const sharedExecutors = new Map<string, Promise<AgentKernelTurnExecutor>>();
 
-function buildExecutorKey(options: ExecuteAgentTurnViaKernelOptions): string | null {
+function buildExecutorKey(options: AgentTurnKernelControlOptions): string | null {
   if (!options.dataDir) {
     return null;
   }
@@ -393,7 +525,7 @@ function buildExecutorKey(options: ExecuteAgentTurnViaKernelOptions): string | n
 }
 
 async function getExecutor(
-  options: ExecuteAgentTurnViaKernelOptions,
+  options: AgentTurnKernelControlOptions,
 ): Promise<AgentKernelTurnExecutor> {
   const key = buildExecutorKey(options);
   if (!key) {
@@ -421,6 +553,41 @@ async function getExecutor(
   const executor = await created;
   executor.setRunnerResolver(options.runners);
   return executor;
+}
+
+export async function startAgentTurnViaKernel(
+  options: AgentTurnKernelControlOptions & { input: AgentTurnProcessInput },
+): Promise<{ runId: string }> {
+  const executor = await getExecutor(options);
+  return await executor.startTurn(options.input);
+}
+
+export async function waitForAgentTurnViaKernel(
+  options: AgentTurnKernelControlOptions & { runId: string },
+): Promise<TurnResult> {
+  const executor = await getExecutor(options);
+  return await executor.waitForRun(options.runId);
+}
+
+export async function getAgentTurnRunViaKernel(
+  options: AgentTurnKernelControlOptions & { runId: string },
+): Promise<AgentTurnKernelRunRecord | null> {
+  const executor = await getExecutor(options);
+  return executor.getRun(options.runId);
+}
+
+export async function resumeAgentTurnViaKernel(
+  options: AgentTurnKernelControlOptions & { runId: string },
+): Promise<AgentTurnKernelRunRecord | null> {
+  const executor = await getExecutor(options);
+  return await executor.resumeTurn(options.runId);
+}
+
+export async function abortAgentTurnViaKernel(
+  options: AgentTurnKernelControlOptions & { runId: string; message: string },
+): Promise<void> {
+  const executor = await getExecutor(options);
+  await executor.abortTurn(options.runId, options.message);
 }
 
 export async function executeAgentTurnViaKernel(

@@ -1,7 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ulid } from 'ulid';
-import { executeAgentTurnViaKernel } from '../agent/kernel-turn-executor.js';
+import {
+  getAgentTurnRunViaKernel,
+  resumeAgentTurnViaKernel,
+  startAgentTurnViaKernel,
+  waitForAgentTurnViaKernel,
+} from '../agent/kernel-turn-executor.js';
 import type { AgentRunner } from '../agent/runner.js';
 import { createLogger } from '../core/logger.js';
 import { type AgentId, type TaskId, asTaskId } from '../core/types.js';
@@ -13,7 +18,8 @@ export interface TaskRecord {
   taskId: TaskId;
   agentId: AgentId;
   instruction: string;
-  status: 'pending' | 'running' | 'done' | 'error' | 'cancelled';
+  status: 'pending' | 'running' | 'suspended' | 'done' | 'error' | 'cancelled';
+  runId?: string;
   output?: string;
   error?: string;
   createdAt: number;
@@ -107,37 +113,90 @@ export class MeshTaskDispatcher {
     this.tasks.set(taskId, record);
     this.saveTasks();
 
-    // Run asynchronously
-    this.runTask(taskId, runner, instruction).catch((err) => {
-      logger.error('Task failed unexpectedly', { taskId, error: String(err) });
-    });
-
-    return taskId;
-  }
-
-  private async runTask(taskId: TaskId, runner: AgentRunner, instruction: string): Promise<void> {
-    const record = this.tasks.get(taskId);
-    if (!record) return;
-
-    record.status = 'running';
-    record.updatedAt = Date.now();
-    this.saveTasks();
-
     try {
-      const result = await executeAgentTurnViaKernel({
-        runners: new Map([[record.agentId, runner]]),
+      const started = await startAgentTurnViaKernel({
+        runners: new Map([[agentId, runner]]),
         dataDir: this.dataDir,
         input: {
-          agentId: record.agentId,
+          agentId,
           userMessage: instruction,
           threadKey: `mesh-task-${taskId}`,
         },
       });
-      record.status = 'done';
-      record.output = result.text;
+      record.status = 'running';
+      record.runId = started.runId;
+      record.updatedAt = Date.now();
+      this.saveTasks();
+      this.watchTask(taskId, runner).catch((err) => {
+        logger.error('Task failed unexpectedly', { taskId, error: String(err) });
+      });
     } catch (err) {
       record.status = 'error';
       record.error = String(err);
+      record.updatedAt = Date.now();
+      this.saveTasks();
+    }
+
+    return taskId;
+  }
+
+  async resume(taskId: TaskId): Promise<TaskRecord | null> {
+    const record = this.tasks.get(taskId);
+    if (!record) {
+      return null;
+    }
+    if (record.status !== 'suspended' || !record.runId) {
+      return record;
+    }
+    const runner = this.runners.get(record.agentId);
+    if (!runner) {
+      record.status = 'error';
+      record.error = `Agent '${record.agentId}' is no longer available.`;
+      record.updatedAt = Date.now();
+      this.saveTasks();
+      return record;
+    }
+
+    await resumeAgentTurnViaKernel({
+      runners: new Map([[record.agentId, runner]]),
+      dataDir: this.dataDir,
+      runId: record.runId,
+    });
+    record.status = 'running';
+    record.error = undefined;
+    record.updatedAt = Date.now();
+    this.saveTasks();
+    this.watchTask(taskId, runner).catch((err) => {
+      logger.error('Task failed unexpectedly after resume', { taskId, error: String(err) });
+    });
+    return record;
+  }
+
+  private async watchTask(taskId: TaskId, runner: AgentRunner): Promise<void> {
+    const record = this.tasks.get(taskId);
+    if (!record?.runId) return;
+
+    try {
+      const result = await waitForAgentTurnViaKernel({
+        runners: new Map([[record.agentId, runner]]),
+        dataDir: this.dataDir,
+        runId: record.runId,
+      });
+      record.status = 'done';
+      record.output = result.text;
+    } catch (err) {
+      const current = await getAgentTurnRunViaKernel({
+        runners: new Map([[record.agentId, runner]]),
+        dataDir: this.dataDir,
+        runId: record.runId,
+      });
+      if (current?.processStatus === 'suspended' || current?.phase === 'suspended') {
+        record.status = 'suspended';
+        record.error = current.error?.message ?? String(err);
+      } else {
+        record.status = 'error';
+        record.error = String(err);
+      }
     } finally {
       record.updatedAt = Date.now();
       this.saveTasks();
@@ -155,7 +214,11 @@ export class MeshTaskDispatcher {
   private normalizeInterruptedTasks(now = Date.now()): void {
     let mutated = false;
     for (const record of this.tasks.values()) {
-      if (record.status === 'pending' || record.status === 'running') {
+      if (
+        record.status === 'pending' ||
+        record.status === 'running' ||
+        record.status === 'suspended'
+      ) {
         record.status = 'error';
         record.error = 'Task interrupted by gateway restart before completion.';
         record.updatedAt = now;

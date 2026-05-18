@@ -38,6 +38,7 @@ function createWorkflow(): WorkflowDef {
 
 function createRunner(): AgentRunner {
   let threadKey = 'default';
+  let activeRunId: string | null = null;
   return {
     setThread(nextThreadKey: string) {
       threadKey = nextThreadKey;
@@ -54,10 +55,21 @@ function createRunner(): AgentRunner {
     restoreState(state: { threadKey: string }) {
       threadKey = state.threadKey;
     },
+    syncRuntimeState(nextThreadKey: string, runId: string | null) {
+      threadKey = nextThreadKey;
+      activeRunId = runId;
+    },
     get currentSessionKey() {
       return `agent:agent-main:${threadKey}`;
     },
+    get isRunning() {
+      return activeRunId !== null;
+    },
+    forceReset() {
+      activeRunId = null;
+    },
     async beginKernelTurn(runId: string, message: string) {
+      activeRunId = runId;
       return {
         runId,
         userMessage: message,
@@ -84,6 +96,7 @@ function createRunner(): AgentRunner {
       totalInputTokens: number;
       totalOutputTokens: number;
     }) {
+      activeRunId = null;
       const text = `reply:${state.userMessage}`;
       return {
         state: {
@@ -108,6 +121,7 @@ function createRunner(): AgentRunner {
 
 function createHungRunner(): AgentRunner {
   let threadKey = 'default';
+  let activeRunId: string | null = null;
   return {
     setThread(nextThreadKey: string) {
       threadKey = nextThreadKey;
@@ -124,10 +138,21 @@ function createHungRunner(): AgentRunner {
     restoreState(state: { threadKey: string }) {
       threadKey = state.threadKey;
     },
+    syncRuntimeState(nextThreadKey: string, runId: string | null) {
+      threadKey = nextThreadKey;
+      activeRunId = runId;
+    },
     get currentSessionKey() {
       return `agent:agent-main:${threadKey}`;
     },
+    get isRunning() {
+      return activeRunId !== null;
+    },
+    forceReset() {
+      activeRunId = null;
+    },
     async beginKernelTurn(runId: string, message: string) {
+      activeRunId = runId;
       return {
         runId,
         userMessage: message,
@@ -175,12 +200,14 @@ function createQueuedRunner(): { runner: AgentRunner; release: () => void; waitF
         promptLayerHashes: [],
         cachedSystemPrompt: null,
         toolResultCache: [],
-        activeKernelRunId: activeRunId,
       };
     },
-    restoreState(state: { threadKey: string; activeKernelRunId?: string | null }) {
+    restoreState(state: { threadKey: string }) {
       threadKey = state.threadKey;
-      activeRunId = state.activeKernelRunId ?? null;
+    },
+    syncRuntimeState(nextThreadKey: string, runId: string | null) {
+      threadKey = nextThreadKey;
+      activeRunId = runId;
     },
     get currentSessionKey() {
       return `agent:agent-main:${threadKey}`;
@@ -303,6 +330,9 @@ describe('WorkflowKernelService archived completion', () => {
     const completed = await service.waitForCompletion(started.runId);
     expect(completed.status).toBe('done');
     expect(completed.stepResults[0]?.output).toBe('reply:hello world');
+    expect(completed.stepResults[0]?.delegatedAgentId).toBe('agent-main');
+    expect(completed.stepResults[0]?.delegatedRunId).toBeTruthy();
+    expect(completed.stepResults[0]?.delegatedRunStatus).toBe('done');
   });
 
   it('resolves archived completion outcomes after service restart', async () => {
@@ -370,6 +400,9 @@ describe('WorkflowKernelService archived completion', () => {
     expect(completed.stepResults[0]?.error).toContain(
       "Agent 'agent-main' turn timed out after 20ms",
     );
+    expect(completed.stepResults[0]?.delegatedAgentId).toBe('agent-main');
+    expect(completed.stepResults[0]?.delegatedRunId).toBeTruthy();
+    expect(completed.stepResults[0]?.delegatedRunStatus).toBe('error');
   });
 
   it('serializes concurrent workflow turns for the same agent instead of failing busy', { timeout: 15_000 }, async () => {

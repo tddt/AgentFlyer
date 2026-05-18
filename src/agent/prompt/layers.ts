@@ -56,7 +56,8 @@ export function layer0Identity(
           '- Use `task_schedule` to assign a recurring task to any agent.',
           '  Required: agent_id, message (task prompt), name; plus either `cron` or `interval_minutes`.',
           '  Optional: `report_to` — agent id to receive results after each run.',
-          '- Use `task_list` to see all scheduled tasks and when they last/next ran.',
+          '- Use `task_list` to see all scheduled tasks, their current suspended runs, and when they last/next ran.',
+          '- Use `task_resume` to resume a scheduled task whose current delegated run is suspended.',
           '- Use `task_cancel` to stop a recurring task by its task ID.',
           '- For "every hour" use interval_minutes=60 or cron="0 * * * *".',
         ]

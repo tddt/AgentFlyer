@@ -29,6 +29,7 @@ const ROLE_MAP: Record<string, UserRole> = {
   'workflow.update': 'operator',
   'workflow.run': 'operator',
   'workflow.cancel': 'operator',
+  'workflow.resume': 'operator',
   'workflow.list': 'viewer',
   'workflow.get': 'viewer',
   'workflow.diagnose': 'operator',

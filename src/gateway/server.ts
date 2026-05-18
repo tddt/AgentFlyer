@@ -65,7 +65,15 @@ export function createGatewayServer(opts: GatewayServerOptions): GatewayServer {
         res.end(JSON.stringify({ error: 'Not found' }));
       }
     } catch (err) {
-      logger.error('Unhandled request error', { url: req.url, error: String(err) });
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg === 'Request body too large') {
+        if (!res.headersSent) {
+          res.writeHead(413, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Request entity too large' }));
+        }
+        return;
+      }
+      logger.error('Unhandled request error', { url: req.url, error: msg });
       if (!res.headersSent) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Internal server error' }));

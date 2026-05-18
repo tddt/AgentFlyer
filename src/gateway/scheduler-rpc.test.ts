@@ -1,10 +1,11 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentRunner } from '../agent/runner.js';
 import type { ScheduledTaskView } from '../agent/tools/builtin/scheduler-task-meta.js';
 import type { CronScheduler } from '../scheduler/cron.js';
+import * as agentKernelModule from './agent-kernel.js';
 import type { RpcContext } from './rpc.js';
 import { dispatchRpc } from './rpc.js';
 
@@ -17,6 +18,7 @@ async function createTempDir(): Promise<string> {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -54,7 +56,17 @@ function createRpcContext(dataDir: string, nextRunAt?: number): RpcContext {
         return [];
       },
     } as never,
-    deliverableStore: {} as never,
+    deliverableStore: {
+      async upsert(deliverable: Record<string, unknown>) {
+        return deliverable;
+      },
+      async get(deliverableId: string) {
+        return { id: deliverableId };
+      },
+      async updatePublication() {
+        return null;
+      },
+    } as never,
     channels: new Map(),
     getMcpStatus: () => [],
     runningTasks: new Map(),
@@ -709,5 +721,130 @@ describe('scheduler RPC summaries', () => {
         },
       ],
     });
+  });
+
+  it('scheduler.cancel aborts the active delegated agent run before deleting the task', async () => {
+    const dataDir = await createTempDir();
+    await writeScheduledTasksFile(dataDir, [
+      {
+        id: 'task-cancel-active',
+        name: 'Cancelable task',
+        agentId: 'agent-main',
+        message: 'hello',
+        cronExpr: '0 * * * *',
+        outputChannel: 'logs',
+        createdAt: 1,
+        enabled: true,
+        runCount: 0,
+      },
+    ]);
+
+    const abortTurn = vi.fn(async () => undefined);
+    vi.spyOn(agentKernelModule, 'getAgentKernelService').mockResolvedValue({
+      cancelRun: vi.fn(async (_runId: string, options?: { activeMessage?: string }) => {
+        if (options?.activeMessage) {
+          await abortTurn('agent-run-1', options.activeMessage);
+        }
+        return {
+          cancelled: true,
+          runId: 'agent-run-1',
+          mode: 'active',
+        };
+      }),
+    } as never);
+
+    const ctx = createRpcContext(dataDir);
+    ctx.runningTasks.set('task-cancel-active', {
+      taskId: 'task-cancel-active',
+      taskName: 'Cancelable task',
+      startedAt: Date.now(),
+      agentId: 'agent-main',
+      agentRunId: 'agent-run-1',
+      agentRunStatus: 'running',
+    });
+
+    const response = await dispatchRpc(
+      { id: 9, method: 'scheduler.cancel', params: { taskId: 'task-cancel-active' } },
+      ctx,
+    );
+
+    expect(response.error).toBeUndefined();
+    expect(response.result).toEqual({
+      cancelled: true,
+      taskId: 'task-cancel-active',
+      runId: 'agent-run-1',
+      abortedActiveRun: true,
+    });
+    expect(abortTurn).toHaveBeenCalledWith(
+      'agent-run-1',
+      "Scheduled task 'Cancelable task' (task-cancel-active) cancelled.",
+    );
+    expect(ctx.runningTasks.has('task-cancel-active')).toBe(false);
+    expect(await readScheduledTasksFile(dataDir)).toEqual([]);
+  });
+
+  it('scheduler.resume resumes a suspended delegated agent run and persists the same runId', async () => {
+    const dataDir = await createTempDir();
+    await writeScheduledTasksFile(dataDir, [
+      {
+        id: 'task-resume-active',
+        name: 'Resumable task',
+        agentId: 'agent-main',
+        message: 'hello',
+        cronExpr: '0 * * * *',
+        outputChannel: 'logs',
+        createdAt: 1,
+        enabled: true,
+        runCount: 1,
+      },
+    ]);
+
+    const resumeTurn = vi.fn(async () => ({ runId: 'agent-run-2', processStatus: 'ready' }));
+    const waitForRun = vi.fn(async () => ({ text: 'resumed scheduler work' }));
+    vi.spyOn(agentKernelModule, 'getAgentKernelService').mockResolvedValue({
+      resumeTurn,
+      waitForRun,
+      getRun: vi.fn(() => null),
+    } as never);
+
+    const ctx = createRpcContext(dataDir);
+    ctx.runningTasks.set('task-resume-active', {
+      taskId: 'task-resume-active',
+      taskName: 'Resumable task',
+      startedAt: Date.now(),
+      agentId: 'agent-main',
+      agentRunId: 'agent-run-2',
+      agentRunStatus: 'suspended',
+    });
+
+    const response = await dispatchRpc(
+      { id: 10, method: 'scheduler.resume', params: { taskId: 'task-resume-active' } },
+      ctx,
+    );
+
+    expect(response.error).toBeUndefined();
+    expect(response.result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        taskId: 'task-resume-active',
+        runId: 'agent-run-2',
+        runStatus: 'done',
+      }),
+    );
+    expect(resumeTurn).toHaveBeenCalledWith('agent-run-2');
+    expect(waitForRun).toHaveBeenCalledWith('agent-run-2');
+    expect(ctx.runningTasks.has('task-resume-active')).toBe(false);
+
+    const history = JSON.parse(
+      await readFile(join(dataDir, 'task-run-history.json'), 'utf-8'),
+    ) as Array<Record<string, unknown>>;
+    expect(history[0]).toEqual(
+      expect.objectContaining({
+        taskId: 'task-resume-active',
+        agentRunId: 'agent-run-2',
+        agentRunStatus: 'done',
+        result: 'resumed scheduler work',
+      }),
+    );
   });
 });

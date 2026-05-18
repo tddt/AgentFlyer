@@ -3,6 +3,7 @@ import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { WebSocket as WsWebSocket } from 'ws';
+import { ulid } from 'ulid';
 import { AnthropicProvider } from '../agent/llm/anthropic.js';
 import { FailoverProvider } from '../agent/llm/failover.js';
 import { OpenAIProvider, createCompatProvider } from '../agent/llm/openai.js';
@@ -25,10 +26,10 @@ import {
 import { createMeshTools } from '../agent/tools/mesh-tools.js';
 import type { RegisteredTool } from '../agent/tools/registry.js';
 import { ToolRegistry } from '../agent/tools/registry.js';
-import { DiscordChannel } from '../channels/discord/index.js';
-import { FeishuChannel } from '../channels/feishu/index.js';
-import { QQChannel } from '../channels/qq/index.js';
-import { TelegramChannel } from '../channels/telegram/index.js';
+// RATIONALE: External channel SDKs (discord.js, node-telegram-bot-api, etc.) are
+// lazily imported inside startExternalChannels() so they are only loaded when the
+// corresponding channel is actually enabled in config. This avoids paying their
+// parse/init cost on every gateway startup when the channel is disabled.
 import type { Channel } from '../channels/types.js';
 import { TypingKeepAlive } from '../channels/typing.js';
 import { WebChannel } from '../channels/web/index.js';
@@ -47,6 +48,8 @@ import { SessionMetaStore } from '../core/session/meta.js';
 import { SessionStore } from '../core/session/store.js';
 import { asAgentId, asThreadKey } from '../core/types.js';
 import { FederationNode } from '../federation/node.js';
+import { getGlobalBus } from '../mesh/bus.js';
+import type { ResultPayload } from '../mesh/protocol.js';
 import {
   McpRegistry,
   adaptMcpRegistryToTools,
@@ -80,6 +83,12 @@ import { HookRegistry } from './hooks.js';
 import { InboxBroadcaster } from './inbox-broadcaster.js';
 import { IntentRouter } from './intent-router.js';
 import { logBroadcaster } from './log-buffer.js';
+import {
+  incCounter,
+  observeHistogram,
+  registerCounter,
+  registerHistogram,
+} from './metrics-store.js';
 import { SenderRateLimiter } from './rate-limiter.js';
 import type { RpcContext } from './rpc.js';
 import { type GatewayServer, createGatewayServer } from './server.js';
@@ -900,6 +909,7 @@ export async function startGateway(
     const tgCfg = channelsCfg.telegram;
     if (tgCfg.enabled && tgCfg.botToken) {
       try {
+        const { TelegramChannel } = await import('../channels/telegram/index.js');
         const tg = new TelegramChannel({
           botToken: tgCfg.botToken,
           defaultAgentId: asAgentId(tgCfg.defaultAgentId || firstAgentId),
@@ -975,6 +985,7 @@ export async function startGateway(
     const dcCfg = channelsCfg.discord;
     if (dcCfg.enabled && dcCfg.botToken) {
       try {
+        const { DiscordChannel } = await import('../channels/discord/index.js');
         const dc = new DiscordChannel({
           botToken: dcCfg.botToken,
           defaultAgentId: asAgentId(dcCfg.defaultAgentId || firstAgentId),
@@ -1054,6 +1065,7 @@ export async function startGateway(
     const feishuCfg = channelsCfg.feishu;
     if (feishuCfg.enabled && feishuCfg.appId) {
       try {
+        const { FeishuChannel } = await import('../channels/feishu/index.js');
         const feishu = new FeishuChannel({
           appId: feishuCfg.appId,
           appSecret: feishuCfg.appSecret,
@@ -1127,6 +1139,7 @@ export async function startGateway(
     const qqCfg = channelsCfg.qq;
     if (qqCfg.enabled && qqCfg.appId) {
       try {
+        const { QQChannel } = await import('../channels/qq/index.js');
         const qq = new QQChannel({
           appId: qqCfg.appId,
           clientSecret: qqCfg.clientSecret,
@@ -1248,6 +1261,43 @@ export async function startGateway(
   };
 
   // ── Step 11: Federation node (optional) ─────────────────────────────────
+  // Register Prometheus metrics for mesh task completions and federation
+  // task delegations. These are recorded here (gateway layer) so that the
+  // lower mesh/federation layers stay free of metrics-store imports.
+  registerCounter(
+    'agentflyer_mesh_task_total',
+    'Total local mesh tasks by completion status and agent',
+  );
+  registerHistogram(
+    'agentflyer_mesh_task_duration_seconds',
+    'Local mesh task wall-clock duration in seconds',
+  );
+  registerCounter(
+    'agentflyer_federation_delegate_total',
+    'Total inbound federated task delegations by completion status and agent',
+  );
+  registerHistogram(
+    'agentflyer_federation_delegate_duration_seconds',
+    'Inbound federated task delegation duration in seconds',
+  );
+
+  // Subscribe to mesh bus task.result events and emit counter + histogram.
+  getGlobalBus().subscribeAll((envelope) => {
+    if (envelope.type !== 'task.result') return;
+    const p = envelope.payload as ResultPayload;
+    incCounter('agentflyer_mesh_task_total', {
+      status: p.success ? 'success' : 'error',
+      agent_id: String(envelope.from),
+    });
+    if (typeof p.durationMs === 'number') {
+      observeHistogram(
+        'agentflyer_mesh_task_duration_seconds',
+        { agent_id: String(envelope.from) },
+        p.durationMs / 1000,
+      );
+    }
+  });
+
   let federationNode: FederationNode | null = null;
   if (config.federation?.enabled) {
     try {
@@ -1257,6 +1307,45 @@ export async function startGateway(
         dataDir,
         gatewayVersion: GATEWAY_VERSION,
         memoryStore: gatewayMemoryStore,
+        onTaskDelegate: async (
+          agentId: string,
+          instruction: string,
+          timeoutMs: number,
+        ): Promise<string> => {
+          // RATIONALE: FederationNode is decoupled from runners; the gateway
+          // wires up a callback here so remote peers can delegate agent turns
+          // to local agents via TASK_DELEGATE messages.
+          const kernelSvc = await getAgentKernelService(rpcContext);
+          const threadKey = asThreadKey(`federation-${ulid()}`);
+          const t0 = Date.now();
+          try {
+            const { runId } = await kernelSvc.startTurn({ agentId, userMessage: instruction, threadKey });
+            const result = await kernelSvc.waitForRun(runId, timeoutMs);
+            const durationMs = Date.now() - t0;
+            incCounter('agentflyer_federation_delegate_total', {
+              status: 'success',
+              agent_id: agentId,
+            });
+            observeHistogram(
+              'agentflyer_federation_delegate_duration_seconds',
+              { agent_id: agentId },
+              durationMs / 1000,
+            );
+            return result.text;
+          } catch (err) {
+            const durationMs = Date.now() - t0;
+            incCounter('agentflyer_federation_delegate_total', {
+              status: 'error',
+              agent_id: agentId,
+            });
+            observeHistogram(
+              'agentflyer_federation_delegate_duration_seconds',
+              { agent_id: agentId },
+              durationMs / 1000,
+            );
+            throw err;
+          }
+        },
       });
       await federationNode.start();
       rpcContext.federationNode = federationNode;

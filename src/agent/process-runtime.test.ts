@@ -1,15 +1,17 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AgentKernel } from '../core/kernel/agent-kernel.js';
 import { JsonFileCheckpointStore } from '../core/kernel/checkpoint-store.js';
 import { SessionMetaStore } from '../core/session/meta.js';
 import { SessionStore } from '../core/session/store.js';
+import type { SyscallRequest } from '../core/kernel/types.js';
 import type { StreamChunk } from '../core/types.js';
 import { drainWaitingAgentSyscalls } from './kernel-syscall-broker.js';
 import type { LLMProvider, RunParams } from './llm/provider.js';
 import { AgentTurnProcessRuntime } from './process-runtime.js';
+import type { SerializedAgentRunnerState, SerializedAgentTurnExecutionState } from './runner.js';
 import { AgentRunner } from './runner.js';
 import type { ApprovalHandler } from './tools/policy.js';
 import type { RegisteredTool } from './tools/registry.js';
@@ -104,6 +106,7 @@ function createRunnerWithProvider(
     approval?: string[];
     approvalHandler?: ApprovalHandler;
     toolApprovalMode?: RegisteredTool['approvalMode'];
+    extraTools?: RegisteredTool[];
   } = {},
 ): AgentRunner {
   const toolRegistry = new ToolRegistry();
@@ -121,6 +124,9 @@ function createRunnerWithProvider(
     },
   };
   toolRegistry.register(echoTool);
+  for (const tool of options.extraTools ?? []) {
+    toolRegistry.register(tool);
+  }
 
   return new AgentRunner(
     {
@@ -195,6 +201,54 @@ describe('AgentRunner state serialization', () => {
     expect(other.serializeState()).toEqual(before);
   });
 
+  it('uses a stable default thread when threadKey is omitted', async () => {
+    const runner = {
+      serializeState(): SerializedAgentRunnerState {
+        return {
+          threadKey: 'leaked-thread',
+          toolResultCache: [{ key: 'read_file|{"path":"leak"}', value: { isError: false, content: 'leak' } }],
+        };
+      },
+    } as unknown as AgentRunner;
+
+    const runtime = new AgentTurnProcessRuntime(new Map([['agent-main', runner]]));
+    const initialState = runtime.createInitialState({
+      agentId: 'agent-main',
+      userMessage: 'hello without thread',
+    });
+
+    expect(initialState.threadKey).toBe('default');
+    expect(initialState.runnerState).toEqual({
+      threadKey: 'default',
+      toolResultCache: [],
+    });
+  });
+
+  it('does not inherit prompt or tool caches even when the requested thread matches the shared runner', async () => {
+    const runner = {
+      serializeState(): SerializedAgentRunnerState {
+        return {
+          threadKey: 'default',
+          toolResultCache: [
+            { key: 'read_file|{"path":"cached"}', value: { isError: false, content: 'cached' } },
+          ],
+        };
+      },
+    } as unknown as AgentRunner;
+
+    const runtime = new AgentTurnProcessRuntime(new Map([['agent-main', runner]]));
+    const initialState = runtime.createInitialState({
+      agentId: 'agent-main',
+      userMessage: 'hello same thread',
+      threadKey: 'default',
+    });
+
+    expect(initialState.runnerState).toEqual({
+      threadKey: 'default',
+      toolResultCache: [],
+    });
+  });
+
   it('drives local syscalls when using runner.runTurn directly', async () => {
     const dataDir = await createTempDir();
     const runner = createRunnerWithProvider(dataDir, new FakeToolLoopProvider());
@@ -211,6 +265,399 @@ describe('AgentRunner state serialization', () => {
 });
 
 describe('AgentTurnProcessRuntime', () => {
+  it('serializes concurrent step state swaps on the same runner instance', async () => {
+    let currentThread = 'default';
+    const runner = {
+      currentSessionKey: 'session:agent-main:default',
+      syncRuntimeState(threadKey: string, _runId: string | null): void {
+        currentThread = threadKey;
+      },
+      serializeState(): SerializedAgentRunnerState {
+        return {
+          threadKey: currentThread,
+          toolResultCache: [],
+        };
+      },
+      async applyKernelLlmGenerateSyscall(
+        _state: SerializedAgentTurnExecutionState,
+        _resolution: unknown,
+      ) {
+        if (currentThread === 'thread-a') {
+          await new Promise<void>((resolve) => setTimeout(resolve, 20));
+        }
+        return {
+          state: {} as SerializedAgentTurnExecutionState,
+          chunks: [],
+          done: false,
+          syscall: { id: `next-${currentThread}`, kind: 'llm.generate' as const },
+        };
+      },
+    } as unknown as AgentRunner;
+    const runtime = new AgentTurnProcessRuntime(new Map([['agent-main', runner]]));
+    const baseState = {
+      agentId: 'agent-main',
+      userMessage: 'parallel',
+      options: undefined,
+      executionState: {} as SerializedAgentTurnExecutionState,
+      stream: [],
+    };
+
+    const [stepA, stepB] = await Promise.all([
+      runtime.step(
+        {
+          ...baseState,
+          phase: 'waiting_llm',
+          runId: 'run-a',
+          threadKey: 'thread-a',
+          runnerState: {
+            threadKey: 'thread-a',
+            toolResultCache: [],
+          },
+        },
+        {
+          pid: 'pid-a' as never,
+          now: Date.now(),
+          runCount: 1,
+          retryCount: 0,
+          lastSyscallResult: { requestId: 'req-a', ok: true, resolvedAt: Date.now() } as never,
+          metadata: {},
+        },
+      ),
+      runtime.step(
+        {
+          ...baseState,
+          phase: 'waiting_llm',
+          runId: 'run-b',
+          threadKey: 'thread-b',
+          runnerState: {
+            threadKey: 'thread-b',
+            toolResultCache: [],
+          },
+        },
+        {
+          pid: 'pid-b' as never,
+          now: Date.now(),
+          runCount: 1,
+          retryCount: 0,
+          lastSyscallResult: { requestId: 'req-b', ok: true, resolvedAt: Date.now() } as never,
+          metadata: {},
+        },
+      ),
+    ]);
+
+    expect(stepA.signal).toBe('WAITING_SYSCALL');
+    expect(stepB.signal).toBe('WAITING_SYSCALL');
+    expect(stepA.state.runnerState.threadKey).toBe('thread-a');
+    expect(stepB.state.runnerState.threadKey).toBe('thread-b');
+  });
+
+  it('prefers explicit runtime sync over restoreState during kernel steps', async () => {
+    const restoreState = vi.fn();
+    const syncRuntimeState = vi.fn();
+    const serializeState = vi.fn(() => ({
+      threadKey: 'thread-sync-preferred',
+      toolResultCache: [{ key: 'read_file|{"path":"alpha"}', value: { isError: false, content: 'alpha' } }],
+    }));
+    const continueKernelTurn = vi.fn(async () => ({
+      state: {} as SerializedAgentTurnExecutionState,
+      chunks: [],
+      done: false,
+      syscall: { id: 'next-sync', kind: 'llm.generate' as const },
+    }));
+    const runner = {
+      restoreState,
+      syncRuntimeState,
+      serializeState,
+      continueKernelTurn,
+    } as unknown as AgentRunner;
+    const runtime = new AgentTurnProcessRuntime(new Map([['agent-main', runner]]));
+
+    const result = await runtime.step(
+      {
+        phase: 'running',
+        runId: 'run-sync-preferred',
+        agentId: 'agent-main',
+        userMessage: 'hello',
+        options: undefined,
+        threadKey: 'thread-sync-preferred',
+        runnerState: {
+          threadKey: 'thread-sync-preferred',
+          toolResultCache: [{ key: 'read_file|{"path":"alpha"}', value: { isError: false, content: 'alpha' } }],
+        },
+        executionState: {
+          runId: 'run-sync-preferred',
+          sessionKey: 'agent:agent-main:thread-sync-preferred' as never,
+          userMessage: 'hello',
+          model: 'fake-model',
+          maxTokens: 64,
+          systemPrompt: '',
+          messages: [],
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          totalCacheReadTokens: 0,
+          totalText: '',
+          toolRounds: 0,
+          toolFailureMessages: [],
+          finalFailureMessage: null,
+          finalFailureCode: undefined,
+          recoverableStreamRetries: 0,
+          toolLoopDetector: { lastEntry: null, consecutiveRepeats: 0 },
+        },
+        stream: [],
+      },
+      {
+        pid: 'pid-sync' as never,
+        now: Date.now(),
+        runCount: 1,
+        retryCount: 0,
+        metadata: {},
+      },
+    );
+
+    expect(result.signal).toBe('WAITING_SYSCALL');
+    expect(syncRuntimeState).toHaveBeenCalledWith(
+      'thread-sync-preferred',
+      'run-sync-preferred',
+      [{ key: 'read_file|{"path":"alpha"}', value: { isError: false, content: 'alpha' } }],
+    );
+    expect(serializeState).toHaveBeenCalledTimes(1);
+    expect(restoreState).not.toHaveBeenCalled();
+  });
+
+  it('keeps toolResultCache isolated across concurrent tool syscalls', async () => {
+    const dataDir = await createTempDir();
+    const runner = createRunnerWithProvider(dataDir, new FakeProvider(), {
+      extraTools: [
+        {
+          category: 'test',
+          definition: {
+            name: 'read_file',
+            description: 'Read-only test tool',
+            inputSchema: { type: 'object', properties: { path: { type: 'string' } } },
+          },
+          async handler(input) {
+            const path = (input as { path?: string }).path ?? '';
+            if (path === 'alpha') {
+              await new Promise<void>((resolve) => setTimeout(resolve, 20));
+            }
+            return { isError: false, content: `read:${path}` };
+          },
+        },
+      ],
+    });
+    const runtime = new AgentTurnProcessRuntime(new Map([['agent-main', runner]]));
+
+    const [resolutionA, resolutionB] = await Promise.all([
+      runtime.executePendingSyscall(
+        {
+          phase: 'waiting_tool',
+          runId: 'run-alpha',
+          agentId: 'agent-main',
+          userMessage: 'alpha',
+          threadKey: 'thread-alpha',
+          runnerState: {
+            threadKey: 'thread-alpha',
+            toolResultCache: [],
+          },
+          executionState: {
+            runId: 'run-alpha',
+            userMessage: 'alpha',
+            model: 'fake-model',
+            maxTokens: 64,
+            systemPrompt: '',
+            messages: [],
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            totalCacheReadTokens: 0,
+            totalText: '',
+            toolRounds: 1,
+            toolFailureMessages: [],
+            finalFailureMessage: null,
+            finalFailureCode: undefined,
+            recoverableStreamRetries: 0,
+            toolLoopDetector: { lastEntry: null, consecutiveRepeats: 0 },
+            pendingToolCalls: [{ id: 'tool-alpha', name: 'read_file', inputJson: '{"path":"alpha"}' }],
+          },
+          stream: [],
+          options: undefined,
+        },
+        { id: 'req-alpha', kind: 'tool.call' } as SyscallRequest,
+        Date.now(),
+      ),
+      runtime.executePendingSyscall(
+        {
+          phase: 'waiting_tool',
+          runId: 'run-beta',
+          agentId: 'agent-main',
+          userMessage: 'beta',
+          threadKey: 'thread-beta',
+          runnerState: {
+            threadKey: 'thread-beta',
+            toolResultCache: [],
+          },
+          executionState: {
+            runId: 'run-beta',
+            userMessage: 'beta',
+            model: 'fake-model',
+            maxTokens: 64,
+            systemPrompt: '',
+            messages: [],
+            totalInputTokens: 0,
+            totalOutputTokens: 0,
+            totalCacheReadTokens: 0,
+            totalText: '',
+            toolRounds: 1,
+            toolFailureMessages: [],
+            finalFailureMessage: null,
+            finalFailureCode: undefined,
+            recoverableStreamRetries: 0,
+            toolLoopDetector: { lastEntry: null, consecutiveRepeats: 0 },
+            pendingToolCalls: [{ id: 'tool-beta', name: 'read_file', inputJson: '{"path":"beta"}' }],
+          },
+          stream: [],
+          options: undefined,
+        },
+        { id: 'req-beta', kind: 'tool.call' } as SyscallRequest,
+        Date.now(),
+      ),
+    ]);
+
+    const cacheKeysA = ((resolutionA.payload as { toolResultCache: SerializedAgentRunnerState['toolResultCache'] }).toolResultCache).map(
+      (entry) => entry.key,
+    );
+    const cacheKeysB = ((resolutionB.payload as { toolResultCache: SerializedAgentRunnerState['toolResultCache'] }).toolResultCache).map(
+      (entry) => entry.key,
+    );
+
+    expect(cacheKeysA).toEqual(['read_file|{"path":"alpha"}']);
+    expect(cacheKeysB).toEqual(['read_file|{"path":"beta"}']);
+  });
+
+  it('does not restore shared runner state for llm, approval, or tool syscall execution', async () => {
+    const restoreState = vi.fn();
+    const executeKernelLlmGenerateSyscall = vi.fn(async (_state, request: SyscallRequest, resolvedAt: number) => ({
+      requestId: request.id,
+      ok: true,
+      resolvedAt,
+      payload: { chunks: [], recoverableStreamRetries: 0 },
+    }));
+    const executeKernelToolCallSyscall = vi.fn(
+      async (
+        _state: SerializedAgentTurnExecutionState,
+        request: SyscallRequest,
+        resolvedAt: number,
+        toolResultCache: SerializedAgentRunnerState['toolResultCache'],
+      ) => ({
+        requestId: request.id,
+        ok: true,
+        resolvedAt,
+        payload: { results: [], toolResultCache },
+      }),
+    );
+    const executeKernelApprovalSyscall = vi.fn(async (_state, request: SyscallRequest, resolvedAt: number) => ({
+      requestId: request.id,
+      ok: true,
+      resolvedAt,
+      payload: { decisions: [] },
+    }));
+    const runner = {
+      restoreState,
+      executeKernelLlmGenerateSyscall,
+      executeKernelToolCallSyscall,
+      executeKernelApprovalSyscall,
+    } as unknown as AgentRunner;
+    const runtime = new AgentTurnProcessRuntime(new Map([['agent-main', runner]]));
+    const runnerState: SerializedAgentRunnerState = {
+      threadKey: 'thread-no-restore',
+      toolResultCache: [],
+    };
+    const executionState: SerializedAgentTurnExecutionState = {
+      runId: 'run-no-restore',
+      userMessage: 'hello',
+      model: 'fake-model',
+      maxTokens: 64,
+      systemPrompt: '',
+      messages: [],
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalText: '',
+      toolRounds: 0,
+      toolFailureMessages: [],
+      finalFailureMessage: null,
+      finalFailureCode: undefined,
+      recoverableStreamRetries: 0,
+      toolLoopDetector: { lastEntry: null, consecutiveRepeats: 0 },
+      pendingToolCalls: [],
+    };
+
+    await runtime.executePendingSyscall(
+      {
+        phase: 'waiting_llm',
+        runId: 'run-no-restore',
+        agentId: 'agent-main',
+        userMessage: 'hello',
+        options: undefined,
+        threadKey: 'thread-no-restore',
+        runnerState,
+        executionState,
+        stream: [],
+      },
+      { id: 'req-llm', kind: 'llm.generate' } as SyscallRequest,
+      Date.now(),
+    );
+    await runtime.executePendingSyscall(
+      {
+        phase: 'waiting_tool',
+        runId: 'run-no-restore-tool',
+        agentId: 'agent-main',
+        userMessage: 'hello',
+        options: undefined,
+        threadKey: 'thread-no-restore',
+        runnerState: {
+          ...runnerState,
+          toolResultCache: [
+            { key: 'read_file|{"path":"tool"}', value: { isError: false, content: 'tool' } },
+          ],
+        },
+        executionState: {
+          ...executionState,
+          runId: 'run-no-restore-tool',
+          pendingToolCalls: [{ id: 'tool-1', name: 'read_file', inputJson: '{"path":"tool"}' }],
+        },
+        stream: [],
+      },
+      { id: 'req-tool', kind: 'tool.call' } as SyscallRequest,
+      Date.now(),
+    );
+    await runtime.executePendingSyscall(
+      {
+        phase: 'waiting_approval',
+        runId: 'run-no-restore',
+        agentId: 'agent-main',
+        userMessage: 'hello',
+        options: undefined,
+        threadKey: 'thread-no-restore',
+        runnerState,
+        executionState: {
+          ...executionState,
+          pendingToolCalls: [{ id: 'tool-1', name: 'echo_tool', inputJson: '{"message":"hi"}' }],
+        },
+        stream: [],
+      },
+      { id: 'req-approval', kind: 'custom', operation: 'agent.turn.approval-request' } as SyscallRequest,
+      Date.now(),
+    );
+
+    expect(restoreState).not.toHaveBeenCalled();
+    expect(executeKernelLlmGenerateSyscall).toHaveBeenCalledTimes(1);
+    expect(executeKernelToolCallSyscall).toHaveBeenCalledTimes(1);
+    expect(executeKernelToolCallSyscall.mock.calls[0]?.[3]).toEqual([
+      { key: 'read_file|{"path":"tool"}', value: { isError: false, content: 'tool' } },
+    ]);
+    expect(executeKernelApprovalSyscall).toHaveBeenCalledTimes(1);
+  });
+
   it('wraps AgentRunner turn execution into a kernel-compatible runtime', async () => {
     const dataDir = await createTempDir();
     const runner = createRunner(dataDir);
