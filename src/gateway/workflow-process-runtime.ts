@@ -20,6 +20,8 @@ import {
   snapshotVars,
 } from './workflow-runtime-shared.js';
 import {
+  type WorkflowSuperNodeChildLineage,
+  type WorkflowSuperNodeTrace,
   type WorkflowSuperNodeParticipantResult,
   type WorkflowSuperNodeType,
   buildWorkflowSuperNodeCoordinatorPrompt,
@@ -52,6 +54,7 @@ export interface WorkflowProcessState {
   prevOutputs: string[];
   stepVars: ReturnType<typeof serializeStepVars>;
   currentAttempt: number;
+  retrySuperNodeTrace?: WorkflowStepResult['superNodeTrace'];
   error?: ProcessErrorEvent;
 }
 
@@ -100,7 +103,11 @@ function cloneStepResults(stepResults: WorkflowStepResult[]): WorkflowStepResult
     superNodeTrace: step.superNodeTrace
       ? {
           ...step.superNodeTrace,
-          participantResults: step.superNodeTrace.participantResults.map((item) => ({ ...item })),
+          coordinatorLineage: { ...step.superNodeTrace.coordinatorLineage },
+          participantResults: step.superNodeTrace.participantResults.map((item) => ({
+            ...item,
+            lineage: { ...item.lineage },
+          })),
         }
       : undefined,
     varsSnapshot: step.varsSnapshot ? { ...step.varsSnapshot } : undefined,
@@ -117,18 +124,97 @@ interface WorkflowStepExecutionResult {
 
 class WorkflowSuperNodeExecutionError extends Error {
   readonly trace: WorkflowStepResult['superNodeTrace'];
+  readonly stage: 'participant' | 'coordinator';
+  readonly delegatedAgentId?: string;
+  readonly delegatedRunId?: string;
+  readonly delegatedRunStatus?: 'ready' | 'waiting' | 'suspended' | 'done' | 'error';
 
-  constructor(message: string, trace: WorkflowStepResult['superNodeTrace']) {
+  constructor(
+    message: string,
+    trace: WorkflowStepResult['superNodeTrace'],
+    stage: 'participant' | 'coordinator',
+    delegated?: Pick<
+      WorkflowStepResult,
+      'delegatedAgentId' | 'delegatedRunId' | 'delegatedRunStatus'
+    >,
+  ) {
     super(message);
     this.name = 'WorkflowSuperNodeExecutionError';
     this.trace = trace;
+    this.stage = stage;
+    this.delegatedAgentId = delegated?.delegatedAgentId;
+    this.delegatedRunId = delegated?.delegatedRunId;
+    this.delegatedRunStatus = delegated?.delegatedRunStatus;
   }
+}
+
+function buildSuperNodeChildLineage(params: {
+  parentRunId: string;
+  parentStepId: string;
+  childStepId: string;
+  threadKey: string;
+  role: 'participant' | 'coordinator';
+  participantIndex?: number;
+}): WorkflowSuperNodeChildLineage {
+  return {
+    parentRunId: params.parentRunId,
+    parentStepId: params.parentStepId,
+    childStepId: params.childStepId,
+    threadKey: params.threadKey,
+    role: params.role,
+    ...(params.participantIndex !== undefined ? { participantIndex: params.participantIndex } : {}),
+  };
+}
+
+function canReuseParticipantResults(
+  trace: WorkflowStepResult['superNodeTrace'] | undefined,
+): trace is WorkflowSuperNodeTrace {
+  return Boolean(
+    trace &&
+      trace.participantResults.every(
+        (item) => item.status === 'done' || item.delegatedRunStatus === 'suspended',
+      ) &&
+      !trace.participantResults.some((item) => item.status === 'error'),
+  );
+}
+
+function getDelegatedRunMetadata(
+  value: unknown,
+): Pick<WorkflowSuperNodeParticipantResult, 'delegatedRunId' | 'delegatedRunStatus'> {
+  if (!value || typeof value !== 'object') {
+    return {};
+  }
+  const candidate = value as {
+    delegatedRunId?: unknown;
+    delegatedRunStatus?: unknown;
+  };
+  return {
+    ...(typeof candidate.delegatedRunId === 'string'
+      ? { delegatedRunId: candidate.delegatedRunId }
+      : {}),
+    ...(candidate.delegatedRunStatus === 'ready' ||
+    candidate.delegatedRunStatus === 'waiting' ||
+    candidate.delegatedRunStatus === 'suspended' ||
+    candidate.delegatedRunStatus === 'done' ||
+    candidate.delegatedRunStatus === 'error'
+      ? { delegatedRunStatus: candidate.delegatedRunStatus }
+      : {}),
+  };
 }
 
 function workflowThreadKey(runId: string, stepIndex: number, suffix?: string): string {
   return suffix
     ? `workflow:${runId}:step${stepIndex}:${suffix}`
     : `workflow:${runId}:step${stepIndex}`;
+}
+
+function hasCoordinatorAttempted(trace: WorkflowSuperNodeTrace | undefined): boolean {
+  return Boolean(
+    trace &&
+      (trace.coordinatorStartedAt !== undefined ||
+        trace.coordinatorStatus !== undefined ||
+        trace.coordinatorDelegatedRunStatus !== undefined),
+  );
 }
 
 function normalizeWorkflowAgentStepExecutionResult(
@@ -147,7 +233,8 @@ function upsertStepResult(
     if (
       current?.stepId === nextResult.stepId &&
       current.delegatedRunStatus === 'suspended' &&
-      current.delegatedRunId === nextResult.delegatedRunId
+      (current.delegatedRunId === nextResult.delegatedRunId ||
+        Boolean(current.superNodeTrace && nextResult.superNodeTrace))
     ) {
       next[index] = nextResult;
       return next;
@@ -380,11 +467,16 @@ export class WorkflowProcessRuntime
           : null;
       const errorFinishedAt = Date.now();
       if (delegated?.delegatedRunStatus === 'suspended') {
+        const retrySuperNodeTrace =
+          error instanceof WorkflowSuperNodeExecutionError
+            ? error.trace
+            : undefined;
         return {
           signal: 'SUSPENDED',
           state: {
             ...state,
             currentAttempt: 0,
+            ...(retrySuperNodeTrace ? { retrySuperNodeTrace } : {}),
             run: {
               ...state.run,
               status: 'suspended',
@@ -404,12 +496,17 @@ export class WorkflowProcessRuntime
         };
       }
       if (state.currentAttempt < maxRetries) {
+        const retrySuperNodeTrace =
+          error instanceof WorkflowSuperNodeExecutionError && error.stage === 'coordinator'
+            ? error.trace
+            : undefined;
         return {
           signal: 'RETRYABLE_ERROR',
           error: buildError('WORKFLOW_STEP_RETRYABLE_ERROR', messageText, true),
           state: {
             ...state,
             currentAttempt: state.currentAttempt + 1,
+            ...(retrySuperNodeTrace ? { retrySuperNodeTrace } : {}),
           },
           delayMs: 0,
         };
@@ -441,6 +538,7 @@ export class WorkflowProcessRuntime
               finishedAt: errorFinishedAt,
             },
             currentAttempt: 0,
+            retrySuperNodeTrace: undefined,
           },
         };
       }
@@ -604,14 +702,34 @@ export class WorkflowProcessRuntime
     }
 
     const rolePrompts = normalizeWorkflowSuperNodePrompts(type, step.superNodePrompts);
+    const reusableTrace = canReuseParticipantResults(state.retrySuperNodeTrace)
+      ? state.retrySuperNodeTrace
+      : undefined;
     const participantResults: WorkflowSuperNodeParticipantResult[] = await Promise.all(
       participantAgentIds.map(async (agentId, index) => {
+        const reusableItem = reusableTrace?.participantResults.find(
+          (item) => item.lineage.participantIndex === index + 1,
+        );
+        if (reusableItem?.status === 'done') {
+          return {
+            ...reusableItem,
+            lineage: { ...reusableItem.lineage },
+          };
+        }
+
         const rolePrompt = rolePrompts[index] ?? `补充视角 ${index + 1}`;
+        const participantStepId = `${step.id}:participant:${index + 1}`;
+        const participantThreadKey = workflowThreadKey(
+          state.run.runId,
+          currentStepIndex,
+          `participant-${index + 1}`,
+        );
+        const participantStartedAt = Date.now();
         try {
           const execution = normalizeWorkflowAgentStepExecutionResult(
             await runAgentStep({
               runId: state.run.runId,
-              stepId: `${step.id}:participant:${index + 1}`,
+              stepId: participantStepId,
               agentId,
               message: buildWorkflowSuperNodeParticipantPrompt({
                 type,
@@ -621,40 +739,92 @@ export class WorkflowProcessRuntime
                 total: participantAgentIds.length,
                 domainRules: step.domainRules,
               }),
-              threadKey: workflowThreadKey(
-                state.run.runId,
-                currentStepIndex,
-                `participant-${index + 1}`,
-              ),
+              threadKey: participantThreadKey,
+              delegatedRunId:
+                reusableItem?.delegatedRunStatus === 'suspended'
+                  ? reusableItem.delegatedRunId
+                  : undefined,
             }),
           );
 
           return {
             agentId,
+            status: 'done',
             prompt: rolePrompt,
+            startedAt: participantStartedAt,
+            finishedAt: Date.now(),
+            lineage: buildSuperNodeChildLineage({
+              parentRunId: state.run.runId,
+              parentStepId: step.id,
+              childStepId: participantStepId,
+              threadKey: participantThreadKey,
+              role: 'participant',
+              participantIndex: index + 1,
+            }),
             output: execution.output.trim(),
+            ...getDelegatedRunMetadata(execution),
           };
         } catch (error) {
+          const delegatedMetadata = getDelegatedRunMetadata(error);
           return {
             agentId,
+            status:
+              delegatedMetadata.delegatedRunStatus === 'suspended' ? 'suspended' : 'error',
             prompt: rolePrompt,
+            startedAt: participantStartedAt,
+            finishedAt: Date.now(),
+            lineage: buildSuperNodeChildLineage({
+              parentRunId: state.run.runId,
+              parentStepId: step.id,
+              childStepId: participantStepId,
+              threadKey: participantThreadKey,
+              role: 'participant',
+              participantIndex: index + 1,
+            }),
             error: error instanceof Error ? error.message : String(error),
+            ...delegatedMetadata,
           };
         }
       }),
     );
 
-    const trace: WorkflowStepResult['superNodeTrace'] = {
+    const coordinatorThreadKey = workflowThreadKey(state.run.runId, currentStepIndex, 'coordinator');
+    const coordinatorLineage = buildSuperNodeChildLineage({
+      parentRunId: state.run.runId,
+      parentStepId: step.id,
+      childStepId: `${step.id}:coordinator`,
+      threadKey: coordinatorThreadKey,
+      role: 'coordinator',
+    });
+
+    const trace: WorkflowSuperNodeTrace = {
       type,
+      parentRunId: state.run.runId,
+      parentStepId: step.id,
+      participantExecution: reusableTrace ? 'reused' : 'fresh',
+      coordinatorAttempt: hasCoordinatorAttempted(reusableTrace)
+        ? reusableTrace.coordinatorAttempt + 1
+        : 1,
       coordinatorAgentId,
+      coordinatorLineage,
       participantResults,
     };
 
-    const failedParticipant = participantResults.find((item) => item.error?.trim());
+    const failedParticipant = participantResults.find((item) => item.status !== 'done');
     if (failedParticipant) {
+      const participantDelegated =
+        failedParticipant.delegatedRunStatus === 'suspended'
+          ? {
+              delegatedAgentId: failedParticipant.agentId,
+              delegatedRunId: failedParticipant.delegatedRunId,
+              delegatedRunStatus: 'suspended' as const,
+            }
+          : undefined;
       throw new WorkflowSuperNodeExecutionError(
-        `Super node '${step.id}' participant '${failedParticipant.agentId}' failed: ${failedParticipant.error}`,
+        `Super node '${step.id}' participant '${failedParticipant.agentId}' ${failedParticipant.status === 'suspended' ? 'suspended' : 'failed'}: ${failedParticipant.error}`,
         trace,
+        'participant',
+        participantDelegated,
       );
     }
 
@@ -664,6 +834,7 @@ export class WorkflowProcessRuntime
       baseMessage: message,
       previousOutput: state.prevOutputs[state.prevOutputs.length - 1] ?? '',
     });
+    const coordinatorStartedAt = Date.now();
 
     try {
       const execution = normalizeWorkflowAgentStepExecutionResult(
@@ -672,19 +843,53 @@ export class WorkflowProcessRuntime
           stepId: step.id,
           agentId: coordinatorAgentId,
           message: applyFormatInstruction(step, coordinatorPrompt),
-          threadKey: workflowThreadKey(state.run.runId, currentStepIndex, 'coordinator'),
+          threadKey: coordinatorThreadKey,
+          delegatedRunId:
+            reusableTrace?.coordinatorDelegatedRunStatus === 'suspended'
+              ? reusableTrace.coordinatorDelegatedRunId
+              : undefined,
         }),
       );
       return {
         ...execution,
         delegatedAgentId: execution.delegatedAgentId ?? coordinatorAgentId,
         output: execution.output.trim(),
-        superNodeTrace: trace,
+        superNodeTrace: {
+          ...trace,
+          coordinatorStatus: 'done',
+          coordinatorStartedAt,
+          coordinatorFinishedAt: Date.now(),
+          ...(execution.delegatedRunId
+            ? { coordinatorDelegatedRunId: execution.delegatedRunId }
+            : {}),
+          ...(execution.delegatedRunStatus
+            ? { coordinatorDelegatedRunStatus: execution.delegatedRunStatus }
+            : {}),
+        },
       };
     } catch (error) {
+      const delegatedMetadata = getDelegatedRunMetadata(error);
       throw new WorkflowSuperNodeExecutionError(
         error instanceof Error ? error.message : String(error),
-        trace,
+        {
+          ...trace,
+          coordinatorStatus:
+            delegatedMetadata.delegatedRunStatus === 'suspended' ? 'suspended' : 'error',
+          coordinatorStartedAt,
+          coordinatorFinishedAt: Date.now(),
+          ...(delegatedMetadata.delegatedRunId
+            ? { coordinatorDelegatedRunId: delegatedMetadata.delegatedRunId }
+            : {}),
+          ...(delegatedMetadata.delegatedRunStatus
+            ? { coordinatorDelegatedRunStatus: delegatedMetadata.delegatedRunStatus }
+            : {}),
+        },
+        'coordinator',
+        {
+          delegatedAgentId: coordinatorAgentId,
+          delegatedRunId: delegatedMetadata.delegatedRunId,
+          delegatedRunStatus: delegatedMetadata.delegatedRunStatus,
+        },
       );
     }
   }
@@ -826,6 +1031,7 @@ export class WorkflowProcessRuntime
       currentStepId: done ? undefined : resolveWorkflowStepId(state.workflow, nextStepIndex),
       currentStepIndex: nextStepIndex,
       currentAttempt: 0,
+      retrySuperNodeTrace: undefined,
       prevOutputs: updates.prevOutputs,
       stepVars: updates.stepVars,
       run: {

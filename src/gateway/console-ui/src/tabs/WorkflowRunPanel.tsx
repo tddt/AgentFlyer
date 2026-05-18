@@ -11,7 +11,12 @@ import { useLocale } from '../context/i18n.js';
 import { useWorkflowRun } from '../context/workflow-run.js';
 import { rpc } from '../hooks/useRpc.js';
 import { useToast } from '../hooks/useToast.js';
-import type { WorkflowDef, WorkflowRunRecord, WorkflowStepResult } from '../types.js';
+import type {
+  WorkflowControlResult,
+  WorkflowDef,
+  WorkflowRunRecord,
+  WorkflowStepResult,
+} from '../types.js';
 import { parseWorkflowSuperNodeStructuredSummary } from '../workflow-super-node-summary.js';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -36,6 +41,88 @@ function formatElapsed(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+type TranslateFn = ReturnType<typeof useLocale>['t'];
+
+function getWorkflowControlTargetLabel(result: WorkflowControlResult, t: TranslateFn): string {
+  if (result.targetScope === 'child') {
+    return t('workflow.control.target.child', {
+      id: result.targetChildStepId ?? result.targetStepId ?? result.sourceRunId,
+    });
+  }
+  if (result.targetScope === 'step') {
+    return t('workflow.control.target.step', {
+      id: result.targetStepId ?? result.sourceRunId,
+    });
+  }
+  return t('workflow.control.target.run', { id: result.sourceRunId });
+}
+
+function getWorkflowControlActionLabel(
+  action: WorkflowControlResult['action'],
+  t: TranslateFn,
+): string {
+  switch (action) {
+    case 'cancel':
+      return t('workflow.control.action.cancel');
+    case 'resume':
+      return t('workflow.control.action.resume');
+    case 'retryFromStep':
+      return t('workflow.control.action.retryFromStep');
+    case 'skipStep':
+      return t('workflow.control.action.skipStep');
+  }
+}
+
+function getWorkflowControlTargetVariant(
+  targetScope: WorkflowControlResult['targetScope'],
+): 'gray' | 'blue' | 'purple' {
+  switch (targetScope) {
+    case 'child':
+      return 'purple';
+    case 'step':
+      return 'blue';
+    case 'workflow':
+      return 'gray';
+  }
+}
+
+function getWorkflowControlFeedbackMessage(
+  result: WorkflowControlResult,
+  t: TranslateFn,
+): string {
+  const target = getWorkflowControlTargetLabel(result, t);
+  if (!result.accepted) {
+    return t('workflow.control.feedback.rejected', {
+      action: getWorkflowControlActionLabel(result.action, t),
+      target,
+      reason: result.reason ?? t('workflow.control.reason.unspecified'),
+    });
+  }
+
+  switch (result.action) {
+    case 'cancel':
+      return t('workflow.control.feedback.accepted.cancel', { target });
+    case 'resume':
+      return t('workflow.control.feedback.accepted.resume', { target });
+    case 'retryFromStep':
+      return t('workflow.control.feedback.accepted.retryFromStep', { target });
+    case 'skipStep':
+      return t('workflow.control.feedback.accepted.skipStep', { target });
+  }
+}
+
+interface ControlFeedbackState {
+  id: number;
+  action: WorkflowControlResult['action'];
+  accepted: boolean;
+  message: string;
+  timestamp: number;
+  sourceRunId: string;
+  targetScope: WorkflowControlResult['targetScope'];
+  targetStepId?: string;
+  targetChildStepId?: string;
+}
+
 function renderSuperNodeTrace(
   stepResult: WorkflowStepResult,
   agentName: (agentId: string) => string,
@@ -52,12 +139,53 @@ function renderSuperNodeTrace(
           Super Node Trace
         </span>
         <Badge variant="blue">{trace.type}</Badge>
+        <span className="text-[11px] text-slate-500">
+          parent: {trace.parentRunId}/{trace.parentStepId}
+        </span>
         <span className="text-[11px] text-slate-400">
           coordinator: <span className="text-slate-200">{agentName(trace.coordinatorAgentId)}</span>
         </span>
+        {trace.coordinatorAttempt > 1 && (
+          <span className="text-[11px] text-amber-300">
+            coordinator attempt {trace.coordinatorAttempt}
+          </span>
+        )}
+        {trace.participantExecution === 'reused' && (
+          <span className="text-[11px] text-amber-300">participants reused</span>
+        )}
+        {trace.coordinatorStatus && (
+          <Badge
+            variant={
+              trace.coordinatorStatus === 'error'
+                ? 'red'
+                : trace.coordinatorStatus === 'suspended'
+                  ? 'amber'
+                  : 'green'
+            }
+          >
+            {trace.coordinatorStatus === 'error'
+              ? 'coordinator error'
+              : trace.coordinatorStatus === 'suspended'
+                ? 'coordinator suspended'
+                : 'coordinator done'}
+          </Badge>
+        )}
+        {trace.coordinatorStartedAt !== undefined && trace.coordinatorFinishedAt !== undefined && (
+          <span className="text-[11px] text-slate-500">
+            coordinator duration: {formatElapsed(trace.coordinatorFinishedAt - trace.coordinatorStartedAt)}
+          </span>
+        )}
         <span className="text-[11px] text-slate-500">
           participants: {trace.participantResults.length}
         </span>
+        <span className="text-[11px] text-slate-500">
+          thread: {trace.coordinatorLineage.threadKey}
+        </span>
+        {trace.coordinatorDelegatedRunId && (
+          <span className="text-[11px] text-slate-500">
+            run: {trace.coordinatorDelegatedRunId}
+          </span>
+        )}
       </div>
 
       {trace.participantResults.length > 0 && (
@@ -69,10 +197,30 @@ function renderSuperNodeTrace(
             >
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[11px] text-slate-200">{agentName(item.agentId)}</span>
-                <Badge variant={item.error ? 'red' : 'green'}>
-                  {item.error ? 'participant error' : 'participant ok'}
+                <Badge
+                  variant={
+                    item.status === 'error' ? 'red' : item.status === 'suspended' ? 'amber' : 'green'
+                  }
+                >
+                  {item.status === 'error'
+                    ? 'participant error'
+                    : item.status === 'suspended'
+                      ? 'participant suspended'
+                      : 'participant done'}
                 </Badge>
                 <span className="text-[10px] text-slate-500">{item.prompt}</span>
+                <span className="text-[10px] text-slate-500">
+                  {formatElapsed(item.finishedAt - item.startedAt)}
+                </span>
+                {item.delegatedRunStatus && (
+                  <span className="text-[10px] text-slate-500">
+                    delegated: {item.delegatedRunStatus}
+                  </span>
+                )}
+                <span className="text-[10px] text-slate-500">thread: {item.lineage.threadKey}</span>
+                {item.delegatedRunId && (
+                  <span className="text-[10px] text-slate-500">run: {item.delegatedRunId}</span>
+                )}
               </div>
               <div className="text-sm text-slate-300 max-h-48 overflow-y-auto">
                 {item.error ? (
@@ -89,11 +237,99 @@ function renderSuperNodeTrace(
   );
 }
 
+function renderChildRunsReadModel(
+  stepResult: WorkflowStepResult,
+  agentName: (agentId: string) => string,
+  onResumeChild?: (childStepId: string) => void,
+  resumeLabel?: string,
+  onRetryChild?: (childStepId: string) => void,
+  retryLabel?: string,
+  onSkipChild?: (childStepId: string) => void,
+  skipLabel?: string,
+): ReactNode {
+  if (!stepResult.childRuns || stepResult.childRuns.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="rounded-lg bg-emerald-950/25 ring-1 ring-emerald-800/35 px-3 py-3 flex flex-col gap-2.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[10px] uppercase tracking-wider text-emerald-400 font-medium">
+          Child Runs
+        </span>
+        <span className="text-[11px] text-slate-500">derived read model</span>
+        <Badge variant="green">{stepResult.childRuns.length} items</Badge>
+      </div>
+
+      <div className="grid grid-cols-1 gap-2">
+        {stepResult.childRuns.map((item) => (
+          <div
+            key={item.childStepId}
+            className="rounded-lg bg-slate-950/35 ring-1 ring-slate-800/45 px-3 py-2 flex flex-col gap-1.5"
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant={item.role === 'coordinator' ? 'blue' : 'green'}>{item.role}</Badge>
+              <span className="text-[11px] text-slate-200">{agentName(item.agentId)}</span>
+              <Badge
+                variant={
+                  item.status === 'error'
+                    ? 'red'
+                    : item.status === 'suspended'
+                      ? 'amber'
+                      : 'green'
+                }
+              >
+                {item.status}
+              </Badge>
+              {item.delegatedRunStatus && (
+                <span className="text-[10px] text-slate-500">
+                  delegated: {item.delegatedRunStatus}
+                </span>
+              )}
+              {item.participantIndex !== undefined && (
+                <span className="text-[10px] text-slate-500">participant #{item.participantIndex}</span>
+              )}
+              {item.status === 'suspended' && onResumeChild && resumeLabel && (
+                <Button size="sm" variant="ghost" onClick={() => onResumeChild(item.childStepId)}>
+                  {resumeLabel}
+                </Button>
+              )}
+              {item.status === 'error' && onRetryChild && retryLabel && (
+                <Button size="sm" variant="ghost" onClick={() => onRetryChild(item.childStepId)}>
+                  {retryLabel}
+                </Button>
+              )}
+              {item.status === 'error' && onSkipChild && skipLabel && (
+                <Button size="sm" variant="ghost" onClick={() => onSkipChild(item.childStepId)}>
+                  {skipLabel}
+                </Button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-slate-500">
+              <span>parent: {item.parentRunId}/{item.parentStepId}</span>
+              <span>child: {item.childStepId}</span>
+              <span>thread: {item.threadKey}</span>
+              {item.delegatedRunId && <span>run: {item.delegatedRunId}</span>}
+              {item.startedAt !== undefined && item.finishedAt !== undefined && (
+                <span>duration: {formatElapsed(item.finishedAt - item.startedAt)}</span>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function renderSuperNodeStructuredSummary(
   stepType: WorkflowDef['steps'][number]['type'],
   stepResult: WorkflowStepResult,
 ): ReactNode {
-  const summary = parseWorkflowSuperNodeStructuredSummary(stepType, stepResult.output);
+  const summary = parseWorkflowSuperNodeStructuredSummary(
+    stepType,
+    stepResult.output,
+    stepResult.superNodeTrace,
+  );
   if (!summary) {
     return null;
   }
@@ -190,13 +426,43 @@ export function WorkflowRunPanel({
   const [stepElapsed, setStepElapsed] = useState(0);
   const [streamBuffer, setStreamBuffer] = useState('');
   const [toolCalls, setToolCalls] = useState<Array<{ id: string; name: string }>>([]);
+  const [controlFeedbackLog, setControlFeedbackLog] = useState<ControlFeedbackState[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const runStartRef = useRef<number>(Date.now());
   const stepStartRef = useRef<number>(Date.now());
   const eventSourceRef = useRef<EventSource | null>(null);
+  const controlFeedbackSeqRef = useRef(0);
 
   const running = run?.status === 'running';
+  const suspended = run?.status === 'suspended';
+
+  const publishControlFeedback = useCallback(
+    (result: WorkflowControlResult): void => {
+      const message = getWorkflowControlFeedbackMessage(result, t);
+      const timestamp = Date.now();
+      const id = controlFeedbackSeqRef.current + 1;
+      controlFeedbackSeqRef.current = id;
+      setControlFeedbackLog((current) =>
+        [
+          {
+            id,
+            action: result.action,
+            accepted: result.accepted,
+            message,
+            timestamp,
+            sourceRunId: result.sourceRunId,
+            targetScope: result.targetScope,
+            targetStepId: result.targetStepId,
+            targetChildStepId: result.targetChildStepId,
+          },
+          ...current,
+        ].slice(0, 5),
+      );
+      toast(message, 'info');
+    },
+    [t, toast],
+  );
 
   // Live elapsed timer while a run is active
   useEffect(() => {
@@ -314,7 +580,7 @@ export function WorkflowRunPanel({
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runId]);
+  }, [runId, run?.status]);
 
   const startRun = async () => {
     if (running) return;
@@ -323,6 +589,7 @@ export function WorkflowRunPanel({
     try {
       setStreamBuffer('');
       setToolCalls([]);
+      setControlFeedbackLog([]);
       const result = await rpc<{ runId: string }>('workflow.run', {
         workflowId: workflow.id,
         input: input.trim(),
@@ -335,43 +602,95 @@ export function WorkflowRunPanel({
     }
   };
 
-  const cancelRun = async () => {
+  const cancelRun = async (childStepId?: string) => {
     if (!runId) return;
     try {
-      await rpc('workflow.cancel', { runId });
+      const result = await rpc<WorkflowControlResult>('workflow.cancel', {
+        runId,
+        ...(childStepId ? { childStepId } : {}),
+      });
+      if (result.accepted) {
+        setRun((current) =>
+          current
+            ? {
+                ...current,
+                status: result.status ?? 'cancelled',
+                finishedAt: current.finishedAt ?? Date.now(),
+              }
+            : current,
+        );
+        setActiveRunRef(null);
+        publishControlFeedback(result);
+      } else {
+        publishControlFeedback(result);
+      }
     } catch {
       // Status will update via next poll tick
     }
   };
 
-  const retryFromStep = async (fromStepId: string) => {
+  const resumeRun = async (childStepId?: string) => {
     if (!runId) return;
     try {
-      const result = await rpc<{ runId: string }>('workflow.retryFromStep', {
+      const result = await rpc<WorkflowControlResult>('workflow.resume', {
         runId,
-        fromStepId,
+        ...(childStepId ? { childStepId } : {}),
       });
+      if (result.accepted) {
+        setStreamBuffer('');
+        setToolCalls([]);
+        setRun((current) => (current ? { ...current, status: result.status ?? 'running' } : current));
+        setActiveRunRef({ runId: result.resultRunId, workflowDef: workflow });
+        publishControlFeedback(result);
+      } else {
+        publishControlFeedback(result);
+      }
+    } catch (e) {
+      toast(`Failed to resume: ${e instanceof Error ? e.message : String(e)}`, 'error');
+    }
+  };
+
+  const retryFromStep = async (fromStepId?: string, childStepId?: string) => {
+    if (!runId) return;
+    try {
+      const result = await rpc<WorkflowControlResult>('workflow.retryFromStep', {
+        runId,
+        ...(fromStepId ? { fromStepId } : {}),
+        ...(childStepId ? { childStepId } : {}),
+      });
+      if (!result.accepted) {
+        publishControlFeedback(result);
+        return;
+      }
       setStreamBuffer('');
       setToolCalls([]);
-      setRunId(result.runId);
+      setRunId(result.resultRunId);
       setRun(null);
-      setActiveRunRef({ runId: result.runId, workflowDef: workflow });
-      toast(t('workflow.run.retryFromStep'), 'info');
+      setActiveRunRef({ runId: result.resultRunId, workflowDef: workflow });
+      publishControlFeedback(result);
     } catch (e) {
       toast(`Failed to retry: ${e instanceof Error ? e.message : String(e)}`, 'error');
     }
   };
 
-  const skipStep = async (stepId: string) => {
+  const skipStep = async (stepId?: string, childStepId?: string) => {
     if (!runId) return;
     try {
-      const result = await rpc<{ runId: string }>('workflow.skipStep', { runId, stepId });
+      const result = await rpc<WorkflowControlResult>('workflow.skipStep', {
+        runId,
+        ...(stepId ? { stepId } : {}),
+        ...(childStepId ? { childStepId } : {}),
+      });
+      if (!result.accepted) {
+        publishControlFeedback(result);
+        return;
+      }
       setStreamBuffer('');
       setToolCalls([]);
-      setRunId(result.runId);
+      setRunId(result.resultRunId);
       setRun(null);
-      setActiveRunRef({ runId: result.runId, workflowDef: workflow });
-      toast(t('workflow.run.skipStep'), 'info');
+      setActiveRunRef({ runId: result.resultRunId, workflowDef: workflow });
+      publishControlFeedback(result);
     } catch (e) {
       toast(`Failed to skip: ${e instanceof Error ? e.message : String(e)}`, 'error');
     }
@@ -564,6 +883,22 @@ export function WorkflowRunPanel({
               />
             </div>
           </div>
+        ) : suspended ? (
+          <div className="w-full rounded-xl bg-slate-900/80 ring-1 ring-amber-500/25 px-4 py-3 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="inline-flex rounded-full h-2 w-2 bg-amber-400 shrink-0" />
+              <span className="text-xs font-medium text-amber-200">{t('workflow.run.suspendedLabel')}</span>
+              <span className="text-xs text-slate-400 truncate">{workflow.name}</span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <Button size="sm" variant="ghost" onClick={() => void resumeRun()}>
+                {t('workflow.run.resume')}
+              </Button>
+              <Button size="sm" variant="danger" onClick={() => void cancelRun()}>
+                {t('workflow.run.cancel')}
+              </Button>
+            </div>
+          </div>
         ) : (
           <Button
             size="sm"
@@ -571,12 +906,76 @@ export function WorkflowRunPanel({
             onClick={() => {
               setRunId(null);
               setRun(null);
+              setControlFeedbackLog([]);
             }}
           >
             {t('workflow.run.again')}
           </Button>
         )}
       </div>
+
+      {controlFeedbackLog.length > 0 && (
+        <div className="rounded-xl bg-slate-900/55 ring-1 ring-slate-700/45 px-4 py-3 flex flex-col gap-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] uppercase tracking-wider text-slate-400 font-medium">
+                {t('workflow.control.log.title')}
+              </span>
+              <Badge variant="gray">{controlFeedbackLog.length}</Badge>
+            </div>
+            <Button size="sm" variant="ghost" onClick={() => setControlFeedbackLog([])}>
+              {t('workflow.control.log.clear')}
+            </Button>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            {controlFeedbackLog.map((entry) => (
+              <div
+                key={entry.id}
+                className={`rounded-lg px-3 py-2 ring-1 flex items-start justify-between gap-3 ${
+                  entry.accepted
+                    ? 'bg-emerald-950/25 ring-emerald-800/35'
+                    : 'bg-amber-950/25 ring-amber-800/35'
+                }`}
+              >
+                <div className="flex items-start gap-3 min-w-0">
+                  <div className="flex items-center gap-2 pt-0.5 shrink-0 flex-wrap">
+                    <Badge variant={entry.accepted ? 'green' : 'yellow'}>
+                      {getWorkflowControlActionLabel(entry.action, t)}
+                    </Badge>
+                    <Badge variant={getWorkflowControlTargetVariant(entry.targetScope)}>
+                      {getWorkflowControlTargetLabel(
+                        {
+                          sourceRunId: entry.sourceRunId,
+                          targetScope: entry.targetScope,
+                          targetStepId: entry.targetStepId,
+                          targetChildStepId: entry.targetChildStepId,
+                        },
+                        t,
+                      )}
+                    </Badge>
+                  </div>
+                  <div className="min-w-0 flex flex-col gap-1">
+                    <span className="text-sm text-slate-100 break-words">{entry.message}</span>
+                    <span className="text-[10px] text-slate-500">
+                      {new Date(entry.timestamp).toLocaleTimeString()}
+                    </span>
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() =>
+                    setControlFeedbackLog((current) => current.filter((item) => item.id !== entry.id))
+                  }
+                >
+                  ×
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Step results with live streaming output + variable panel */}
       {run && (
@@ -763,6 +1162,18 @@ export function WorkflowRunPanel({
                   </div>
                 )}
                 {renderSuperNodeStructuredSummary(step?.type, sr)}
+                {renderChildRunsReadModel(
+                  sr,
+                  agentName,
+                  suspended ? (childStepId) => void resumeRun(childStepId) : undefined,
+                  t('workflow.run.resume'),
+                  !running ? (childStepId) => void retryFromStep(undefined, childStepId) : undefined,
+                  t('workflow.run.retryFromStep'),
+                  !running && i < workflow.steps.length - 1
+                    ? (childStepId) => void skipStep(undefined, childStepId)
+                    : undefined,
+                  t('workflow.run.skipStep'),
+                )}
                 {(sr.output !== undefined || sr.error) && (
                   <div className="text-sm text-slate-300 max-h-64 overflow-y-auto">
                     {sr.error ? (

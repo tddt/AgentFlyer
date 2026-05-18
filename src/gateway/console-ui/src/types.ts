@@ -485,14 +485,58 @@ export interface WorkflowStepResult {
   finishedAt?: number;
   superNodeTrace?: {
     type: 'multi_source' | 'debate' | 'decision' | 'risk_review' | 'adjudication';
+    parentRunId: string;
+    parentStepId: string;
+    participantExecution: 'fresh' | 'reused';
+    coordinatorAttempt: number;
     coordinatorAgentId: string;
+    coordinatorLineage: {
+      parentRunId: string;
+      parentStepId: string;
+      childStepId: string;
+      threadKey: string;
+      role: 'participant' | 'coordinator';
+      participantIndex?: number;
+    };
+    coordinatorStatus?: 'done' | 'error' | 'suspended';
+    coordinatorStartedAt?: number;
+    coordinatorFinishedAt?: number;
+    coordinatorDelegatedRunId?: string;
+    coordinatorDelegatedRunStatus?: 'ready' | 'waiting' | 'suspended' | 'done' | 'error';
     participantResults: Array<{
       agentId: string;
       prompt: string;
+      status: 'done' | 'error' | 'suspended';
+      startedAt: number;
+      finishedAt: number;
+      lineage: {
+        parentRunId: string;
+        parentStepId: string;
+        childStepId: string;
+        threadKey: string;
+        role: 'participant' | 'coordinator';
+        participantIndex?: number;
+      };
       output?: string;
       error?: string;
+      delegatedRunId?: string;
+      delegatedRunStatus?: 'ready' | 'waiting' | 'suspended' | 'done' | 'error';
     }>;
   };
+  childRuns?: Array<{
+    role: 'participant' | 'coordinator';
+    agentId: string;
+    parentRunId: string;
+    parentStepId: string;
+    childStepId: string;
+    threadKey: string;
+    participantIndex?: number;
+    status?: 'done' | 'error' | 'suspended';
+    delegatedRunId?: string;
+    delegatedRunStatus?: 'ready' | 'waiting' | 'suspended' | 'done' | 'error';
+    startedAt?: number;
+    finishedAt?: number;
+  }>;
   /** Flat snapshot of ALL named variables accumulated up to this step: "stepId.varName" → value */
   varsSnapshot?: Record<string, string>;
 }
@@ -505,13 +549,35 @@ export interface WorkflowRunRecord {
   input: string;
   startedAt: number;
   finishedAt?: number;
-  status: 'running' | 'done' | 'error' | 'cancelled';
+  status: 'running' | 'suspended' | 'done' | 'error' | 'cancelled';
   stepResults: WorkflowStepResult[];
   latestDeliverableId?: string;
   /** If this run was forked from another, the source run ID. */
   forkFromRunId?: string;
   /** The step ID in the source run where the fork started. */
   forkFromStepId?: string;
+}
+
+export type WorkflowControlAction = 'cancel' | 'resume' | 'retryFromStep' | 'skipStep';
+
+export type WorkflowControlTargetScope = 'run' | 'step' | 'child';
+
+export interface WorkflowControlResult {
+  action: WorkflowControlAction;
+  accepted: boolean;
+  sourceRunId: string;
+  resultRunId: string;
+  targetScope: WorkflowControlTargetScope;
+  targetStepId?: string;
+  targetChildStepId?: string;
+  status?: WorkflowRunRecord['status'];
+  reason?: string;
+  runId: string;
+  childStepId?: string;
+  fromStepId?: string;
+  stepId?: string;
+  cancelled?: boolean;
+  resumed?: boolean;
 }
 
 export type DeliverableStatus = 'ready' | 'error' | 'cancelled';

@@ -1191,6 +1191,10 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
 
   const [showSessions, setShowSessions] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const participantAliases = useMemo(
+    () => Array.from(new Set((agent.mentionAliases ?? []).map((alias) => alias.trim()).filter(Boolean))),
+    [agent.mentionAliases],
+  );
 
   // Sessions for this agent (for thread selection)
   const { data: sessionsData, refetch: refetchSessions } = useQuery<SessionListResult>(

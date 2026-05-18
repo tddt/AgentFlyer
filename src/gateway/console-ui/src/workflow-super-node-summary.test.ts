@@ -70,6 +70,90 @@ describe('parseWorkflowSuperNodeStructuredSummary', () => {
     expect(summary?.missingFields).toEqual(['是否建议继续', '整改建议', '否决项']);
   });
 
+  it('adds collaboration execution summary when super node trace is provided', () => {
+    const summary = parseWorkflowSuperNodeStructuredSummary(
+      'decision',
+      JSON.stringify({
+        direction: '优先推进华东渠道扩张',
+        priority: 'P0',
+        executionSteps: ['锁定代理商'],
+        dependencies: ['区域预算审批'],
+        confidence: '高',
+        rationale: '需求验证充分。',
+      }),
+      {
+        type: 'decision',
+        parentRunId: 'run-1',
+        parentStepId: 'decide',
+        participantExecution: 'reused',
+        coordinatorAttempt: 2,
+        coordinatorAgentId: 'coordinator-agent',
+        coordinatorLineage: {
+          parentRunId: 'run-1',
+          parentStepId: 'decide',
+          childStepId: 'decide:coordinator',
+          threadKey: 'workflow:run-1:step0:coordinator',
+          role: 'coordinator',
+        },
+        coordinatorStatus: 'done',
+        coordinatorStartedAt: 1000,
+        coordinatorFinishedAt: 1800,
+        participantResults: [
+          {
+            agentId: 'planner-a',
+            prompt: '目标拆解',
+            status: 'done',
+            startedAt: 100,
+            finishedAt: 600,
+            lineage: {
+              parentRunId: 'run-1',
+              parentStepId: 'decide',
+              childStepId: 'decide:participant:1',
+              threadKey: 'workflow:run-1:step0:participant-1',
+              role: 'participant',
+              participantIndex: 1,
+            },
+            output: 'ok',
+          },
+          {
+            agentId: 'planner-b',
+            prompt: '资源约束',
+            status: 'error',
+            startedAt: 120,
+            finishedAt: 420,
+            lineage: {
+              parentRunId: 'run-1',
+              parentStepId: 'decide',
+              childStepId: 'decide:participant:2',
+              threadKey: 'workflow:run-1:step0:participant-2',
+              role: 'participant',
+              participantIndex: 2,
+            },
+            error: 'budget missing',
+          },
+        ],
+      },
+    );
+
+    expect(summary?.highlights).toEqual([
+      { label: '参与者', value: '1/2 完成' },
+      { label: '参与者执行', value: '复用' },
+      { label: '协调尝试', value: '第 2 次' },
+      { label: '失败数', value: '1' },
+      { label: '协调器', value: '已完成' },
+      { label: '方向', value: '优先推进华东渠道扩张' },
+      { label: '优先级', value: 'P0' },
+      { label: '置信度', value: '高' },
+    ]);
+    expect(summary?.texts).toEqual([
+      {
+        label: '协作执行',
+        value: '参与者完成 1/2，失败 1，复用上次参与者结果，协调器第 2 次尝试，协调器已完成，耗时区间 300ms - 800ms。',
+      },
+      { label: '决策依据', value: '需求验证充分。' },
+    ]);
+  });
+
   it('returns null for non-json or non-super-node outputs', () => {
     expect(parseWorkflowSuperNodeStructuredSummary('agent', '{"ok":true}')).toBeNull();
     expect(parseWorkflowSuperNodeStructuredSummary('debate', 'not-json')).toBeNull();

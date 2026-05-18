@@ -19,8 +19,39 @@ export interface WorkflowSuperNodeStepLike {
 export interface WorkflowSuperNodeParticipantResult {
   agentId: string;
   prompt: string;
+  status: 'done' | 'error' | 'suspended';
+  startedAt: number;
+  finishedAt: number;
+  lineage: WorkflowSuperNodeChildLineage;
   output?: string;
   error?: string;
+  delegatedRunId?: string;
+  delegatedRunStatus?: 'ready' | 'waiting' | 'suspended' | 'done' | 'error';
+}
+
+export interface WorkflowSuperNodeChildLineage {
+  parentRunId: string;
+  parentStepId: string;
+  childStepId: string;
+  threadKey: string;
+  role: 'participant' | 'coordinator';
+  participantIndex?: number;
+}
+
+export interface WorkflowSuperNodeTrace {
+  type: WorkflowSuperNodeType;
+  parentRunId: string;
+  parentStepId: string;
+  participantExecution: 'fresh' | 'reused';
+  coordinatorAttempt: number;
+  coordinatorAgentId: string;
+  coordinatorLineage: WorkflowSuperNodeChildLineage;
+  coordinatorStatus?: 'done' | 'error' | 'suspended';
+  coordinatorStartedAt?: number;
+  coordinatorFinishedAt?: number;
+  coordinatorDelegatedRunId?: string;
+  coordinatorDelegatedRunStatus?: 'ready' | 'waiting' | 'suspended' | 'done' | 'error';
+  participantResults: WorkflowSuperNodeParticipantResult[];
 }
 
 const DEFAULT_PROMPTS: Record<WorkflowSuperNodeType, string[]> = {
@@ -120,7 +151,7 @@ export function buildWorkflowSuperNodeCoordinatorPrompt(params: {
   const evidence = participantResults
     .map(
       (item, index) =>
-        `### 子结果 ${index + 1}\nagentId: ${item.agentId}\nrole: ${item.prompt}\nstatus: ${item.error ? 'error' : 'ok'}\n\n${item.error ?? item.output ?? ''}`,
+        `### 子结果 ${index + 1}\nagentId: ${item.agentId}\nrole: ${item.prompt}\nstatus: ${item.status}\n\n${item.error ?? item.output ?? ''}`,
     )
     .join('\n\n');
   const domainRuleBlock = step.domainRules?.trim()

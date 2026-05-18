@@ -25,6 +25,11 @@ function diffSnapshot(
   return delta;
 }
 
+function formatElapsed(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
 function renderSuperNodeTrace(
   stepResult: WorkflowStepResult,
   agentName: (agentId: string) => string,
@@ -41,9 +46,44 @@ function renderSuperNodeTrace(
           Super Node Trace
         </span>
         <Badge variant="blue">{trace.type}</Badge>
+        <span className="text-[10px] text-slate-500">
+          parent: {trace.parentRunId}/{trace.parentStepId}
+        </span>
         <span className="text-[10px] text-slate-400">
           coordinator: {agentName(trace.coordinatorAgentId)}
         </span>
+        {trace.coordinatorAttempt > 1 && (
+          <span className="text-[10px] text-amber-300">attempt {trace.coordinatorAttempt}</span>
+        )}
+        {trace.participantExecution === 'reused' && (
+          <span className="text-[10px] text-amber-300">participants reused</span>
+        )}
+        {trace.coordinatorStatus && (
+          <Badge
+            variant={
+              trace.coordinatorStatus === 'error'
+                ? 'red'
+                : trace.coordinatorStatus === 'suspended'
+                  ? 'amber'
+                  : 'green'
+            }
+          >
+            {trace.coordinatorStatus === 'error'
+              ? 'coordinator error'
+              : trace.coordinatorStatus === 'suspended'
+                ? 'coordinator suspended'
+                : 'coordinator done'}
+          </Badge>
+        )}
+        {trace.coordinatorStartedAt !== undefined && trace.coordinatorFinishedAt !== undefined && (
+          <span className="text-[10px] text-slate-500">
+            {formatElapsed(trace.coordinatorFinishedAt - trace.coordinatorStartedAt)}
+          </span>
+        )}
+        <span className="text-[10px] text-slate-500">thread: {trace.coordinatorLineage.threadKey}</span>
+        {trace.coordinatorDelegatedRunId && (
+          <span className="text-[10px] text-slate-500">run: {trace.coordinatorDelegatedRunId}</span>
+        )}
       </div>
       {trace.participantResults.map((item, index) => (
         <div
@@ -52,8 +92,22 @@ function renderSuperNodeTrace(
         >
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-[11px] text-slate-300">{agentName(item.agentId)}</span>
-            <Badge variant={item.error ? 'red' : 'green'}>{item.error ? 'error' : 'ok'}</Badge>
+            <Badge
+              variant={item.status === 'error' ? 'red' : item.status === 'suspended' ? 'amber' : 'green'}
+            >
+              {item.status === 'error' ? 'error' : item.status === 'suspended' ? 'suspended' : 'done'}
+            </Badge>
             <span className="text-[10px] text-slate-500">{item.prompt}</span>
+            <span className="text-[10px] text-slate-500">
+              {formatElapsed(item.finishedAt - item.startedAt)}
+            </span>
+            {item.delegatedRunStatus && (
+              <span className="text-[10px] text-slate-500">delegated: {item.delegatedRunStatus}</span>
+            )}
+            <span className="text-[10px] text-slate-500">thread: {item.lineage.threadKey}</span>
+            {item.delegatedRunId && (
+              <span className="text-[10px] text-slate-500">run: {item.delegatedRunId}</span>
+            )}
           </div>
           <div className="text-xs text-slate-300 max-h-40 overflow-y-auto">
             {item.error ? (
@@ -68,11 +122,69 @@ function renderSuperNodeTrace(
   );
 }
 
+function renderChildRunsReadModel(
+  stepResult: WorkflowStepResult,
+  agentName: (agentId: string) => string,
+): JSX.Element | null {
+  if (!stepResult.childRuns || stepResult.childRuns.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="rounded-md bg-emerald-950/25 ring-1 ring-emerald-800/35 px-2.5 py-2 flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[10px] uppercase tracking-wider text-emerald-400 font-medium">
+          Child Runs
+        </span>
+        <span className="text-[10px] text-slate-500">derived read model</span>
+        <Badge variant="green">{stepResult.childRuns.length} items</Badge>
+      </div>
+      {stepResult.childRuns.map((item) => (
+        <div
+          key={item.childStepId}
+          className="rounded-md bg-slate-950/35 ring-1 ring-slate-800/40 px-2.5 py-2 flex flex-col gap-1"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant={item.role === 'coordinator' ? 'blue' : 'green'}>{item.role}</Badge>
+            <span className="text-[11px] text-slate-300">{agentName(item.agentId)}</span>
+            <Badge
+              variant={
+                item.status === 'error' ? 'red' : item.status === 'suspended' ? 'amber' : 'green'
+              }
+            >
+              {item.status}
+            </Badge>
+            {item.delegatedRunStatus && (
+              <span className="text-[10px] text-slate-500">delegated: {item.delegatedRunStatus}</span>
+            )}
+            {item.participantIndex !== undefined && (
+              <span className="text-[10px] text-slate-500">participant #{item.participantIndex}</span>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-slate-500">
+            <span>parent: {item.parentRunId}/{item.parentStepId}</span>
+            <span>child: {item.childStepId}</span>
+            <span>thread: {item.threadKey}</span>
+            {item.delegatedRunId && <span>run: {item.delegatedRunId}</span>}
+            {item.startedAt !== undefined && item.finishedAt !== undefined && (
+              <span>{formatElapsed(item.finishedAt - item.startedAt)}</span>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function renderSuperNodeStructuredSummary(
   stepType: WorkflowDef['steps'][number]['type'],
   stepResult: WorkflowStepResult,
 ): JSX.Element | null {
-  const summary = parseWorkflowSuperNodeStructuredSummary(stepType, stepResult.output);
+  const summary = parseWorkflowSuperNodeStructuredSummary(
+    stepType,
+    stepResult.output,
+    stepResult.superNodeTrace,
+  );
   if (!summary) {
     return null;
   }
@@ -269,6 +381,7 @@ export function WorkflowHistoryPanel({
                           </Badge>
                         </div>
                         {renderSuperNodeStructuredSummary(step?.type, sr)}
+                        {renderChildRunsReadModel(sr, agentName)}
                         {(sr.output !== undefined || sr.error) && (
                           <p
                             className={`text-xs whitespace-pre-wrap line-clamp-4 ${

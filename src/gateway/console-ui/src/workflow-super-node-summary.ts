@@ -1,4 +1,4 @@
-import type { StepType } from './types.js';
+import type { StepType, WorkflowStepResult } from './types.js';
 
 export interface WorkflowSuperNodeSummaryHighlight {
   label: string;
@@ -27,6 +27,8 @@ type SuperNodeStepType = Extract<
   StepType,
   'multi_source' | 'debate' | 'decision' | 'risk_review' | 'adjudication'
 >;
+
+type WorkflowSuperNodeTrace = NonNullable<WorkflowStepResult['superNodeTrace']>;
 
 function parseJsonRecord(output: string | undefined): Record<string, unknown> | null {
   if (!output?.trim()) {
@@ -104,9 +106,103 @@ function trackMissingList(target: string[], label: string, value: unknown): void
   }
 }
 
+function formatElapsed(ms: number): string {
+  if (ms < 1000) {
+    return `${ms}ms`;
+  }
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function formatStatus(status: WorkflowSuperNodeTrace['coordinatorStatus']): string | null {
+  if (status === 'done') {
+    return '已完成';
+  }
+  if (status === 'suspended') {
+    return '已挂起';
+  }
+  if (status === 'error') {
+    return '失败';
+  }
+  return null;
+}
+
+function buildDurationRangeText(trace: WorkflowSuperNodeTrace): string | null {
+  const durations = trace.participantResults
+    .map((item) => item.finishedAt - item.startedAt)
+    .filter((value) => Number.isFinite(value) && value >= 0);
+
+  if (
+    trace.coordinatorStartedAt !== undefined &&
+    trace.coordinatorFinishedAt !== undefined &&
+    trace.coordinatorFinishedAt >= trace.coordinatorStartedAt
+  ) {
+    durations.push(trace.coordinatorFinishedAt - trace.coordinatorStartedAt);
+  }
+
+  if (durations.length === 0) {
+    return null;
+  }
+
+  const min = Math.min(...durations);
+  const max = Math.max(...durations);
+  return min === max ? formatElapsed(min) : `${formatElapsed(min)} - ${formatElapsed(max)}`;
+}
+
+function applyExecutionTraceSummary(
+  summary: WorkflowSuperNodeStructuredSummary,
+  trace: WorkflowSuperNodeTrace | undefined,
+): WorkflowSuperNodeStructuredSummary {
+  if (!trace) {
+    return summary;
+  }
+
+  const participantTotal = trace.participantResults.length;
+  const participantDone = trace.participantResults.filter((item) => item.status === 'done').length;
+  const participantSuspended = trace.participantResults.filter(
+    (item) => item.status === 'suspended',
+  ).length;
+  const participantFailed = trace.participantResults.filter((item) => item.status === 'error').length;
+  const coordinatorStatus = formatStatus(trace.coordinatorStatus);
+  const durationRange = buildDurationRangeText(trace);
+  const executionParts = [
+    participantTotal > 0
+      ? `参与者完成 ${participantDone}/${participantTotal}`
+      : '无并行参与者',
+    participantFailed > 0 ? `失败 ${participantFailed}` : null,
+    participantSuspended > 0 ? `挂起 ${participantSuspended}` : null,
+    trace.participantExecution === 'reused' ? '复用上次参与者结果' : null,
+    trace.coordinatorAttempt > 1 ? `协调器第 ${trace.coordinatorAttempt} 次尝试` : null,
+    coordinatorStatus ? `协调器${coordinatorStatus}` : null,
+    durationRange ? `耗时区间 ${durationRange}` : null,
+  ].filter((value): value is string => Boolean(value));
+
+  return {
+    ...summary,
+    highlights: [
+      { label: '参与者', value: `${participantDone}/${participantTotal} 完成` },
+      ...(trace.participantExecution === 'reused'
+        ? [{ label: '参与者执行', value: '复用' }]
+        : []),
+      ...(trace.coordinatorAttempt > 1
+        ? [{ label: '协调尝试', value: `第 ${trace.coordinatorAttempt} 次` }]
+        : []),
+      ...(participantFailed > 0 ? [{ label: '失败数', value: String(participantFailed) }] : []),
+      ...(participantSuspended > 0
+        ? [{ label: '挂起数', value: String(participantSuspended) }]
+        : []),
+      ...(coordinatorStatus ? [{ label: '协调器', value: coordinatorStatus }] : []),
+      ...summary.highlights,
+    ],
+    texts: executionParts.length > 0
+      ? [{ label: '协作执行', value: `${executionParts.join('，')}。` }, ...summary.texts]
+      : summary.texts,
+  };
+}
+
 export function parseWorkflowSuperNodeStructuredSummary(
   type: StepType | undefined,
   output: string | undefined,
+  trace?: WorkflowSuperNodeTrace,
 ): WorkflowSuperNodeStructuredSummary | null {
   if (
     type !== 'multi_source' &&
@@ -123,7 +219,8 @@ export function parseWorkflowSuperNodeStructuredSummary(
     return null;
   }
 
-  return buildSummaryByType(type, data);
+  const summary = buildSummaryByType(type, data);
+  return summary ? applyExecutionTraceSummary(summary, trace) : null;
 }
 
 function buildSummaryByType(

@@ -143,12 +143,65 @@ describe('workflow backend resume rpc', () => {
     const delegatedRunId = suspended.stepResults[0]?.delegatedRunId;
     expect(delegatedRunId).toBeTruthy();
 
-    const resumed = await dispatchWorkflowRpc('workflow.resume', 2, { runId }, ctx);
-    expect(resumed.result).toEqual({ resumed: true, runId, status: 'running' });
+    const resumed = await dispatchWorkflowRpc('workflow.resume', 2, { runId, childStepId: 'agent-step' }, ctx);
+    expect(resumed.result).toMatchObject({
+      action: 'resume',
+      accepted: true,
+      sourceRunId: runId,
+      resultRunId: runId,
+      targetScope: 'step',
+      targetStepId: 'agent-step',
+      targetChildStepId: 'agent-step',
+      resumed: true,
+      runId,
+      childStepId: 'agent-step',
+      status: 'running',
+    });
 
     const statusResponse = await dispatchWorkflowRpc('workflow.runStatus', 3, { runId }, ctx);
     const completed = statusResponse.result as WorkflowRunRecord;
     expect(['running', 'done']).toContain(completed.status);
     expect(completed.stepResults[0]?.delegatedRunId).toBe(delegatedRunId);
+  });
+
+  it('cancels a suspended workflow through workflow.cancel', async () => {
+    const dataDir = await createTempDir();
+    const workflow = createWorkflow();
+    await writeWorkflows(dataDir, [workflow]);
+    const ctx = createRpcContext(dataDir);
+    services.push(getWorkflowKernelService(ctx));
+
+    const started = await dispatchWorkflowRpc(
+      'workflow.run',
+      10,
+      { workflowId: workflow.id, input: 'world' },
+      ctx,
+    );
+    const runId = (started.result as { runId: string }).runId;
+
+    await waitForWorkflowStatus(ctx, runId, 'suspended');
+
+    const cancelled = await dispatchWorkflowRpc(
+      'workflow.cancel',
+      11,
+      { runId, childStepId: 'agent-step' },
+      ctx,
+    );
+    expect(cancelled.result).toMatchObject({
+      action: 'cancel',
+      accepted: true,
+      sourceRunId: runId,
+      resultRunId: runId,
+      targetScope: 'step',
+      targetStepId: 'agent-step',
+      targetChildStepId: 'agent-step',
+      cancelled: true,
+      runId,
+      childStepId: 'agent-step',
+      status: 'cancelled',
+    });
+
+    const cancelledRun = await waitForWorkflowStatus(ctx, runId, 'cancelled');
+    expect(cancelledRun.status).toBe('cancelled');
   });
 });

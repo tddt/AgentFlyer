@@ -28,6 +28,7 @@ import {
   isWorkflowSuperNodeType,
   minimumWorkflowSuperNodeParticipants,
 } from './workflow-super-nodes.js';
+import type { WorkflowSuperNodeTrace } from './workflow-super-nodes.js';
 
 const logger = createLogger('gateway:workflow');
 
@@ -168,18 +169,25 @@ export interface WorkflowStepResult {
   startedAt?: number;
   /** Unix timestamp (ms) when this step finished (success or error). */
   finishedAt?: number;
-  superNodeTrace?: {
-    type: 'multi_source' | 'debate' | 'decision' | 'risk_review' | 'adjudication';
-    coordinatorAgentId: string;
-    participantResults: Array<{
-      agentId: string;
-      prompt: string;
-      output?: string;
-      error?: string;
-    }>;
-  };
+  superNodeTrace?: WorkflowSuperNodeTrace;
+  childRuns?: WorkflowChildRunSummary[];
   /** Flat snapshot of ALL named variables accumulated up to this step: "stepId.varName" → value */
   varsSnapshot?: Record<string, string>;
+}
+
+export interface WorkflowChildRunSummary {
+  role: 'participant' | 'coordinator';
+  agentId: string;
+  parentRunId: string;
+  parentStepId: string;
+  childStepId: string;
+  threadKey: string;
+  participantIndex?: number;
+  status?: 'done' | 'error' | 'suspended';
+  delegatedRunId?: string;
+  delegatedRunStatus?: 'ready' | 'waiting' | 'suspended' | 'done' | 'error';
+  startedAt?: number;
+  finishedAt?: number;
 }
 
 export interface WorkflowRunRecord {
@@ -196,6 +204,29 @@ export interface WorkflowRunRecord {
   forkFromRunId?: string;
   /** The step ID in the source run where the fork started. */
   forkFromStepId?: string;
+}
+
+export type WorkflowControlAction = 'cancel' | 'resume' | 'retryFromStep' | 'skipStep';
+
+export type WorkflowControlTargetScope = 'run' | 'step' | 'child';
+
+export interface WorkflowControlResult {
+  action: WorkflowControlAction;
+  accepted: boolean;
+  sourceRunId: string;
+  resultRunId: string;
+  targetScope: WorkflowControlTargetScope;
+  targetStepId?: string;
+  targetChildStepId?: string;
+  status?: WorkflowRunRecord['status'];
+  reason?: string;
+  // Compatibility aliases for existing callers.
+  runId: string;
+  childStepId?: string;
+  fromStepId?: string;
+  stepId?: string;
+  cancelled?: boolean;
+  resumed?: boolean;
 }
 
 const workflowKernelServices = new WeakMap<RpcContext, Promise<WorkflowKernelService>>();
@@ -325,15 +356,147 @@ function cloneWorkflowRun(run: WorkflowRunRecord): WorkflowRunRecord {
     ...run,
     stepResults: run.stepResults.map((step) => ({
       ...step,
+      childRuns: step.childRuns?.map((child) => ({ ...child })),
       superNodeTrace: step.superNodeTrace
         ? {
             ...step.superNodeTrace,
-            participantResults: step.superNodeTrace.participantResults.map((item) => ({ ...item })),
+            coordinatorLineage: { ...step.superNodeTrace.coordinatorLineage },
+            participantResults: step.superNodeTrace.participantResults.map((item) => ({
+              ...item,
+              lineage: { ...item.lineage },
+            })),
           }
         : undefined,
       varsSnapshot: step.varsSnapshot ? { ...step.varsSnapshot } : undefined,
     })),
   };
+}
+
+function deriveWorkflowChildRuns(step: WorkflowStepResult): WorkflowChildRunSummary[] | undefined {
+  const trace = step.superNodeTrace;
+  if (!trace) {
+    return undefined;
+  }
+
+  return [
+    {
+      role: 'coordinator',
+      agentId: trace.coordinatorAgentId,
+      parentRunId: trace.coordinatorLineage.parentRunId,
+      parentStepId: trace.coordinatorLineage.parentStepId,
+      childStepId: trace.coordinatorLineage.childStepId,
+      threadKey: trace.coordinatorLineage.threadKey,
+      status: trace.coordinatorStatus,
+      delegatedRunId: trace.coordinatorDelegatedRunId,
+      delegatedRunStatus: trace.coordinatorDelegatedRunStatus,
+      startedAt: trace.coordinatorStartedAt,
+      finishedAt: trace.coordinatorFinishedAt,
+    },
+    ...trace.participantResults.map((item) => ({
+      role: 'participant' as const,
+      agentId: item.agentId,
+      parentRunId: item.lineage.parentRunId,
+      parentStepId: item.lineage.parentStepId,
+      childStepId: item.lineage.childStepId,
+      threadKey: item.lineage.threadKey,
+      participantIndex: item.lineage.participantIndex,
+      status: item.status,
+      delegatedRunId: item.delegatedRunId,
+      delegatedRunStatus: item.delegatedRunStatus,
+      startedAt: item.startedAt,
+      finishedAt: item.finishedAt,
+    })),
+  ];
+}
+
+function buildWorkflowRunReadModel(run: WorkflowRunRecord): WorkflowRunRecord {
+  const cloned = cloneWorkflowRun(run);
+  return {
+    ...cloned,
+    stepResults: cloned.stepResults.map((step) => ({
+      ...step,
+      ...(deriveWorkflowChildRuns(step) ? { childRuns: deriveWorkflowChildRuns(step) } : {}),
+    })),
+  };
+}
+
+function getWorkflowControlTarget(
+  run: WorkflowRunRecord,
+  childStepId: string,
+):
+  | {
+      scope: 'step' | 'child';
+      status: WorkflowRunRecord['status'] | 'done' | 'error';
+      stepId: string;
+    }
+  | null {
+  const readModel = buildWorkflowRunReadModel(run);
+  for (const step of readModel.stepResults) {
+    if (step.stepId === childStepId) {
+      return {
+        scope: 'step',
+        stepId: step.stepId,
+        status:
+          step.delegatedRunStatus === 'suspended'
+            ? 'suspended'
+            : step.error
+              ? 'error'
+              : step.output !== undefined
+                ? 'done'
+                : run.status,
+      };
+    }
+    const child = step.childRuns?.find((item) => item.childStepId === childStepId);
+    if (child) {
+      return {
+        scope: 'child',
+        stepId: step.stepId,
+        status: child.status ?? run.status,
+      };
+    }
+  }
+  return null;
+}
+
+function buildWorkflowControlResult(args: {
+  action: WorkflowControlAction;
+  accepted: boolean;
+  sourceRunId: string;
+  resultRunId: string;
+  targetScope: WorkflowControlTargetScope;
+  targetStepId?: string;
+  targetChildStepId?: string;
+  status?: WorkflowRunRecord['status'];
+  reason?: string;
+}): WorkflowControlResult {
+  const result: WorkflowControlResult = {
+    action: args.action,
+    accepted: args.accepted,
+    sourceRunId: args.sourceRunId,
+    resultRunId: args.resultRunId,
+    targetScope: args.targetScope,
+    targetStepId: args.targetStepId,
+    targetChildStepId: args.targetChildStepId,
+    status: args.status,
+    reason: args.reason,
+    runId: args.resultRunId,
+    childStepId: args.targetChildStepId,
+  };
+
+  if (args.action === 'cancel') {
+    result.cancelled = args.accepted;
+  }
+  if (args.action === 'resume') {
+    result.resumed = args.accepted;
+  }
+  if (args.action === 'retryFromStep') {
+    result.fromStepId = args.targetStepId;
+  }
+  if (args.action === 'skipStep') {
+    result.stepId = args.targetStepId;
+  }
+
+  return result;
 }
 
 function validateWorkflowTarget(
@@ -1199,40 +1362,131 @@ export async function dispatchWorkflowRpc(
       const service = await getWorkflowKernelService(ctx);
       const live = service.getRun(runId);
       if (live) {
-        return ok(id, live);
+        return ok(id, buildWorkflowRunReadModel(live));
       }
       const history = await readWorkflowRunsFile(ctx.dataDir);
       const found = history.find((r) => r.runId === runId);
-      return ok(id, found ?? null);
+      return ok(id, found ? buildWorkflowRunReadModel(found) : null);
     }
 
     case 'workflow.cancel': {
-      const { runId } = (params ?? {}) as { runId?: string };
+      const { runId, childStepId } = (params ?? {}) as { runId?: string; childStepId?: string };
       if (!runId) return err(id, -32602, 'runId is required');
       const service = await getWorkflowKernelService(ctx);
       const liveRun = service.getRun(runId);
       if (!liveRun) return err(id, 404, `Run not found: ${runId}`);
-      if (liveRun.status !== 'running') {
-        return ok(id, { cancelled: false, reason: `Run status is already '${liveRun.status}'` });
+      const resolvedTarget = childStepId ? getWorkflowControlTarget(liveRun, childStepId) : null;
+      if (childStepId) {
+        if (!resolvedTarget) {
+          return err(id, 404, `Child step not found: ${childStepId}`);
+        }
+        if (resolvedTarget.status !== 'running' && resolvedTarget.status !== 'suspended') {
+          return ok(
+            id,
+            buildWorkflowControlResult({
+              action: 'cancel',
+              accepted: false,
+              sourceRunId: runId,
+              resultRunId: runId,
+              targetScope: resolvedTarget.scope,
+              targetStepId: resolvedTarget.stepId,
+              targetChildStepId: childStepId,
+              status: resolvedTarget.status,
+              reason: `Target ${resolvedTarget.scope} status is already '${resolvedTarget.status}'`,
+            }),
+          );
+        }
+      }
+      if (liveRun.status !== 'running' && liveRun.status !== 'suspended') {
+        return ok(
+          id,
+          buildWorkflowControlResult({
+            action: 'cancel',
+            accepted: false,
+            sourceRunId: runId,
+            resultRunId: runId,
+            targetScope: resolvedTarget?.scope ?? 'run',
+            targetStepId: resolvedTarget?.stepId,
+            targetChildStepId: childStepId,
+            status: liveRun.status,
+            reason: `Run status is already '${liveRun.status}'`,
+          }),
+        );
       }
       await service.cancelRun(runId);
-      return ok(id, { cancelled: true, runId });
+      return ok(
+        id,
+        buildWorkflowControlResult({
+          action: 'cancel',
+          accepted: true,
+          sourceRunId: runId,
+          resultRunId: runId,
+          targetScope: resolvedTarget?.scope ?? 'run',
+          targetStepId: resolvedTarget?.stepId,
+          targetChildStepId: childStepId,
+          status: 'cancelled',
+        }),
+      );
     }
 
     case 'workflow.resume': {
-      const { runId } = (params ?? {}) as { runId?: string };
+      const { runId, childStepId } = (params ?? {}) as { runId?: string; childStepId?: string };
       if (!runId) return err(id, -32602, 'runId is required');
       const service = await getWorkflowKernelService(ctx);
       const liveRun = service.getRun(runId);
       if (!liveRun) return err(id, 404, `Run not found: ${runId}`);
+      const resolvedTarget = childStepId ? getWorkflowControlTarget(liveRun, childStepId) : null;
+      if (childStepId) {
+        if (!resolvedTarget) {
+          return err(id, 404, `Child step not found: ${childStepId}`);
+        }
+        if (resolvedTarget.status !== 'suspended') {
+          return ok(
+            id,
+            buildWorkflowControlResult({
+              action: 'resume',
+              accepted: false,
+              sourceRunId: runId,
+              resultRunId: runId,
+              targetScope: resolvedTarget.scope,
+              targetStepId: resolvedTarget.stepId,
+              targetChildStepId: childStepId,
+              status: resolvedTarget.status,
+              reason: `Target ${resolvedTarget.scope} status is already '${resolvedTarget.status}'`,
+            }),
+          );
+        }
+      }
       if (liveRun.status !== 'suspended') {
-        return ok(id, {
-          resumed: false,
-          reason: `Run status is already '${liveRun.status}'`,
-        });
+        return ok(
+          id,
+          buildWorkflowControlResult({
+            action: 'resume',
+            accepted: false,
+            sourceRunId: runId,
+            resultRunId: runId,
+            targetScope: resolvedTarget?.scope ?? 'run',
+            targetStepId: resolvedTarget?.stepId,
+            targetChildStepId: childStepId,
+            status: liveRun.status,
+            reason: `Run status is already '${liveRun.status}'`,
+          }),
+        );
       }
       const resumed = await service.resumeRun(runId);
-      return ok(id, { resumed: true, runId, status: resumed?.status ?? 'running' });
+      return ok(
+        id,
+        buildWorkflowControlResult({
+          action: 'resume',
+          accepted: true,
+          sourceRunId: runId,
+          resultRunId: runId,
+          targetScope: resolvedTarget?.scope ?? 'run',
+          targetStepId: resolvedTarget?.stepId,
+          targetChildStepId: childStepId,
+          status: resumed?.status ?? 'running',
+        }),
+      );
     }
 
     case 'workflow.history': {
@@ -1246,37 +1500,95 @@ export async function dispatchWorkflowRpc(
         0,
         100,
       );
-      return ok(id, { runs: merged });
+      return ok(id, { runs: merged.map((run) => buildWorkflowRunReadModel(run)) });
     }
 
     case 'workflow.retryFromStep': {
-      const { runId, fromStepId } = (params ?? {}) as { runId?: string; fromStepId?: string };
+      const { runId, fromStepId, childStepId } = (params ?? {}) as {
+        runId?: string;
+        fromStepId?: string;
+        childStepId?: string;
+      };
       if (!runId) return err(id, -32602, 'runId is required');
-      if (!fromStepId) return err(id, -32602, 'fromStepId is required');
+      if (!fromStepId && !childStepId) {
+        return err(id, -32602, 'fromStepId or childStepId is required');
+      }
+      if (fromStepId && childStepId) {
+        return err(id, -32602, 'fromStepId and childStepId cannot be used together');
+      }
       const service = await getWorkflowKernelService(ctx);
       const workflows = await readWorkflowsFile(ctx.dataDir);
       const history = await readWorkflowRunsFile(ctx.dataDir);
       const priorRun = service.getRun(runId) ?? history.find((r) => r.runId === runId) ?? null;
       if (!priorRun) return err(id, 404, `Run not found: ${runId}`);
+      const resolvedTarget = childStepId ? getWorkflowControlTarget(priorRun, childStepId) : null;
+      if (childStepId && !resolvedTarget) {
+        return err(id, 404, `Child step not found: ${childStepId}`);
+      }
+      const resolvedFromStepId = fromStepId ?? resolvedTarget?.stepId;
+      if (!resolvedFromStepId) {
+        return err(id, 404, 'Unable to resolve retry target step');
+      }
       const workflow = workflows.find((w) => w.id === priorRun.workflowId);
       if (!workflow) return err(id, 404, `Workflow not found: ${priorRun.workflowId}`);
-      const newRun = await service.retryFromStep(workflow, priorRun, fromStepId);
-      return ok(id, { runId: newRun.runId });
+      const newRun = await service.retryFromStep(workflow, priorRun, resolvedFromStepId);
+      return ok(
+        id,
+        buildWorkflowControlResult({
+          action: 'retryFromStep',
+          accepted: true,
+          sourceRunId: runId,
+          resultRunId: newRun.runId,
+          targetScope: resolvedTarget?.scope ?? 'step',
+          targetStepId: resolvedFromStepId,
+          targetChildStepId: childStepId,
+          status: 'running',
+        }),
+      );
     }
 
     case 'workflow.skipStep': {
-      const { runId, stepId } = (params ?? {}) as { runId?: string; stepId?: string };
+      const { runId, stepId, childStepId } = (params ?? {}) as {
+        runId?: string;
+        stepId?: string;
+        childStepId?: string;
+      };
       if (!runId) return err(id, -32602, 'runId is required');
-      if (!stepId) return err(id, -32602, 'stepId is required');
+      if (!stepId && !childStepId) {
+        return err(id, -32602, 'stepId or childStepId is required');
+      }
+      if (stepId && childStepId) {
+        return err(id, -32602, 'stepId and childStepId cannot be used together');
+      }
       const service = await getWorkflowKernelService(ctx);
       const history = await readWorkflowRunsFile(ctx.dataDir);
       const priorRun = service.getRun(runId) ?? history.find((r) => r.runId === runId) ?? null;
       if (!priorRun) return err(id, 404, `Run not found: ${runId}`);
+      const resolvedTarget = childStepId ? getWorkflowControlTarget(priorRun, childStepId) : null;
+      if (childStepId && !resolvedTarget) {
+        return err(id, 404, `Child step not found: ${childStepId}`);
+      }
+      const resolvedStepId = stepId ?? resolvedTarget?.stepId;
+      if (!resolvedStepId) {
+        return err(id, 404, 'Unable to resolve skip target step');
+      }
       if (priorRun.status === 'running') {
         return err(id, 400, 'Cannot skip a step while the run is still running; cancel first.');
       }
-      const newRun = await service.skipStep(runId, stepId);
-      return ok(id, { runId: newRun.runId });
+      const newRun = await service.skipStep(runId, resolvedStepId);
+      return ok(
+        id,
+        buildWorkflowControlResult({
+          action: 'skipStep',
+          accepted: true,
+          sourceRunId: runId,
+          resultRunId: newRun.runId,
+          targetScope: resolvedTarget?.scope ?? 'step',
+          targetStepId: resolvedStepId,
+          targetChildStepId: childStepId,
+          status: 'running',
+        }),
+      );
     }
 
     default: {

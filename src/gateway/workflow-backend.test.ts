@@ -195,6 +195,54 @@ function createBlockingRunner(unblock: Promise<void>): AgentRunner {
   } as unknown as AgentRunner;
 }
 
+function createFailingRunner(message = 'runner failed'): AgentRunner {
+  let threadKey = 'default';
+  return {
+    setThread(nextThreadKey: string) {
+      threadKey = nextThreadKey;
+      return undefined;
+    },
+    serializeState() {
+      return {
+        threadKey,
+        promptLayerHashes: [],
+        cachedSystemPrompt: null,
+        toolResultCache: [],
+      };
+    },
+    restoreState(state: { threadKey: string }) {
+      threadKey = state.threadKey;
+    },
+    get currentSessionKey() {
+      return `agent:agent-main:${threadKey}`;
+    },
+    async beginKernelTurn(runId: string, userMessage: string) {
+      return {
+        runId,
+        userMessage,
+        options: undefined,
+        model: 'fake-model',
+        maxTokens: 256,
+        systemPrompt: '',
+        messages: [],
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalCacheReadTokens: 0,
+        totalText: '',
+        toolRounds: 0,
+        toolFailureMessages: [],
+        finalFailureMessage: null,
+        finalFailureCode: undefined,
+        recoverableStreamRetries: 0,
+        toolLoopDetector: { lastEntry: null, consecutiveRepeats: 0 },
+      };
+    },
+    async continueKernelTurn() {
+      throw new Error(message);
+    },
+  } as unknown as AgentRunner;
+}
+
 function createRpcContext(dataDir: string, runner: AgentRunner = createRunner()): RpcContext {
   return {
     runners: new Map([['agent-main', runner]]),
@@ -1115,6 +1163,83 @@ describe('workflow-backend kernel integration', () => {
     await waitForCheckpointCleanup(dataDir);
   });
 
+  it('exposes derived childRuns for super node steps through workflow.runStatus', async () => {
+    const dataDir = join(process.cwd(), `.tmp-workflow-backend-test-child-runs-${ulid()}`);
+    const workflow = createWorkflow({
+      id: 'wf-super-node-child-runs',
+      name: 'Super Node Child Runs',
+      steps: [
+        {
+          id: 'collect',
+          type: 'multi_source',
+          agentId: 'coordinator-agent',
+          participantAgentIds: ['source-a', 'source-b'],
+          superNodePrompts: ['政策监管', '市场竞争'],
+          messageTemplate: '围绕机器人行业做全维度采集',
+          condition: 'on_success',
+        },
+      ],
+    });
+    await writeWorkflows(dataDir, [workflow]);
+
+    const sharedRunner = createRunner();
+    const ctx = createRpcContext(dataDir, sharedRunner);
+    ctx.runners = new Map([
+      ['coordinator-agent', sharedRunner],
+      ['source-a', sharedRunner],
+      ['source-b', sharedRunner],
+    ]);
+
+    const response = await dispatchWorkflowRpc(
+      'workflow.run',
+      30,
+      { workflowId: workflow.id, input: 'world' },
+      ctx,
+    );
+    const runId = (response.result as { runId: string }).runId;
+    await waitForWorkflowStatus(ctx, runId);
+
+    const runStatus = await dispatchWorkflowRpc('workflow.runStatus', 31, { runId }, ctx);
+    const run = runStatus.result as WorkflowRunRecord;
+    expect(run.status).toBe('done');
+    expect(run.stepResults[0]?.childRuns).toMatchObject([
+      {
+        role: 'coordinator',
+        agentId: 'coordinator-agent',
+        parentRunId: runId,
+        parentStepId: 'collect',
+        childStepId: 'collect:coordinator',
+        threadKey: 'workflow:' + runId + ':step0:coordinator',
+        status: 'done',
+        delegatedRunStatus: 'done',
+      },
+      {
+        role: 'participant',
+        agentId: 'source-a',
+        parentRunId: runId,
+        parentStepId: 'collect',
+        childStepId: 'collect:participant:1',
+        threadKey: 'workflow:' + runId + ':step0:participant-1',
+        participantIndex: 1,
+        status: 'done',
+        delegatedRunStatus: 'done',
+      },
+      {
+        role: 'participant',
+        agentId: 'source-b',
+        parentRunId: runId,
+        parentStepId: 'collect',
+        childStepId: 'collect:participant:2',
+        threadKey: 'workflow:' + runId + ':step0:participant-2',
+        participantIndex: 2,
+        status: 'done',
+        delegatedRunStatus: 'done',
+      },
+    ]);
+
+    await waitForCheckpointCleanup(dataDir);
+  });
+
   it('keeps cancelled status visible before workflow finalize completes', async () => {
     const dataDir = join(process.cwd(), `.tmp-workflow-backend-test-cancel-visible-${ulid()}`);
     const workflow = createWorkflow({ id: 'wf-cancel-visible' });
@@ -1159,6 +1284,142 @@ describe('workflow-backend kernel integration', () => {
 
     const finalStatus = await dispatchWorkflowRpc('workflow.runStatus', 353, { runId }, ctx);
     expect((finalStatus.result as { status: string }).status).toBe('cancelled');
+  });
+
+  it('retries a super node step when workflow.retryFromStep is targeted by childStepId', async () => {
+    const dataDir = join(process.cwd(), `.tmp-workflow-backend-test-child-retry-${ulid()}`);
+    const workflow = createWorkflow({
+      id: 'wf-child-retry',
+      steps: [
+        {
+          id: 'collect',
+          type: 'multi_source',
+          agentId: 'coordinator-agent',
+          participantAgentIds: ['source-a', 'source-b'],
+          superNodePrompts: ['政策监管', '市场竞争'],
+          messageTemplate: '围绕机器人行业做全维度采集',
+          condition: 'on_success',
+        },
+      ],
+    });
+    await writeWorkflows(dataDir, [workflow]);
+
+    const okRunner = createRunner();
+    const initialRunners = new Map([
+      ['coordinator-agent', okRunner],
+      ['source-a', okRunner],
+      ['source-b', createFailingRunner('source-b failed')],
+    ]);
+    const ctx = createRpcContext(dataDir, okRunner);
+    ctx.runners = initialRunners;
+
+    const started = await dispatchWorkflowRpc(
+      'workflow.run',
+      370,
+      { workflowId: workflow.id, input: 'retry-child' },
+      ctx,
+    );
+    const runId = (started.result as { runId: string }).runId;
+    const failed = (await waitForWorkflowStatus(ctx, runId)) as WorkflowRunRecord;
+    expect(failed.status).toBe('error');
+
+    initialRunners.set('source-b', okRunner);
+
+    const retried = await dispatchWorkflowRpc(
+      'workflow.retryFromStep',
+      371,
+      { runId, childStepId: 'collect:participant:2' },
+      ctx,
+    );
+    expect(retried.result).toMatchObject({
+      action: 'retryFromStep',
+      accepted: true,
+      sourceRunId: runId,
+      resultRunId: expect.any(String),
+      targetScope: 'child',
+      targetStepId: 'collect',
+      targetChildStepId: 'collect:participant:2',
+      childStepId: 'collect:participant:2',
+      fromStepId: 'collect',
+      status: 'running',
+    });
+
+    const retriedRunId = (retried.result as { runId: string }).runId;
+    const completed = (await waitForWorkflowStatus(ctx, retriedRunId)) as WorkflowRunRecord;
+    expect(completed.status).toBe('done');
+
+    await waitForCheckpointCleanup(dataDir);
+  });
+
+  it('skips a super node step when workflow.skipStep is targeted by childStepId', async () => {
+    const dataDir = join(process.cwd(), `.tmp-workflow-backend-test-child-skip-${ulid()}`);
+    const workflow = createWorkflow({
+      id: 'wf-child-skip',
+      steps: [
+        {
+          id: 'collect',
+          type: 'multi_source',
+          agentId: 'coordinator-agent',
+          participantAgentIds: ['source-a', 'source-b'],
+          superNodePrompts: ['政策监管', '市场竞争'],
+          messageTemplate: '围绕机器人行业做全维度采集',
+          condition: 'on_success',
+        },
+        {
+          id: 'finalize',
+          type: 'agent',
+          agentId: 'agent-main',
+          messageTemplate: 'finalize {{input}}',
+          condition: 'on_success',
+        },
+      ],
+    });
+    await writeWorkflows(dataDir, [workflow]);
+
+    const okRunner = createRunner();
+    const ctx = createRpcContext(dataDir, okRunner);
+    ctx.runners = new Map([
+      ['agent-main', okRunner],
+      ['coordinator-agent', okRunner],
+      ['source-a', okRunner],
+      ['source-b', createFailingRunner('source-b failed')],
+    ]);
+
+    const started = await dispatchWorkflowRpc(
+      'workflow.run',
+      380,
+      { workflowId: workflow.id, input: 'skip-child' },
+      ctx,
+    );
+    const runId = (started.result as { runId: string }).runId;
+    const failed = (await waitForWorkflowStatus(ctx, runId)) as WorkflowRunRecord;
+    expect(failed.status).toBe('error');
+
+    const skipped = await dispatchWorkflowRpc(
+      'workflow.skipStep',
+      381,
+      { runId, childStepId: 'collect:participant:2' },
+      ctx,
+    );
+    expect(skipped.result).toMatchObject({
+      action: 'skipStep',
+      accepted: true,
+      sourceRunId: runId,
+      resultRunId: expect.any(String),
+      targetScope: 'child',
+      targetStepId: 'collect',
+      targetChildStepId: 'collect:participant:2',
+      childStepId: 'collect:participant:2',
+      stepId: 'collect',
+      status: 'running',
+    });
+
+    const skippedRunId = (skipped.result as { runId: string }).runId;
+    const completed = (await waitForWorkflowStatus(ctx, skippedRunId)) as WorkflowRunRecord;
+    expect(completed.status).toBe('done');
+    expect(completed.stepResults.some((step) => step.stepId === 'finalize')).toBe(true);
+
+    await waitForCheckpointCleanup(dataDir);
   });
 
   it('includes live running workflows in history without backend cache state', async () => {

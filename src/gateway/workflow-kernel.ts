@@ -72,7 +72,11 @@ function cloneStepResults(stepResults: WorkflowStepResult[]): WorkflowStepResult
     superNodeTrace: step.superNodeTrace
       ? {
           ...step.superNodeTrace,
-          participantResults: step.superNodeTrace.participantResults.map((item) => ({ ...item })),
+          coordinatorLineage: { ...step.superNodeTrace.coordinatorLineage },
+          participantResults: step.superNodeTrace.participantResults.map((item) => ({
+            ...item,
+            lineage: { ...item.lineage },
+          })),
         }
       : undefined,
     varsSnapshot: step.varsSnapshot ? { ...step.varsSnapshot } : undefined,
