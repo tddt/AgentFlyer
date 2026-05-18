@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { WebSocket as WsWebSocket } from 'ws';
 import { ulid } from 'ulid';
+import type { WebSocket as WsWebSocket } from 'ws';
 import { AnthropicProvider } from '../agent/llm/anthropic.js';
 import { FailoverProvider } from '../agent/llm/failover.js';
 import { OpenAIProvider, createCompatProvider } from '../agent/llm/openai.js';
@@ -48,8 +48,6 @@ import { SessionMetaStore } from '../core/session/meta.js';
 import { SessionStore } from '../core/session/store.js';
 import { asAgentId, asThreadKey } from '../core/types.js';
 import { FederationNode } from '../federation/node.js';
-import { getGlobalBus } from '../mesh/bus.js';
-import type { ResultPayload } from '../mesh/protocol.js';
 import {
   McpRegistry,
   adaptMcpRegistryToTools,
@@ -63,6 +61,8 @@ import type {
 } from '../mcp/index.js';
 import { MemoryOrganizer } from '../memory/organizer.js';
 import { MemoryStore } from '../memory/store.js';
+import { getGlobalBus } from '../mesh/bus.js';
+import type { ResultPayload } from '../mesh/protocol.js';
 import { createSandboxRuntime } from '../sandbox/runtime.js';
 import { CronScheduler } from '../scheduler/cron.js';
 import { filterSkillsForAgent } from '../skills/filter.js';
@@ -683,8 +683,7 @@ export async function startGateway(
     const newConfig = loadConfig(configFilePath);
 
     // ── Config diff detection: only rebuild the subsystems that changed ──
-    const mcpChanged =
-      JSON.stringify(prevConfig.mcp) !== JSON.stringify(newConfig.mcp);
+    const mcpChanged = JSON.stringify(prevConfig.mcp) !== JSON.stringify(newConfig.mcp);
     const agentChanged = (id: string) => {
       const prev = prevConfig.agents.find((a) => a.id === id);
       const next = newConfig.agents.find((a) => a.id === id);
@@ -1319,7 +1318,11 @@ export async function startGateway(
           const threadKey = asThreadKey(`federation-${ulid()}`);
           const t0 = Date.now();
           try {
-            const { runId } = await kernelSvc.startTurn({ agentId, userMessage: instruction, threadKey });
+            const { runId } = await kernelSvc.startTurn({
+              agentId,
+              userMessage: instruction,
+              threadKey,
+            });
             const result = await kernelSvc.waitForRun(runId, timeoutMs);
             const durationMs = Date.now() - t0;
             incCounter('agentflyer_federation_delegate_total', {

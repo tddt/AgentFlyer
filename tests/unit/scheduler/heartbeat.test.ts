@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { HeartbeatScheduler } from '../../../src/scheduler/heartbeat.js';
 import { asAgentId } from '../../../src/core/types.js';
+import { HeartbeatScheduler } from '../../../src/scheduler/heartbeat.js';
 
 describe('HeartbeatScheduler', () => {
   let hb: HeartbeatScheduler;

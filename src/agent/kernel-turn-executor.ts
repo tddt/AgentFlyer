@@ -6,9 +6,9 @@ import {
   type KernelProcessSnapshot,
   ScopedCheckpointStore,
 } from '../core/kernel/index.js';
+import type { ProcessStatus } from '../core/kernel/types.js';
 import type { StreamChunk } from '../core/types.js';
 import { asProcessId } from '../core/types.js';
-import type { ProcessStatus } from '../core/kernel/types.js';
 import { drainWaitingAgentSyscalls } from './kernel-syscall-broker.js';
 import {
   type AgentTurnProcessInput,
@@ -609,6 +609,7 @@ export async function executeAgentTurnViaKernel(
   if (!options.timeoutMs || options.timeoutMs <= 0) {
     return await turnPromise.finally(() => unsubscribeFn?.());
   }
+  const timeoutMs = options.timeoutMs;
 
   // Sliding deadline: reset on every streaming chunk or completed kernel step so that
   // active LLM streaming or tool execution doesn't count as inactivity.
@@ -631,10 +632,10 @@ export async function executeAgentTurnViaKernel(
     };
 
     // Check roughly once per second (or once per timeoutMs if it's very short)
-    const watchdogIntervalMs = Math.min(options.timeoutMs!, 1_000);
+    const watchdogIntervalMs = Math.min(timeoutMs, 1_000);
     const watchdogTimer = setInterval(() => {
       const idleMs = Date.now() - lastActivityAt;
-      if (idleMs >= options.timeoutMs!) {
+      if (idleMs >= timeoutMs) {
         cleanup();
         const message = `Agent '${options.input.agentId}' turn timed out after ${options.timeoutMs}ms`;
         void executor.abortTurn(runId, message).finally(() => reject(new Error(message)));

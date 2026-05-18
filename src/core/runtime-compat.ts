@@ -2,7 +2,7 @@
 // All Bun-specific API calls should go through this module.
 
 import { createHash } from 'node:crypto';
-import { readFile as fsReadFile, unlink, writeFile as fsWriteFile, rename } from 'node:fs/promises';
+import { readFile as fsReadFile, writeFile as fsWriteFile, rename, unlink } from 'node:fs/promises';
 
 /** True when running inside Bun runtime (main thread or worker threads) */
 export const isBun: boolean =

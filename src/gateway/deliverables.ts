@@ -926,7 +926,8 @@ export class DeliverableStore {
     const current = await this.readAll();
     const index = current.findIndex((record) => record.id === id);
     if (index < 0) return null;
-    const existing = current[index]!;
+    const existing = current[index];
+    if (!existing) return null;
     const updated: DeliverableRecord = { ...existing, ...updates, updatedAt: Date.now() };
     const next = current.map((record, i) => (i === index ? updated : record));
     await writeFile(deliverablesFile(this.dataDir), JSON.stringify(next, null, 2), 'utf-8');
@@ -937,7 +938,8 @@ export class DeliverableStore {
     const current = await this.readAll();
     const index = current.findIndex((record) => record.id === id);
     if (index < 0) return null;
-    const existing = current[index]!;
+    const existing = current[index];
+    if (!existing) return null;
     const updated: DeliverableRecord = {
       ...existing,
       artifacts: [...existing.artifacts, artifact],
@@ -981,7 +983,8 @@ export class DeliverableStore {
     const current = await this.readAll();
     const targetIdx = current.findIndex((r) => r.id === targetId);
     if (targetIdx < 0) return null;
-    const target = current[targetIdx]!;
+    const target = current[targetIdx];
+    if (!target) return null;
     const sources = sourceIds
       .map((id) => current.find((r) => r.id === id))
       .filter((r): r is DeliverableRecord => r !== undefined);
@@ -1022,7 +1025,8 @@ export class DeliverableStore {
     const current = await this.readAll();
     const index = current.findIndex((record) => record.id === id);
     if (index < 0) return null;
-    const existing = current[index]!;
+    const existing = current[index];
+    if (!existing) return null;
     const updated: DeliverableRecord = {
       ...existing,
       ...(category ? { category } : { category: undefined }),
@@ -1041,13 +1045,12 @@ export class DeliverableStore {
     const current = await this.readAll();
     const index = current.findIndex((r) => r.id === deliverableId);
     if (index < 0) return null;
-    const existing = current[index]!;
+    const existing = current[index];
+    if (!existing) return null;
     const updated: DeliverableRecord = {
       ...existing,
       artifacts: existing.artifacts.map((a) =>
-        a.id === artifactId
-          ? { ...a, ...(category ? { category } : { category: undefined }) }
-          : a,
+        a.id === artifactId ? { ...a, ...(category ? { category } : { category: undefined }) } : a,
       ),
       updatedAt: Date.now(),
     };
@@ -1064,12 +1067,11 @@ export class DeliverableStore {
     const current = await this.readAll();
     const index = current.findIndex((r) => r.id === deliverableId);
     if (index < 0) return null;
-    const existing = current[index]!;
+    const existing = current[index];
+    if (!existing) return null;
     const updated: DeliverableRecord = {
       ...existing,
-      artifacts: existing.artifacts.map((a) =>
-        a.id === artifactId ? { ...a, name: newName } : a,
-      ),
+      artifacts: existing.artifacts.map((a) => (a.id === artifactId ? { ...a, name: newName } : a)),
       updatedAt: Date.now(),
     };
     const next = current.map((r, i) => (i === index ? updated : r));
@@ -1084,7 +1086,8 @@ export class DeliverableStore {
     const current = await this.readAll();
     const index = current.findIndex((r) => r.id === deliverableId);
     if (index < 0) return null;
-    const existing = current[index]!;
+    const existing = current[index];
+    if (!existing) return null;
     const updated: DeliverableRecord = {
       ...existing,
       artifacts: existing.artifacts.filter((a) => a.id !== artifactId),

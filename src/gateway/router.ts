@@ -1,5 +1,5 @@
-import { createReadStream } from 'node:fs';
 import { randomBytes } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ulid } from 'ulid';
@@ -595,7 +595,7 @@ async function _routeRequest(
         })),
     );
     const inboundMessage = mention.text;
-    agentId = resumeRequested ? agentId : mention.agentId ?? rawAgentId;
+    agentId = resumeRequested ? agentId : (mention.agentId ?? rawAgentId);
     if (!resumeRequested && !agentId && opts.intentRouter) {
       const routed = opts.intentRouter.routeWithFallback(inboundMessage);
       agentId = opts.rpcContext.runners.has(routed.agent) ? routed.agent : routed.fallback;
@@ -735,7 +735,11 @@ async function _routeRequest(
       }
     } catch (err) {
       logger.error('Streaming chat error', { agentId, error: String(err) });
-      sendEvent({ type: 'error', message: String(err), ...(resumeRunId ? { runId: resumeRunId } : {}) });
+      sendEvent({
+        type: 'error',
+        message: String(err),
+        ...(resumeRunId ? { runId: resumeRunId } : {}),
+      });
     }
     res.write('data: [DONE]\n\n');
     res.end();

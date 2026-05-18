@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { asAgentId } from '../core/types.js';
 import { MeshBus, getGlobalBus, resetGlobalBus } from './bus.js';
 import { buildEnvelope } from './protocol.js';
-import { asAgentId } from '../core/types.js';
 
 const A = asAgentId('agent-a');
 const B = asAgentId('agent-b');
@@ -57,7 +57,11 @@ describe('MeshBus – broadcast delivery', () => {
     bus.subscribeAll(spy);
 
     const env1 = buildEnvelope('task.spawn', A, B, { agentId: B, instruction: 'x' });
-    const env2 = buildEnvelope('task.result', B, A, { taskId: 't1' as never, success: true, output: 'y' });
+    const env2 = buildEnvelope('task.result', B, A, {
+      taskId: 't1' as never,
+      success: true,
+      output: 'y',
+    });
     bus.publish(env1);
     bus.publish(env2);
 
@@ -100,7 +104,9 @@ describe('MeshBus – send()', () => {
 describe('MeshBus – handler errors do not propagate', () => {
   it('continues delivery even if one handler throws', () => {
     const bus = new MeshBus();
-    const throwing = vi.fn(() => { throw new Error('boom'); });
+    const throwing = vi.fn(() => {
+      throw new Error('boom');
+    });
     const safe = vi.fn();
     bus.subscribeAll(throwing);
     bus.subscribe(B, safe);
@@ -118,13 +124,31 @@ describe('MeshBus – handler errors do not propagate', () => {
 describe('MeshBus – agent lifecycle', () => {
   it('registers agent on announceAgent', () => {
     const bus = new MeshBus();
-    bus.announceAgent({ agentId: A, name: 'Agent A', capabilities: ['code'], model: 'claude', role: 'worker', status: 'idle', registeredAt: 0, lastSeenAt: 0 });
+    bus.announceAgent({
+      agentId: A,
+      name: 'Agent A',
+      capabilities: ['code'],
+      model: 'claude',
+      role: 'worker',
+      status: 'idle',
+      registeredAt: 0,
+      lastSeenAt: 0,
+    });
     expect(bus.registry.get(A)).not.toBeUndefined();
   });
 
   it('unregisters agent on removeAgent', () => {
     const bus = new MeshBus();
-    bus.announceAgent({ agentId: A, name: 'Agent A', capabilities: [], model: 'claude', role: 'worker', status: 'idle', registeredAt: 0, lastSeenAt: 0 });
+    bus.announceAgent({
+      agentId: A,
+      name: 'Agent A',
+      capabilities: [],
+      model: 'claude',
+      role: 'worker',
+      status: 'idle',
+      registeredAt: 0,
+      lastSeenAt: 0,
+    });
     bus.removeAgent(A);
     expect(bus.registry.get(A)).toBeUndefined();
   });

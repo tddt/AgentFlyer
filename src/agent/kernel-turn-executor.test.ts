@@ -140,7 +140,11 @@ async function waitForRunPhase(
   while (Date.now() < deadline) {
     const run = await getAgentTurnRunViaKernel({ dataDir, runners, runId });
     if (run?.phase === phase) {
-      return run as { phase: 'suspended' | 'done'; error?: { code?: string }; result?: { text?: string } };
+      return run as {
+        phase: 'suspended' | 'done';
+        error?: { code?: string };
+        result?: { text?: string };
+      };
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }

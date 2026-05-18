@@ -1067,7 +1067,19 @@ describe('AgentKernelService', () => {
           state: 'running',
         },
       });
-      const activity = (statusResponse.result as { activity: { pendingCount: number; queuedRuns: Array<{ runId: string; threadKey: string; processStatus: string; phase: string }> } }).activity;
+      const activity = (
+        statusResponse.result as {
+          activity: {
+            pendingCount: number;
+            queuedRuns: Array<{
+              runId: string;
+              threadKey: string;
+              processStatus: string;
+              phase: string;
+            }>;
+          };
+        }
+      ).activity;
       if (pending.processStatus === 'waiting') {
         expect(activity.pendingCount).toBe(1);
         expect(activity.queuedRuns).toMatchObject([
@@ -1138,7 +1150,9 @@ describe('AgentKernelService', () => {
     const service = trackService(
       new AgentKernelService({
         dataDir,
-        runners: new Map([['agent-main', createRunner(dataDir, new BlockingProvider(firstRunReleased))]]),
+        runners: new Map([
+          ['agent-main', createRunner(dataDir, new BlockingProvider(firstRunReleased))],
+        ]),
       }),
     );
 

@@ -84,8 +84,14 @@ describe('loadStats', () => {
   it('aggregates bills into DailyStats rows', async () => {
     const dataDir = await createTempDir();
     const ts = '2025-01-15T10:00:00.000Z';
-    await recordTokenBill(dataDir, makeBill({ ts, inputTokens: 100, outputTokens: 50, totalTokens: 150 }));
-    await recordTokenBill(dataDir, makeBill({ ts, inputTokens: 200, outputTokens: 75, totalTokens: 275 }));
+    await recordTokenBill(
+      dataDir,
+      makeBill({ ts, inputTokens: 100, outputTokens: 50, totalTokens: 150 }),
+    );
+    await recordTokenBill(
+      dataDir,
+      makeBill({ ts, inputTokens: 200, outputTokens: 75, totalTokens: 275 }),
+    );
 
     const stats = await loadStats(dataDir, asAgentId('agent-alpha'));
     expect(stats).toHaveLength(1);
@@ -112,8 +118,14 @@ describe('loadStats', () => {
   it('loads stats for all agents when agentId is omitted', async () => {
     const dataDir = await createTempDir();
     const ts = '2025-03-01T12:00:00.000Z';
-    await recordTokenBill(dataDir, makeBill({ ts, agentId: asAgentId('agent-a'), totalTokens: 50 }));
-    await recordTokenBill(dataDir, makeBill({ ts, agentId: asAgentId('agent-b'), totalTokens: 80 }));
+    await recordTokenBill(
+      dataDir,
+      makeBill({ ts, agentId: asAgentId('agent-a'), totalTokens: 50 }),
+    );
+    await recordTokenBill(
+      dataDir,
+      makeBill({ ts, agentId: asAgentId('agent-b'), totalTokens: 80 }),
+    );
 
     const stats = await loadStats(dataDir);
     const ids = stats.map((s) => s.agentId).sort();

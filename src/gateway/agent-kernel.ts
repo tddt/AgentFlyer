@@ -795,11 +795,13 @@ export class AgentKernelService {
       }
       // Emit progress chunk so channels / UIs can show which tool is running.
       if (pendingSyscall.kind === 'tool.call') {
-        const rawCalls = pendingSyscall.payload['toolCalls'];
+        const rawCalls = pendingSyscall.payload.toolCalls;
         if (Array.isArray(rawCalls)) {
           const toolNames = rawCalls
             .map((t: unknown) =>
-              t !== null && typeof t === 'object' && 'name' in t ? String((t as { name: unknown }).name) : '',
+              t !== null && typeof t === 'object' && 'name' in t
+                ? String((t as { name: unknown }).name)
+                : '',
             )
             .filter(Boolean);
           if (toolNames.length > 0) {
@@ -898,18 +900,21 @@ export class AgentKernelService {
         await this.kernel.deleteProcess(snapshot.pid);
         return;
       }
-      this.rememberRunRecord({
-        runId,
-        agentId: state.agentId,
-        threadKey: state.threadKey,
-        processStatus: snapshot.status,
-        phase: state.phase,
-        createdAt: snapshot.createdAt,
-        updatedAt: snapshot.updatedAt,
-        result: state.result,
-        sessionKey: state.result?.sessionKey,
-        error: state.error,
-      }, false);
+      this.rememberRunRecord(
+        {
+          runId,
+          agentId: state.agentId,
+          threadKey: state.threadKey,
+          processStatus: snapshot.status,
+          phase: state.phase,
+          createdAt: snapshot.createdAt,
+          updatedAt: snapshot.updatedAt,
+          result: state.result,
+          sessionKey: state.result?.sessionKey,
+          error: state.error,
+        },
+        false,
+      );
       // RATIONALE: await the save before firing completion waiters so that tests
       // reading the persisted file after waitForArchivedRun always find the record.
       await this.runRecordStore.save(this.runRecords.values());
@@ -917,8 +922,7 @@ export class AgentKernelService {
         this.completeRun(runId, { ok: true, result: state.result });
       } else {
         const failMsg = state.error?.message ?? 'Agent turn failed';
-        const displayMsg =
-          failMsg.length > 300 ? `${failMsg.slice(0, 300)}…` : failMsg;
+        const displayMsg = failMsg.length > 300 ? `${failMsg.slice(0, 300)}…` : failMsg;
         this.publishChunk(runId, { type: 'text_delta', text: `⚠️ 任务执行失败：${displayMsg}` });
         this.publishChunk(runId, { type: 'error', message: failMsg });
         this.completeRun(runId, { ok: false, message: failMsg });

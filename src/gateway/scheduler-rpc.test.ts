@@ -739,7 +739,7 @@ describe('scheduler RPC summaries', () => {
       },
     ]);
 
-    const abortTurn = vi.fn(async () => undefined);
+    const abortTurn = vi.fn(async (_runId: string, _activeMessage: string) => undefined);
     vi.spyOn(agentKernelModule, 'getAgentKernelService').mockResolvedValue({
       cancelRun: vi.fn(async (_runId: string, options?: { activeMessage?: string }) => {
         if (options?.activeMessage) {

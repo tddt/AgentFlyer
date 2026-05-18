@@ -40,7 +40,9 @@ describe('buildPersonaContent', () => {
   });
 
   it('lists allowed tools when an allow list is provided', () => {
-    const cfg = baseCfg({ tools: { allow: ['bash', 'fs_read'], deny: [], approval: [], maxRounds: 60 } });
+    const cfg = baseCfg({
+      tools: { allow: ['bash', 'fs_read'], deny: [], approval: [], maxRounds: 60 },
+    });
     const content = buildPersonaContent(cfg);
     expect(content).toContain('bash');
     expect(content).toContain('fs_read');
@@ -141,8 +143,17 @@ ignored
   });
 
   it('regenerates machine-managed sections from new config', () => {
-    const existing = `# OldName — Soul File\n## Description\nOld desc\n`;
-    const cfg = baseCfg({ name: 'NewName', mesh: { role: 'coordinator', capabilities: [], accepts: [], visibility: 'public', triggers: [] } });
+    const existing = '# OldName — Soul File\n## Description\nOld desc\n';
+    const cfg = baseCfg({
+      name: 'NewName',
+      mesh: {
+        role: 'coordinator',
+        capabilities: [],
+        accepts: [],
+        visibility: 'public',
+        triggers: [],
+      },
+    });
     const md = syncSoulMd(cfg, existing);
     expect(md).toContain('NewName');
     expect(md).toContain('coordinator');

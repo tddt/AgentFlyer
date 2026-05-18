@@ -38,9 +38,7 @@ vi.mock('../../../src/scheduler/task-history.js', () => ({
 // ─── Workflow backend mock ────────────────────────────────────────────────────
 vi.mock('../../../src/gateway/workflow-backend.js', () => ({
   readWorkflowsFile: vi.fn().mockResolvedValue([]),
-  dispatchWorkflowRpc: vi
-    .fn()
-    .mockResolvedValue({ id: 'x', result: { workflows: [] } }),
+  dispatchWorkflowRpc: vi.fn().mockResolvedValue({ id: 'x', result: { workflows: [] } }),
   diagnoseWorkflowValidation: vi.fn().mockReturnValue([]),
   diagnoseWorkflowGraph: vi.fn().mockReturnValue([]),
   runWorkflowForScheduler: vi.fn().mockResolvedValue({ output: 'done', workflowRunId: 'wfr-1' }),
@@ -51,10 +49,10 @@ vi.mock('../../../src/skills/registry.js', () => ({
   scanSkillsDir: vi.fn().mockResolvedValue([]),
 }));
 
+import { getAgentKernelService } from '../../../src/gateway/agent-kernel.js';
 // Import SUT after mocks
 import type { RpcContext } from '../../../src/gateway/rpc.js';
 import { buildErrorResponse, dispatchRpc } from '../../../src/gateway/rpc.js';
-import { getAgentKernelService } from '../../../src/gateway/agent-kernel.js';
 
 // ─── Shared mock kernel — configured in beforeEach via vi.mocked() ────────────
 const mockKernel = {
@@ -62,6 +60,7 @@ const mockKernel = {
   getLatestLiveRunForAgent: vi.fn(),
   getQueuedRunsForAgent: vi.fn(),
   getRun: vi.fn(),
+  cancelRun: vi.fn(),
   cancelQueuedTurn: vi.fn(),
   resumeTurn: vi.fn(),
   reserveQueuedTurn: vi.fn(),
@@ -91,7 +90,7 @@ function makeCtx(overrides: Partial<RpcContext> = {}): RpcContext {
     gatewayVersion: '1.2.0-test',
     startedAt: Date.now() - 5000,
     dataDir: '/tmp/rpc-test',
-    getConfig: () => ({} as import('../../../src/core/config/schema.js').Config),
+    getConfig: () => ({}) as import('../../../src/core/config/schema.js').Config,
     saveAndReload: vi.fn().mockResolvedValue({ reloaded: [] }),
     scheduler: { cancel: vi.fn(), schedule: vi.fn(), get: vi.fn() } as never,
     shutdown: vi.fn().mockResolvedValue(undefined),
@@ -105,7 +104,10 @@ function makeCtx(overrides: Partial<RpcContext> = {}): RpcContext {
       listAll: vi.fn().mockResolvedValue([]),
       update: vi.fn().mockResolvedValue(undefined),
     } as never,
-    contentStore: { list: vi.fn().mockResolvedValue([]), get: vi.fn().mockResolvedValue(null) } as never,
+    contentStore: {
+      list: vi.fn().mockResolvedValue([]),
+      get: vi.fn().mockResolvedValue(null),
+    } as never,
     deliverableStore: { upsert: vi.fn(), get: vi.fn(), list: vi.fn() } as never,
     channels: new Map(),
     runningTasks: new Map(),
@@ -121,15 +123,24 @@ describe('dispatchRpc', () => {
     // Wire up getAgentKernelService to return our shared mock kernel
     vi.mocked(getAgentKernelService).mockResolvedValue(mockKernel as never);
     // Apply sensible default return values
-    mockKernel.executeTurn.mockResolvedValue({ text: 'mock reply', inputTokens: 10, outputTokens: 5 });
+    mockKernel.executeTurn.mockResolvedValue({
+      text: 'mock reply',
+      inputTokens: 10,
+      outputTokens: 5,
+    });
     mockKernel.getLatestLiveRunForAgent.mockReturnValue(null);
     mockKernel.getQueuedRunsForAgent.mockReturnValue([]);
     mockKernel.getRun.mockReturnValue(undefined);
+    mockKernel.cancelRun.mockResolvedValue(null);
     mockKernel.cancelQueuedTurn.mockResolvedValue(true);
     mockKernel.resumeTurn.mockResolvedValue({ runId: 'run-1', phase: 'done' });
     mockKernel.reserveQueuedTurn.mockResolvedValue({ runId: 'run-queued-1' });
     mockKernel.startTurn.mockResolvedValue({ runId: 'run-1', phase: 'pending' });
-    mockKernel.waitForRun.mockResolvedValue({ text: 'mock reply', inputTokens: 10, outputTokens: 5 });
+    mockKernel.waitForRun.mockResolvedValue({
+      text: 'mock reply',
+      inputTokens: 10,
+      outputTokens: 5,
+    });
   });
 
   // ── gateway.ping ──────────────────────────────────────────────────────────
@@ -146,7 +157,10 @@ describe('dispatchRpc', () => {
 
   it('gateway.status returns version, uptime, and agent count', async () => {
     const ctx = makeCtx({
-      runners: new Map([['a1', makeRunner() as never], ['a2', makeRunner() as never]]),
+      runners: new Map([
+        ['a1', makeRunner() as never],
+        ['a2', makeRunner() as never],
+      ]),
     });
     const res = await dispatchRpc({ id: 2, method: 'gateway.status' }, ctx);
     const result = res.result as Record<string, unknown>;
@@ -202,7 +216,9 @@ describe('dispatchRpc', () => {
       ]),
     });
     const res = await dispatchRpc({ id: 6, method: 'channel.list' }, ctx);
-    const channels = (res.result as { channels: Array<{ id: string; supportsAttachment: boolean }> }).channels;
+    const channels = (
+      res.result as { channels: Array<{ id: string; supportsAttachment: boolean }> }
+    ).channels;
     expect(channels).toHaveLength(1);
     expect(channels[0]).toMatchObject({ id: 'discord', supportsAttachment: true });
   });
@@ -232,7 +248,7 @@ describe('dispatchRpc', () => {
   it('federation.peers returns peers when node available', async () => {
     const peer = { nodeId: 'n1', host: 'localhost', port: 8080, status: 'connected' };
     const ctx = makeCtx({
-      getConfig: () => ({ federation: { enabled: true } } as never),
+      getConfig: () => ({ federation: { enabled: true } }) as never,
       federationNode: { listPeers: () => [peer] },
     });
     const res = await dispatchRpc({ id: 10, method: 'federation.peers' }, ctx);
@@ -264,7 +280,10 @@ describe('dispatchRpc', () => {
   it('agent.reload delegates to ctx.reload', async () => {
     const reload = vi.fn().mockResolvedValue({ reloaded: ['agent-x'] });
     const ctx = makeCtx({ reload });
-    const res = await dispatchRpc({ id: 13, method: 'agent.reload', params: { agentId: 'agent-x' } }, ctx);
+    const res = await dispatchRpc(
+      { id: 13, method: 'agent.reload', params: { agentId: 'agent-x' } },
+      ctx,
+    );
     expect(reload).toHaveBeenCalledWith('agent-x');
     expect((res.result as { reloaded: string[] }).reloaded).toEqual(['agent-x']);
   });
@@ -333,7 +352,7 @@ describe('dispatchRpc', () => {
   });
 
   it('agent.cancel returns 404 when run not found', async () => {
-    mockKernel.getRun.mockReturnValue(undefined);
+    mockKernel.cancelRun.mockResolvedValue(null);
     const res = await dispatchRpc(
       { id: 20, method: 'agent.cancel', params: { runId: 'no-such-run' } },
       makeCtx(),
@@ -342,13 +361,17 @@ describe('dispatchRpc', () => {
   });
 
   it('agent.cancel cancels a queued run', async () => {
-    mockKernel.getRun.mockReturnValue({
+    mockKernel.cancelRun.mockResolvedValue({
+      cancelled: true,
       runId: 'run-q',
-      agentId: 'main',
-      processStatus: 'waiting',
-      phase: 'pending',
+      mode: 'queued',
+      run: {
+        runId: 'run-q',
+        agentId: 'main',
+        processStatus: 'error',
+        phase: 'error',
+      },
     });
-    mockKernel.cancelQueuedTurn.mockResolvedValue(true);
     const res = await dispatchRpc(
       { id: 21, method: 'agent.cancel', params: { runId: 'run-q' } },
       makeCtx(),
@@ -607,10 +630,7 @@ describe('dispatchRpc', () => {
   });
 
   it('scheduler.preview returns 400 when neither cronExpr nor intervalMinutes given', async () => {
-    const res = await dispatchRpc(
-      { id: 45, method: 'scheduler.preview', params: {} },
-      makeCtx(),
-    );
+    const res = await dispatchRpc({ id: 45, method: 'scheduler.preview', params: {} }, makeCtx());
     expect(res.error?.code).toBe(-32602);
   });
 
@@ -624,10 +644,7 @@ describe('dispatchRpc', () => {
   // ── unknown method ────────────────────────────────────────────────────────
 
   it('unknown method returns -32601 method not found', async () => {
-    const res = await dispatchRpc(
-      { id: 99, method: 'not.a.method' as never },
-      makeCtx(),
-    );
+    const res = await dispatchRpc({ id: 99, method: 'not.a.method' as never }, makeCtx());
     expect(res.error?.code).toBe(-32601);
     expect(res.error?.message).toContain('not.a.method');
   });

@@ -244,11 +244,15 @@ export function createSchedulerTools(
     sharedTaskStores.set(dataDir, store);
   }
   const taskStore = store;
-  let activeRuns = sharedActiveRuns.get(dataDir);
-  if (!activeRuns) {
-    activeRuns = new Map<string, ActiveScheduledRun>();
-    sharedActiveRuns.set(dataDir, activeRuns);
-  }
+  const activeRuns = (() => {
+    const existing = sharedActiveRuns.get(dataDir);
+    if (existing) {
+      return existing;
+    }
+    const created = new Map<string, ActiveScheduledRun>();
+    sharedActiveRuns.set(dataDir, created);
+    return created;
+  })();
 
   async function finalizeTaskRun(
     current: ScheduledTaskRecord,
@@ -389,8 +393,6 @@ export function createSchedulerTools(
           runId: delegatedRunId,
           runStatus: 'running',
         });
-        let result: string;
-        let delegatedRunStatus: 'done' | 'error' | 'suspended' = 'error';
         const turn = await runTurn(
           current.agentId,
           workerRunner,
@@ -399,8 +401,6 @@ export function createSchedulerTools(
           dataDir,
           delegatedRunId,
         );
-        result = turn.text;
-        delegatedRunStatus = turn.runStatus;
         await finalizeTaskRun(current, turn, {
           runKey: thread,
           startedAt,
@@ -590,8 +590,7 @@ export function createSchedulerTools(
     category: 'scheduler',
     definition: {
       name: 'task_resume',
-      description:
-        'Resume the currently suspended delegated run for a scheduled recurring task.',
+      description: 'Resume the currently suspended delegated run for a scheduled recurring task.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -685,13 +684,16 @@ export function createSchedulerTools(
       }
       const activeRun = activeRuns.get(task_id);
       if (activeRun) {
+        const activeRunner = runners.get(activeRun.agentId);
         try {
-          await abortAgentTurnViaKernel({
-            runners: new Map([[activeRun.agentId, runners.get(activeRun.agentId)!]]),
-            dataDir,
-            runId: activeRun.runId,
-            message: `Scheduled task '${meta.name}' (${task_id}) cancelled.`,
-          });
+          if (activeRunner) {
+            await abortAgentTurnViaKernel({
+              runners: new Map([[activeRun.agentId, activeRunner]]),
+              dataDir,
+              runId: activeRun.runId,
+              message: `Scheduled task '${meta.name}' (${task_id}) cancelled.`,
+            });
+          }
         } catch (err) {
           logger.warn('Failed to abort active scheduled task run', {
             taskId: task_id,

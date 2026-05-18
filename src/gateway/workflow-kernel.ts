@@ -16,6 +16,7 @@ import { asProcessId } from '../core/types.js';
 import { AgentQueueRegistry } from './agent-queue.js';
 import type { WorkflowDef, WorkflowRunRecord, WorkflowStepResult } from './workflow-backend.js';
 import {
+  type WorkflowAgentStepExecutionResult,
   type WorkflowProcessInput,
   WorkflowProcessRuntime,
   type WorkflowProcessState,
@@ -102,6 +103,7 @@ export class WorkflowKernelService {
   private pumpPromise: Promise<void> | null = null;
   private pumpTimer: ReturnType<typeof setTimeout> | null = null;
   private scheduledPumpAt: number | null = null;
+  private disposed = false;
 
   constructor(options: WorkflowKernelServiceOptions) {
     this.callbacks = options.callbacks;
@@ -133,7 +135,7 @@ export class WorkflowKernelService {
         }
 
         const seenToolIds = new Set<string>();
-        const execute = async (): Promise<string> => {
+        const execute = async (): Promise<WorkflowAgentStepExecutionResult> => {
           const delegatedRunId = request.delegatedRunId ?? ulid();
           try {
             const result = request.delegatedRunId
@@ -203,6 +205,9 @@ export class WorkflowKernelService {
   }
 
   async initialize(): Promise<void> {
+    if (this.disposed) {
+      throw new Error('WorkflowKernelService is disposed');
+    }
     if (this.initPromise) {
       return this.initPromise;
     }
@@ -240,6 +245,18 @@ export class WorkflowKernelService {
     }
     this.schedulePump(0);
     return run;
+  }
+
+  async dispose(): Promise<void> {
+    this.disposed = true;
+    if (this.pumpTimer) {
+      clearTimeout(this.pumpTimer);
+      this.pumpTimer = null;
+      this.scheduledPumpAt = null;
+    }
+    if (this.pumpPromise) {
+      await this.pumpPromise;
+    }
   }
 
   getRun(runId: string): WorkflowRunRecord | null {
@@ -304,6 +321,9 @@ export class WorkflowKernelService {
         status: 'running' as const,
       };
       this.forcedRunStates.set(runId, cloneRun(running));
+    }
+    if (this.pumpPromise) {
+      await this.pumpPromise;
     }
     this.schedulePump(0);
     return run ? { ...run, status: 'running' } : null;
@@ -437,10 +457,25 @@ export class WorkflowKernelService {
   }
 
   private schedulePump(delayMs: number): void {
+    if (this.disposed) {
+      return;
+    }
     if (this.pumpPromise) {
       return;
     }
-    const targetAt = Date.now() + Math.max(0, delayMs);
+    const normalizedDelayMs = Math.max(0, delayMs);
+    if (normalizedDelayMs === 0) {
+      if (this.pumpTimer) {
+        clearTimeout(this.pumpTimer);
+        this.pumpTimer = null;
+        this.scheduledPumpAt = null;
+      }
+      queueMicrotask(() => {
+        void this.ensurePump();
+      });
+      return;
+    }
+    const targetAt = Date.now() + normalizedDelayMs;
     if (this.pumpTimer && this.scheduledPumpAt !== null && this.scheduledPumpAt <= targetAt) {
       return;
     }
@@ -459,6 +494,9 @@ export class WorkflowKernelService {
   }
 
   private scheduleNextPump(): void {
+    if (this.disposed) {
+      return;
+    }
     if (this.pumpPromise) {
       return;
     }
@@ -476,12 +514,17 @@ export class WorkflowKernelService {
   }
 
   private async ensurePump(): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
     if (this.pumpPromise) {
       return this.pumpPromise;
     }
     this.pumpPromise = this.runPump().finally(() => {
       this.pumpPromise = null;
-      this.scheduleNextPump();
+      if (!this.disposed) {
+        this.scheduleNextPump();
+      }
     });
     return this.pumpPromise;
   }
@@ -528,13 +571,20 @@ export class WorkflowKernelService {
         run.status = forcedStatus;
         run.finishedAt = run.finishedAt ?? Date.now();
       }
-      this.completedRuns.set(runId, cloneRun(run));
-      await this.callbacks.onRunComplete(state.workflow, run);
-      await this.kernel.deleteProcess(snapshot.pid);
       this.cancelRequested.delete(runId);
       this.forcedRunStates.delete(runId);
       this.runnerSnapshots.delete(runId);
+      this.completedRuns.set(runId, cloneRun(run));
       this.resolveCompletion(run);
+      try {
+        await this.callbacks.onRunComplete(state.workflow, run);
+      } catch (error) {
+        logger.error('Failed to finalize workflow completion callback', {
+          runId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      await this.kernel.deleteProcess(snapshot.pid);
     } finally {
       this.finalizing.delete(runId);
     }

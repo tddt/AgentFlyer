@@ -4,9 +4,9 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AgentKernel } from '../core/kernel/agent-kernel.js';
 import { JsonFileCheckpointStore } from '../core/kernel/checkpoint-store.js';
+import type { SyscallRequest } from '../core/kernel/types.js';
 import { SessionMetaStore } from '../core/session/meta.js';
 import { SessionStore } from '../core/session/store.js';
-import type { SyscallRequest } from '../core/kernel/types.js';
 import type { StreamChunk } from '../core/types.js';
 import { drainWaitingAgentSyscalls } from './kernel-syscall-broker.js';
 import type { LLMProvider, RunParams } from './llm/provider.js';
@@ -206,7 +206,9 @@ describe('AgentRunner state serialization', () => {
       serializeState(): SerializedAgentRunnerState {
         return {
           threadKey: 'leaked-thread',
-          toolResultCache: [{ key: 'read_file|{"path":"leak"}', value: { isError: false, content: 'leak' } }],
+          toolResultCache: [
+            { key: 'read_file|{"path":"leak"}', value: { isError: false, content: 'leak' } },
+          ],
         };
       },
     } as unknown as AgentRunner;
@@ -356,7 +358,9 @@ describe('AgentTurnProcessRuntime', () => {
     const syncRuntimeState = vi.fn();
     const serializeState = vi.fn(() => ({
       threadKey: 'thread-sync-preferred',
-      toolResultCache: [{ key: 'read_file|{"path":"alpha"}', value: { isError: false, content: 'alpha' } }],
+      toolResultCache: [
+        { key: 'read_file|{"path":"alpha"}', value: { isError: false, content: 'alpha' } },
+      ],
     }));
     const continueKernelTurn = vi.fn(async () => ({
       state: {} as SerializedAgentTurnExecutionState,
@@ -382,7 +386,9 @@ describe('AgentTurnProcessRuntime', () => {
         threadKey: 'thread-sync-preferred',
         runnerState: {
           threadKey: 'thread-sync-preferred',
-          toolResultCache: [{ key: 'read_file|{"path":"alpha"}', value: { isError: false, content: 'alpha' } }],
+          toolResultCache: [
+            { key: 'read_file|{"path":"alpha"}', value: { isError: false, content: 'alpha' } },
+          ],
         },
         executionState: {
           runId: 'run-sync-preferred',
@@ -415,11 +421,9 @@ describe('AgentTurnProcessRuntime', () => {
     );
 
     expect(result.signal).toBe('WAITING_SYSCALL');
-    expect(syncRuntimeState).toHaveBeenCalledWith(
-      'thread-sync-preferred',
-      'run-sync-preferred',
-      [{ key: 'read_file|{"path":"alpha"}', value: { isError: false, content: 'alpha' } }],
-    );
+    expect(syncRuntimeState).toHaveBeenCalledWith('thread-sync-preferred', 'run-sync-preferred', [
+      { key: 'read_file|{"path":"alpha"}', value: { isError: false, content: 'alpha' } },
+    ]);
     expect(serializeState).toHaveBeenCalledTimes(1);
     expect(restoreState).not.toHaveBeenCalled();
   });
@@ -460,6 +464,7 @@ describe('AgentTurnProcessRuntime', () => {
             toolResultCache: [],
           },
           executionState: {
+            sessionKey: 'agent:agent-main:thread-alpha' as never,
             runId: 'run-alpha',
             userMessage: 'alpha',
             model: 'fake-model',
@@ -476,7 +481,9 @@ describe('AgentTurnProcessRuntime', () => {
             finalFailureCode: undefined,
             recoverableStreamRetries: 0,
             toolLoopDetector: { lastEntry: null, consecutiveRepeats: 0 },
-            pendingToolCalls: [{ id: 'tool-alpha', name: 'read_file', inputJson: '{"path":"alpha"}' }],
+            pendingToolCalls: [
+              { id: 'tool-alpha', name: 'read_file', inputJson: '{"path":"alpha"}' },
+            ],
           },
           stream: [],
           options: undefined,
@@ -496,6 +503,7 @@ describe('AgentTurnProcessRuntime', () => {
             toolResultCache: [],
           },
           executionState: {
+            sessionKey: 'agent:agent-main:thread-beta' as never,
             runId: 'run-beta',
             userMessage: 'beta',
             model: 'fake-model',
@@ -512,7 +520,9 @@ describe('AgentTurnProcessRuntime', () => {
             finalFailureCode: undefined,
             recoverableStreamRetries: 0,
             toolLoopDetector: { lastEntry: null, consecutiveRepeats: 0 },
-            pendingToolCalls: [{ id: 'tool-beta', name: 'read_file', inputJson: '{"path":"beta"}' }],
+            pendingToolCalls: [
+              { id: 'tool-beta', name: 'read_file', inputJson: '{"path":"beta"}' },
+            ],
           },
           stream: [],
           options: undefined,
@@ -522,12 +532,12 @@ describe('AgentTurnProcessRuntime', () => {
       ),
     ]);
 
-    const cacheKeysA = ((resolutionA.payload as { toolResultCache: SerializedAgentRunnerState['toolResultCache'] }).toolResultCache).map(
-      (entry) => entry.key,
-    );
-    const cacheKeysB = ((resolutionB.payload as { toolResultCache: SerializedAgentRunnerState['toolResultCache'] }).toolResultCache).map(
-      (entry) => entry.key,
-    );
+    const cacheKeysA = (
+      resolutionA.payload as { toolResultCache: SerializedAgentRunnerState['toolResultCache'] }
+    ).toolResultCache.map((entry) => entry.key);
+    const cacheKeysB = (
+      resolutionB.payload as { toolResultCache: SerializedAgentRunnerState['toolResultCache'] }
+    ).toolResultCache.map((entry) => entry.key);
 
     expect(cacheKeysA).toEqual(['read_file|{"path":"alpha"}']);
     expect(cacheKeysB).toEqual(['read_file|{"path":"beta"}']);
@@ -535,12 +545,14 @@ describe('AgentTurnProcessRuntime', () => {
 
   it('does not restore shared runner state for llm, approval, or tool syscall execution', async () => {
     const restoreState = vi.fn();
-    const executeKernelLlmGenerateSyscall = vi.fn(async (_state, request: SyscallRequest, resolvedAt: number) => ({
-      requestId: request.id,
-      ok: true,
-      resolvedAt,
-      payload: { chunks: [], recoverableStreamRetries: 0 },
-    }));
+    const executeKernelLlmGenerateSyscall = vi.fn(
+      async (_state, request: SyscallRequest, resolvedAt: number) => ({
+        requestId: request.id,
+        ok: true,
+        resolvedAt,
+        payload: { chunks: [], recoverableStreamRetries: 0 },
+      }),
+    );
     const executeKernelToolCallSyscall = vi.fn(
       async (
         _state: SerializedAgentTurnExecutionState,
@@ -554,12 +566,14 @@ describe('AgentTurnProcessRuntime', () => {
         payload: { results: [], toolResultCache },
       }),
     );
-    const executeKernelApprovalSyscall = vi.fn(async (_state, request: SyscallRequest, resolvedAt: number) => ({
-      requestId: request.id,
-      ok: true,
-      resolvedAt,
-      payload: { decisions: [] },
-    }));
+    const executeKernelApprovalSyscall = vi.fn(
+      async (_state, request: SyscallRequest, resolvedAt: number) => ({
+        requestId: request.id,
+        ok: true,
+        resolvedAt,
+        payload: { decisions: [] },
+      }),
+    );
     const runner = {
       restoreState,
       executeKernelLlmGenerateSyscall,
@@ -572,6 +586,7 @@ describe('AgentTurnProcessRuntime', () => {
       toolResultCache: [],
     };
     const executionState: SerializedAgentTurnExecutionState = {
+      sessionKey: 'agent:agent-main:thread-no-restore' as never,
       runId: 'run-no-restore',
       userMessage: 'hello',
       model: 'fake-model',
@@ -645,7 +660,11 @@ describe('AgentTurnProcessRuntime', () => {
         },
         stream: [],
       },
-      { id: 'req-approval', kind: 'custom', operation: 'agent.turn.approval-request' } as SyscallRequest,
+      {
+        id: 'req-approval',
+        kind: 'custom',
+        operation: 'agent.turn.approval-request',
+      } as SyscallRequest,
       Date.now(),
     );
 

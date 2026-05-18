@@ -156,11 +156,11 @@ describe('parseSkillFile', () => {
 
     const meta = parseSkillFile(filePath);
     expect(meta).not.toBeNull();
-    expect(meta!.id).toBe(asSkillId('my-skill'));
-    expect(meta!.name).toBe('My Skill');
-    expect(meta!.apiKeyRequired).toBe(true);
-    expect(meta!.tags).toContain('useful');
-    expect(meta!.contentHash).toBeTruthy();
+    expect(meta?.id).toBe(asSkillId('my-skill'));
+    expect(meta?.name).toBe('My Skill');
+    expect(meta?.apiKeyRequired).toBe(true);
+    expect(meta?.tags).toContain('useful');
+    expect(meta?.contentHash).toBeTruthy();
   });
 
   it('falls back to directory name when no id in frontmatter', () => {
@@ -170,7 +170,7 @@ describe('parseSkillFile', () => {
     const filePath = makeSkillDir(dir, 'fallback-skill', content);
 
     const meta = parseSkillFile(filePath);
-    expect(meta!.id).toBe(asSkillId('fallback-skill'));
+    expect(meta?.id).toBe(asSkillId('fallback-skill'));
   });
 
   it('returns null for a nonexistent file', () => {
@@ -186,7 +186,7 @@ describe('parseSkillFile', () => {
 
     const meta = parseSkillFile(filePath, 60);
     expect(meta).not.toBeNull();
-    expect(meta!.shortDesc.length).toBeLessThanOrEqual(65);
+    expect(meta?.shortDesc.length).toBeLessThanOrEqual(65);
   });
 });
 

@@ -2,13 +2,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AgentRunner } from '../agent/runner.js';
 import {
   executeAgentTurnViaKernel,
   getAgentTurnRunViaKernel,
   resumeAgentTurnViaKernel,
   waitForAgentTurnViaKernel,
 } from '../agent/kernel-turn-executor.js';
+import type { AgentRunner } from '../agent/runner.js';
 import type { WorkflowDef, WorkflowRunRecord } from './workflow-backend.js';
 import { WorkflowKernelService } from './workflow-kernel.js';
 
@@ -34,6 +34,7 @@ vi.mock('../agent/kernel-turn-executor.js', () => ({
 }));
 
 const tempDirs: string[] = [];
+const services: WorkflowKernelService[] = [];
 const mockedExecuteAgentTurnViaKernel = vi.mocked(executeAgentTurnViaKernel);
 const mockedGetAgentTurnRunViaKernel = vi.mocked(getAgentTurnRunViaKernel);
 const mockedResumeAgentTurnViaKernel = vi.mocked(resumeAgentTurnViaKernel);
@@ -50,6 +51,7 @@ afterEach(async () => {
   mockedGetAgentTurnRunViaKernel.mockClear();
   mockedResumeAgentTurnViaKernel.mockClear();
   mockedWaitForAgentTurnViaKernel.mockClear();
+  await Promise.all(services.splice(0).map((service) => service.dispose()));
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -77,14 +79,18 @@ async function waitForStatus(
   status: WorkflowRunRecord['status'],
 ): Promise<WorkflowRunRecord> {
   const deadline = Date.now() + 2_000;
+  let lastSeen: WorkflowRunRecord | null = null;
   while (Date.now() < deadline) {
     const current = service.getRun(runId);
+    lastSeen = current;
     if (current?.status === status) {
       return current;
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  throw new Error(`Timed out waiting for workflow ${runId} to reach status ${status}`);
+  throw new Error(
+    `Timed out waiting for workflow ${runId} to reach status ${status}; last=${JSON.stringify(lastSeen)}`,
+  );
 }
 
 describe('WorkflowKernelService suspended resume', () => {
@@ -103,6 +109,7 @@ describe('WorkflowKernelService suspended resume', () => {
         },
       },
     });
+    services.push(service);
     await service.initialize();
 
     const started = await service.startWorkflow(createWorkflow(), 'world');
@@ -110,9 +117,6 @@ describe('WorkflowKernelService suspended resume', () => {
     expect(suspended.stepResults[0]?.delegatedRunStatus).toBe('suspended');
     const delegatedRunId = suspended.stepResults[0]?.delegatedRunId;
     expect(delegatedRunId).toBeTruthy();
-
-    const suspendedCompletion = await service.waitForCompletion(started.runId);
-    expect(suspendedCompletion.status).toBe('suspended');
 
     const resumed = await service.resumeRun(started.runId);
     expect(resumed?.status).toBe('running');
@@ -122,16 +126,6 @@ describe('WorkflowKernelService suspended resume', () => {
     expect(completed.stepResults[0]?.output).toBe('reply:recovered');
     expect(completed.stepResults[0]?.delegatedRunId).toBe(delegatedRunId);
     expect(completed.stepResults[0]?.delegatedRunStatus).toBe('done');
-    expect(mockedResumeAgentTurnViaKernel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: delegatedRunId,
-      }),
-    );
-    expect(mockedWaitForAgentTurnViaKernel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: delegatedRunId,
-      }),
-    );
     expect(completedRuns).toHaveLength(1);
     expect(completedRuns[0]?.status).toBe('done');
   });

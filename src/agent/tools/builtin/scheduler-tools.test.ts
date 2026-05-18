@@ -17,7 +17,10 @@ vi.mock('../../kernel-turn-executor.js', () => ({
   abortAgentTurnViaKernel: vi.fn(async () => undefined),
   executeAgentTurnViaKernel: vi.fn(async () => ({ text: 'scheduled tool result' })),
   getAgentTurnRunViaKernel: vi.fn(async () => null),
-  resumeAgentTurnViaKernel: vi.fn(async () => ({ runId: 'resumed-run-id', processStatus: 'ready' })),
+  resumeAgentTurnViaKernel: vi.fn(async () => ({
+    runId: 'resumed-run-id',
+    processStatus: 'ready',
+  })),
   waitForAgentTurnViaKernel: vi.fn(async () => ({ text: 'resumed scheduled tool result' })),
 }));
 

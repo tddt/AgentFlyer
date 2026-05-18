@@ -426,7 +426,13 @@ describe('docker sandbox runtime', () => {
     // Verify network create was called with the stable bridge name
     expect(commandRunner).toHaveBeenCalledWith(
       'docker',
-      expect.arrayContaining(['network', 'create', '--opt', 'com.docker.network.bridge.name=af_sandbox0', 'agentflyer-sandbox']),
+      expect.arrayContaining([
+        'network',
+        'create',
+        '--opt',
+        'com.docker.network.bridge.name=af_sandbox0',
+        'agentflyer-sandbox',
+      ]),
       expect.anything(),
     );
   });

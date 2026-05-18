@@ -15,70 +15,74 @@ function toOpenAIMessages(messages: Message[]): OpenAI.ChatCompletionMessagePara
   // expands into N separate OpenAI `tool` messages. OpenAI requires one `tool`
   // message per tool_call_id; sending only the first result causes 400 errors
   // when the assistant invoked multiple tools in one turn.
-  return messages.flatMap((m): OpenAI.ChatCompletionMessageParam | OpenAI.ChatCompletionMessageParam[] => {
-    if (m.role === 'system') {
-      return {
-        role: 'system',
-        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
-      };
-    }
-    if (typeof m.content === 'string') {
-      if (m.role === 'assistant' && m.reasoning_content) {
+  return messages.flatMap(
+    (m): OpenAI.ChatCompletionMessageParam | OpenAI.ChatCompletionMessageParam[] => {
+      if (m.role === 'system') {
         return {
-          role: 'assistant',
-          content: m.content,
-          reasoning_content: m.reasoning_content,
-        } as OpenAI.ChatCompletionAssistantMessageParam & { reasoning_content: string };
+          role: 'system',
+          content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+        };
       }
-      return { role: m.role as 'user' | 'assistant', content: m.content };
-    }
-    const parts = m.content as MessageContent[];
-    if (m.role === 'user') {
-      // Expand each tool_result into its own OpenAI `tool` message.
-      const toolResults = parts.filter((p) => p.type === 'tool_result') as {
-        type: 'tool_result';
-        tool_use_id: string;
-        content: unknown;
-      }[];
-      if (toolResults.length > 0) {
-        return toolResults.map((tr): OpenAI.ChatCompletionToolMessageParam => ({
-          role: 'tool',
-          tool_call_id: tr.tool_use_id,
-          content:
-            typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content),
-        }));
+      if (typeof m.content === 'string') {
+        if (m.role === 'assistant' && m.reasoning_content) {
+          return {
+            role: 'assistant',
+            content: m.content,
+            reasoning_content: m.reasoning_content,
+          } as OpenAI.ChatCompletionAssistantMessageParam & { reasoning_content: string };
+        }
+        return { role: m.role as 'user' | 'assistant', content: m.content };
       }
-      const textParts = parts.filter((p) => p.type === 'text');
-      return {
-        role: 'user',
-        content: textParts.map((p) => (p as { text: string }).text).join('\n'),
-      };
-    }
-    if (m.role === 'assistant') {
-      const textParts = parts.filter((p) => p.type === 'text');
-      const toolUseParts = parts.filter((p) => p.type === 'tool_use');
-      const result: OpenAI.ChatCompletionAssistantMessageParam & { reasoning_content?: string } = {
-        role: 'assistant',
-        content: textParts.map((p) => (p as { text: string }).text).join('\n') || null,
-        tool_calls:
-          toolUseParts.length > 0
-            ? toolUseParts.map((p) => ({
-                id: (p as { id: string }).id,
-                type: 'function' as const,
-                function: {
-                  name: (p as { name: string }).name,
-                  arguments: JSON.stringify((p as { input: unknown }).input),
-                },
-              }))
-            : undefined,
-      };
-      if (m.reasoning_content) {
-        result.reasoning_content = m.reasoning_content;
+      const parts = m.content as MessageContent[];
+      if (m.role === 'user') {
+        // Expand each tool_result into its own OpenAI `tool` message.
+        const toolResults = parts.filter((p) => p.type === 'tool_result') as {
+          type: 'tool_result';
+          tool_use_id: string;
+          content: unknown;
+        }[];
+        if (toolResults.length > 0) {
+          return toolResults.map(
+            (tr): OpenAI.ChatCompletionToolMessageParam => ({
+              role: 'tool',
+              tool_call_id: tr.tool_use_id,
+              content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content),
+            }),
+          );
+        }
+        const textParts = parts.filter((p) => p.type === 'text');
+        return {
+          role: 'user',
+          content: textParts.map((p) => (p as { text: string }).text).join('\n'),
+        };
       }
-      return result;
-    }
-    return { role: 'user', content: JSON.stringify(m.content) };
-  });
+      if (m.role === 'assistant') {
+        const textParts = parts.filter((p) => p.type === 'text');
+        const toolUseParts = parts.filter((p) => p.type === 'tool_use');
+        const result: OpenAI.ChatCompletionAssistantMessageParam & { reasoning_content?: string } =
+          {
+            role: 'assistant',
+            content: textParts.map((p) => (p as { text: string }).text).join('\n') || null,
+            tool_calls:
+              toolUseParts.length > 0
+                ? toolUseParts.map((p) => ({
+                    id: (p as { id: string }).id,
+                    type: 'function' as const,
+                    function: {
+                      name: (p as { name: string }).name,
+                      arguments: JSON.stringify((p as { input: unknown }).input),
+                    },
+                  }))
+                : undefined,
+          };
+        if (m.reasoning_content) {
+          result.reasoning_content = m.reasoning_content;
+        }
+        return result;
+      }
+      return { role: 'user', content: JSON.stringify(m.content) };
+    },
+  );
 }
 
 function toOpenAITools(tools: ToolDefinition[]): OpenAI.ChatCompletionTool[] {

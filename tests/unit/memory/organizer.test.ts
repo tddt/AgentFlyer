@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { MemoryOrganizer } from '../../../src/memory/organizer.js';
 import type { LLMProvider } from '../../../src/agent/llm/provider.js';
-import type { MemoryStore } from '../../../src/memory/store.js';
 import type { MemoryEntry, MemoryEntryId } from '../../../src/core/types.js';
+import { MemoryOrganizer } from '../../../src/memory/organizer.js';
+import type { MemoryStore } from '../../../src/memory/store.js';
 
 function makeEntry(overrides: Partial<MemoryEntry> = {}): MemoryEntry {
   return {
@@ -89,8 +89,9 @@ describe('MemoryOrganizer', () => {
   });
 
   it('skips superseded entries', async () => {
-    const entries = Array.from({ length: 5 }, (_, i) =>
-      makeEntry({ id: `e${i}` as MemoryEntryId, superseded: i < 4 }), // only 1 non-superseded
+    const entries = Array.from(
+      { length: 5 },
+      (_, i) => makeEntry({ id: `e${i}` as MemoryEntryId, superseded: i < 4 }), // only 1 non-superseded
     );
     const store = makeMockStore(entries);
     const llm = makeMockLlm('summary');
@@ -139,6 +140,7 @@ describe('MemoryOrganizer', () => {
     const llm = {
       run: vi.fn().mockReturnValue(
         (async function* () {
+          yield* [];
           throw new Error('LLM boom');
         })(),
       ),

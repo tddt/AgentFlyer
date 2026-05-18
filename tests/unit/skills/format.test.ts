@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { asSkillId } from '../../../src/core/types.js';
 import {
   buildSkillsDirectory,
   formatSkillsForPrompt,
   preFilterSkills,
 } from '../../../src/skills/format.js';
 import type { SkillMeta } from '../../../src/skills/registry.js';
-import { asSkillId } from '../../../src/core/types.js';
 
 function makeMeta(id: string, overrides: Partial<SkillMeta> = {}): SkillMeta {
   return {
@@ -101,8 +101,16 @@ describe('preFilterSkills', () => {
 
   it('filters by keyword and returns up to topN skills', () => {
     const skills = [
-      makeMeta('finance', { name: 'Finance Tool', shortDesc: 'track finance data', tags: ['finance'] }),
-      makeMeta('weather', { name: 'Weather Tool', shortDesc: 'get weather forecast', tags: ['weather'] }),
+      makeMeta('finance', {
+        name: 'Finance Tool',
+        shortDesc: 'track finance data',
+        tags: ['finance'],
+      }),
+      makeMeta('weather', {
+        name: 'Weather Tool',
+        shortDesc: 'get weather forecast',
+        tags: ['weather'],
+      }),
       makeMeta('travel', { name: 'Travel Tool', shortDesc: 'book flights', tags: ['travel'] }),
       makeMeta('stock', { name: 'Stock Tool', shortDesc: 'stock market prices', tags: ['stocks'] }),
     ];

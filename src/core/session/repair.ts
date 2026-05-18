@@ -144,9 +144,7 @@ export function repairTranscript(messages: Message[]): RepairResult {
   // Case 6: trailing user message containing ONLY tool_results is invalid
   const lastMsg = current.at(-1);
   if (lastMsg?.role === 'user' && Array.isArray(lastMsg.content)) {
-    const allResults = (lastMsg.content as MessageContent[]).every(
-      (c) => c.type === 'tool_result',
-    );
+    const allResults = (lastMsg.content as MessageContent[]).every((c) => c.type === 'tool_result');
     if (allResults) {
       issues.push('Trailing orphaned tool_result message removed');
       current = current.slice(0, -1);

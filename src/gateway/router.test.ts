@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AgentQueueRegistry } from './agent-queue.js';
 import * as agentKernelModule from './agent-kernel.js';
+import { AgentQueueRegistry } from './agent-queue.js';
 import * as chatDeliverablesModule from './chat-deliverables.js';
 import { type RouterOptions, routeRequest } from './router.js';
 import type { RpcContext } from './rpc.js';
@@ -25,8 +25,12 @@ function makeReq(
     }
     emitted = true;
     queueMicrotask(() => {
-      listeners.get('data')?.forEach((handler) => handler(payload));
-      listeners.get('end')?.forEach((handler) => handler());
+      for (const handler of listeners.get('data') ?? []) {
+        handler(payload);
+      }
+      for (const handler of listeners.get('end') ?? []) {
+        handler();
+      }
     });
   };
   const req = {
@@ -59,13 +63,18 @@ interface MockRes {
 
 function makeRes(): MockRes {
   const chunks: string[] = [];
-  let code = 200;
   const res: MockRes = {
     statusCode: 200,
-    writeHead: vi.fn((status: number) => { code = status; res.statusCode = status; }),
+    writeHead: vi.fn((status: number) => {
+      res.statusCode = status;
+    }),
     setHeader: vi.fn(),
-    write: vi.fn((data?: string) => { if (data) chunks.push(data); }),
-    end: vi.fn((data?: string) => { if (data) chunks.push(data); }),
+    write: vi.fn((data?: string) => {
+      if (data) chunks.push(data);
+    }),
+    end: vi.fn((data?: string) => {
+      if (data) chunks.push(data);
+    }),
     body: () => chunks.join(''),
   };
   return res;
@@ -73,7 +82,7 @@ function makeRes(): MockRes {
 
 function makeCtx(overrides: Partial<RpcContext> = {}): RpcContext {
   return {
-    gatewayVersion: '1.2.0',
+    gatewayVersion: '1.2.1',
     startedAt: Date.now() - 5000,
     getMcpStatus: () => [],
     channels: new Map(),
@@ -112,12 +121,12 @@ const mockedCaptureChatTurnDeliverable = vi.spyOn(
   chatDeliverablesModule,
   'captureChatTurnDeliverable',
 );
-mockedCaptureChatTurnDeliverable.mockResolvedValue(undefined);
+mockedCaptureChatTurnDeliverable.mockResolvedValue(null);
 
 afterEach(() => {
   mockedGetAgentKernelService.mockReset();
   mockedCaptureChatTurnDeliverable.mockReset();
-  mockedCaptureChatTurnDeliverable.mockResolvedValue(undefined);
+  mockedCaptureChatTurnDeliverable.mockResolvedValue(null);
 });
 
 // ── GET /health ───────────────────────────────────────────────────────────────
@@ -129,7 +138,10 @@ describe('GET /health', () => {
     const handled = await routeRequest(req, res as unknown as ServerResponse, makeOpts());
 
     expect(handled).toBe(true);
-    expect(res.writeHead).toHaveBeenCalledWith(200, expect.objectContaining({ 'Content-Type': 'application/json' }));
+    expect(res.writeHead).toHaveBeenCalledWith(
+      200,
+      expect.objectContaining({ 'Content-Type': 'application/json' }),
+    );
     const body = parseJsonBody(res.body());
     expect(body.ok).toBe(true);
   });
@@ -142,7 +154,7 @@ describe('GET /health', () => {
     const after = Date.now();
 
     const body = parseJsonBody(res.body());
-    expect(body.version).toBe('1.2.0');
+    expect(body.version).toBe('1.2.1');
     expect(typeof body.uptime).toBe('number');
     expect(Number(body.uptime)).toBeGreaterThanOrEqual(4);
     expect(Number(body.timestamp)).toBeGreaterThanOrEqual(before);
@@ -162,7 +174,9 @@ describe('GET /health', () => {
     // POST /health is not handled; router will fall through
     // It may return false (unhandled) or short-circuit at auth check
     // Just verify it doesn't throw
-    await expect(routeRequest(req, res as unknown as ServerResponse, makeOpts())).resolves.toBeDefined();
+    await expect(
+      routeRequest(req, res as unknown as ServerResponse, makeOpts()),
+    ).resolves.toBeDefined();
   });
 });
 
@@ -185,7 +199,7 @@ describe('GET /ready – nominal', () => {
     await routeRequest(req, res as unknown as ServerResponse, makeOpts());
 
     const body = parseJsonBody(res.body());
-    expect(body.version).toBe('1.2.0');
+    expect(body.version).toBe('1.2.1');
     expect(typeof body.uptime).toBe('number');
   });
 
@@ -215,8 +229,8 @@ describe('GET /ready – nominal', () => {
 
     const body = parseJsonBody(res.body());
     const comps = body.components as Record<string, Record<string, unknown>>;
-    expect(comps['mcp']?.['serversTotal']).toBe(2);
-    expect(comps['mcp']?.['serversConnected']).toBe(1);
+    expect(comps.mcp?.serversTotal).toBe(2);
+    expect(comps.mcp?.serversConnected).toBe(1);
   });
 });
 
@@ -263,7 +277,10 @@ describe('GET /favicon.ico', () => {
     const res = makeRes();
     const handled = await routeRequest(req, res as unknown as ServerResponse, makeOpts());
     expect(handled).toBe(true);
-    expect(res.writeHead).toHaveBeenCalledWith(204, expect.objectContaining({ 'Cache-Control': expect.any(String) }));
+    expect(res.writeHead).toHaveBeenCalledWith(
+      204,
+      expect.objectContaining({ 'Cache-Control': expect.any(String) }),
+    );
   });
 });
 
@@ -291,10 +308,14 @@ describe('POST /chat', () => {
       { agentId: 'agent-main', message: 'hello', thread: 'thread-1' },
     );
     const res = makeRes();
-    const handled = await routeRequest(req, res as unknown as ServerResponse, makeOpts({
-      runners: new Map([['agent-main', {} as never]]),
-      getConfig: () => ({ agents: [{ id: 'agent-main', name: 'Main Agent' }] }),
-    }));
+    const handled = await routeRequest(
+      req,
+      res as unknown as ServerResponse,
+      makeOpts({
+        runners: new Map([['agent-main', {} as never]]),
+        getConfig: () => ({ agents: [{ id: 'agent-main', name: 'Main Agent' }] }) as never,
+      }),
+    );
 
     expect(handled).toBe(true);
     const events = parseSseEvents(res.body());
@@ -334,18 +355,16 @@ describe('POST /chat', () => {
         }
         return { runId };
       }),
-      waitForRun: vi.fn(
-        (runId: string) => {
-          const completed = completedResults.get(runId);
-          if (completed) {
-            completedResults.delete(runId);
-            return Promise.resolve(completed);
-          }
-          return new Promise<{ text: string }>((resolve) => {
-            waitResolvers.set(runId, resolve);
-          });
-        },
-      ),
+      waitForRun: vi.fn((runId: string) => {
+        const completed = completedResults.get(runId);
+        if (completed) {
+          completedResults.delete(runId);
+          return Promise.resolve(completed);
+        }
+        return new Promise<{ text: string }>((resolve) => {
+          waitResolvers.set(runId, resolve);
+        });
+      }),
       subscribeRun: vi.fn((runId: string, listener: (chunk: Record<string, unknown>) => void) => {
         listeners.set(runId, listener);
         return () => {
@@ -357,7 +376,7 @@ describe('POST /chat', () => {
     const opts = {
       ...makeOpts({
         runners: new Map([['agent-main', {} as never]]),
-        getConfig: () => ({ agents: [{ id: 'agent-main', name: 'Main Agent' }] }),
+        getConfig: () => ({ agents: [{ id: 'agent-main', name: 'Main Agent' }] }) as never,
       }),
       agentQueues: new AgentQueueRegistry(),
     } satisfies RouterOptions;
@@ -438,10 +457,14 @@ describe('POST /chat', () => {
     );
     const res = makeRes();
 
-    const routePromise = routeRequest(req, res as unknown as ServerResponse, makeOpts({
-      runners: new Map([['agent-main', {} as never]]),
-      getConfig: () => ({ agents: [{ id: 'agent-main', name: 'Main Agent' }] }),
-    }));
+    const routePromise = routeRequest(
+      req,
+      res as unknown as ServerResponse,
+      makeOpts({
+        runners: new Map([['agent-main', {} as never]]),
+        getConfig: () => ({ agents: [{ id: 'agent-main', name: 'Main Agent' }] }) as never,
+      }),
+    );
     await new Promise((resolve) => setTimeout(resolve, 0));
     listeners.get('run-suspended')?.({ type: 'text_delta', text: 'resumed reply' });
     resolveRun({ text: 'resumed reply' });
@@ -449,6 +472,10 @@ describe('POST /chat', () => {
 
     const events = parseSseEvents(res.body());
     expect(events[0]).toMatchObject({ type: 'started', runId: 'run-suspended', resumed: true });
-    expect(events[1]).toMatchObject({ type: 'text_delta', text: 'resumed reply', runId: 'run-suspended' });
+    expect(events[1]).toMatchObject({
+      type: 'text_delta',
+      text: 'resumed reply',
+      runId: 'run-suspended',
+    });
   });
 });

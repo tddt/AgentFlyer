@@ -7,6 +7,7 @@ import type { WorkflowDef, WorkflowRunRecord } from './workflow-backend.js';
 import { WorkflowKernelService } from './workflow-kernel.js';
 
 const tempDirs: string[] = [];
+const services: WorkflowKernelService[] = [];
 
 async function createTempDir(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'agentflyer-workflow-kernel-'));
@@ -15,6 +16,7 @@ async function createTempDir(): Promise<string> {
 }
 
 afterEach(async () => {
+  await Promise.all(services.splice(0).map((service) => service.dispose()));
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -179,7 +181,11 @@ function createHungRunner(): AgentRunner {
   } as unknown as AgentRunner;
 }
 
-function createQueuedRunner(): { runner: AgentRunner; release: () => void; waitForNextTurn: () => Promise<void> } {
+function createQueuedRunner(): {
+  runner: AgentRunner;
+  release: () => void;
+  waitForNextTurn: () => Promise<void>;
+} {
   let threadKey = 'default';
   let activeRunId: string | null = null;
   let releaseCurrent!: () => void;
@@ -187,7 +193,9 @@ function createQueuedRunner(): { runner: AgentRunner; release: () => void; waitF
   // Resolves when the next beginKernelTurn begins — used to eliminate
   // timing races under V8 coverage where async queuing is slower.
   let nextTurnResolve: (() => void) | null = null;
-  let nextTurnPromise: Promise<void> = new Promise((resolve) => { nextTurnResolve = resolve; });
+  let nextTurnPromise: Promise<void> = new Promise((resolve) => {
+    nextTurnResolve = resolve;
+  });
 
   const runner = {
     setThread(nextThreadKey: string) {
@@ -229,7 +237,9 @@ function createQueuedRunner(): { runner: AgentRunner; release: () => void; waitF
       });
       // Signal any waiter that a new turn has started, then reset for the next one.
       nextTurnResolve?.();
-      nextTurnPromise = new Promise((resolve) => { nextTurnResolve = resolve; });
+      nextTurnPromise = new Promise((resolve) => {
+        nextTurnResolve = resolve;
+      });
       return {
         runId,
         userMessage: message,
@@ -322,6 +332,7 @@ describe('WorkflowKernelService archived completion', () => {
       runners: sharedRunners,
       callbacks,
     });
+    services.push(service);
     await service.initialize();
 
     const started = await service.startWorkflow(workflow, 'world');
@@ -353,6 +364,7 @@ describe('WorkflowKernelService archived completion', () => {
       runners: new Map([['agent-main', createRunner()]]),
       callbacks,
     });
+    services.push(firstService);
     await firstService.initialize();
 
     const started = await firstService.startWorkflow(workflow, 'world');
@@ -365,6 +377,7 @@ describe('WorkflowKernelService archived completion', () => {
       runners: new Map([['agent-main', createRunner()]]),
       callbacks,
     });
+    services.push(restartedService);
     await restartedService.initialize();
 
     const restored = await restartedService.waitForCompletion(started.runId);
@@ -391,6 +404,7 @@ describe('WorkflowKernelService archived completion', () => {
       callbacks,
       workflowAgentStepTimeoutMs: 20,
     });
+    services.push(service);
     await service.initialize();
 
     const started = await service.startWorkflow(workflow, 'world');
@@ -405,46 +419,51 @@ describe('WorkflowKernelService archived completion', () => {
     expect(completed.stepResults[0]?.delegatedRunStatus).toBe('error');
   });
 
-  it('serializes concurrent workflow turns for the same agent instead of failing busy', { timeout: 15_000 }, async () => {
-    const dataDir = await createTempDir();
-    const workflow = createWorkflow();
-    const queued = createQueuedRunner();
-    const callbacks = {
-      async onRunComplete(_workflow: WorkflowDef, run: WorkflowRunRecord) {
-        await persistRun(dataDir, run);
-      },
-      async findArchivedRun(runId: string) {
-        const runs = await readPersistedRuns(dataDir);
-        return runs.find((run) => run.runId === runId) ?? null;
-      },
-    };
+  it(
+    'serializes concurrent workflow turns for the same agent instead of failing busy',
+    { timeout: 15_000 },
+    async () => {
+      const dataDir = await createTempDir();
+      const workflow = createWorkflow();
+      const queued = createQueuedRunner();
+      const callbacks = {
+        async onRunComplete(_workflow: WorkflowDef, run: WorkflowRunRecord) {
+          await persistRun(dataDir, run);
+        },
+        async findArchivedRun(runId: string) {
+          const runs = await readPersistedRuns(dataDir);
+          return runs.find((run) => run.runId === runId) ?? null;
+        },
+      };
 
-    const service = new WorkflowKernelService({
-      dataDir,
-      runners: new Map([['agent-main', queued.runner]]),
-      callbacks,
-      workflowAgentStepTimeoutMs: 5_000,
-    });
-    await service.initialize();
+      const service = new WorkflowKernelService({
+        dataDir,
+        runners: new Map([['agent-main', queued.runner]]),
+        callbacks,
+        workflowAgentStepTimeoutMs: 5_000,
+      });
+      services.push(service);
+      await service.initialize();
 
-    const firstStarted = await service.startWorkflow(workflow, 'first');
-    const secondStarted = await service.startWorkflow(workflow, 'second');
+      const firstStarted = await service.startWorkflow(workflow, 'first');
+      const secondStarted = await service.startWorkflow(workflow, 'second');
 
-    const firstCompletion = service.waitForCompletion(firstStarted.runId);
-    const secondCompletion = service.waitForCompletion(secondStarted.runId);
+      const firstCompletion = service.waitForCompletion(firstStarted.runId);
+      const secondCompletion = service.waitForCompletion(secondStarted.runId);
 
-    // Wait for workflow 1's turn to begin before releasing, then wait for workflow
-    // 2's turn to begin before releasing. This avoids V8-coverage-induced races
-    // where release() fires before beginKernelTurn() has set up the current gate.
-    await queued.waitForNextTurn();
-    queued.release();
-    await firstCompletion;
+      // Wait for workflow 1's turn to begin before releasing, then wait for workflow
+      // 2's turn to begin before releasing. This avoids V8-coverage-induced races
+      // where release() fires before beginKernelTurn() has set up the current gate.
+      await queued.waitForNextTurn();
+      queued.release();
+      await firstCompletion;
 
-    await queued.waitForNextTurn();
-    queued.release();
-    const secondCompleted = await secondCompletion;
+      await queued.waitForNextTurn();
+      queued.release();
+      const secondCompleted = await secondCompletion;
 
-    expect(secondCompleted.status).toBe('done');
-    expect(secondCompleted.stepResults[0]?.output).toBe('reply:hello second');
-  });
+      expect(secondCompleted.status).toBe('done');
+      expect(secondCompleted.stepResults[0]?.output).toBe('reply:hello second');
+    },
+  );
 });

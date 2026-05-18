@@ -97,11 +97,11 @@ export function satisfiesSemver(version: string, range: string): boolean {
       const target = parseSemver(cmpM[2] as string);
       if (!target) return true;
       const cmp = compareVer(verTuple, target);
-      if (op === '>=' ) return cmp >= 0;
-      if (op === '>'  ) return cmp >  0;
-      if (op === '<=' ) return cmp <= 0;
-      if (op === '<'  ) return cmp <  0;
-      if (op === '='  ) return cmp === 0;
+      if (op === '>=') return cmp >= 0;
+      if (op === '>') return cmp > 0;
+      if (op === '<=') return cmp <= 0;
+      if (op === '<') return cmp < 0;
+      if (op === '=') return cmp === 0;
     }
 
     // Bare version: "1.2.3"
@@ -336,7 +336,6 @@ export async function runOnMessageReceive(
   }
 }
 
-
 // ── Manifest ────────────────────────────────────────────────────────────────
 
 /**
@@ -351,4 +350,3 @@ export interface PluginManifest {
   /** Minimum AgentFlyer gateway version (semver range). */
   requires?: string;
 }
-

@@ -491,8 +491,7 @@ export function createMeshTools(
           (t) =>
             t.agentId === agent_id &&
             (t.status === 'pending' || t.status === 'running' || t.status === 'suspended'),
-        )
-        .length;
+        ).length;
       if (activeCount >= MESH_MAX_CONCURRENT_PER_AGENT) {
         return {
           isError: true,

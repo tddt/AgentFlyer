@@ -57,7 +57,9 @@ export const pluginCommand = defineCommand({
       },
       async run({ args }) {
         const keyword = String(args.keyword ?? '');
-        process.stdout.write(chalk.bold(`\nSearching npm for agentflyer plugins matching "${keyword}"…\n\n`));
+        process.stdout.write(
+          chalk.bold(`\nSearching npm for agentflyer plugins matching "${keyword}"…\n\n`),
+        );
 
         // Query npm registry — filter by `agentflyer` keyword
         const registryUrl = `https://registry.npmjs.org/-/v1/search?text=agentflyer-plugin+${encodeURIComponent(keyword)}&size=10`;
@@ -89,7 +91,11 @@ export const pluginCommand = defineCommand({
     install: defineCommand({
       meta: { name: 'install', description: 'Install a plugin from npm' },
       args: {
-        name: { type: 'positional', description: 'Package name (optionally @version)', required: true },
+        name: {
+          type: 'positional',
+          description: 'Package name (optionally @version)',
+          required: true,
+        },
         dataDir: { type: 'string', alias: 'd', description: 'AgentFlyer data directory' },
       },
       async run({ args }) {

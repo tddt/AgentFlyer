@@ -2,12 +2,8 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import {
-  listSnapshots,
-  restoreSnapshot,
-  snapshotMemoryFile,
-} from '../../../src/memory/version.js';
+import { afterEach, describe, expect, it } from 'vitest';
+import { listSnapshots, restoreSnapshot, snapshotMemoryFile } from '../../../src/memory/version.js';
 
 const tempDirs: string[] = [];
 
@@ -18,11 +14,11 @@ function makeTempDir(): string {
 }
 
 afterEach(() => {
-  tempDirs.splice(0).forEach((d) => {
+  for (const d of tempDirs.splice(0)) {
     try {
       rmSync(d, { recursive: true, force: true });
     } catch {}
-  });
+  }
 });
 
 describe('snapshotMemoryFile', () => {

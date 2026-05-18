@@ -129,26 +129,23 @@ describe('AgentRunner recoverable stream retry', () => {
     });
     const otherSessionKey = runner.currentSessionKey;
 
-    await runner.applyKernelLlmGenerateSyscall(
-      executionState,
-      {
-        requestId: 'req-1',
-        ok: true,
-        resolvedAt: Date.now(),
-        payload: {
-          chunks: [
-            { type: 'text_delta', text: 'reply on original session' },
-            {
-              type: 'done',
-              inputTokens: 1,
-              outputTokens: 1,
-              stopReason: 'end_turn',
-            },
-          ],
-          recoverableStreamRetries: 0,
-        },
+    await runner.applyKernelLlmGenerateSyscall(executionState, {
+      requestId: 'req-1',
+      ok: true,
+      resolvedAt: Date.now(),
+      payload: {
+        chunks: [
+          { type: 'text_delta', text: 'reply on original session' },
+          {
+            type: 'done',
+            inputTokens: 1,
+            outputTokens: 1,
+            stopReason: 'end_turn',
+          },
+        ],
+        recoverableStreamRetries: 0,
       },
-    );
+    });
 
     const originalHistory = await sessionStore.readAll(originalSessionKey);
     const otherHistory = await sessionStore.readAll(otherSessionKey);

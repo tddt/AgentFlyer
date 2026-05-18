@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { asSkillId } from '../../../src/core/types.js';
 import { filterSkillsForAgent, searchSkills } from '../../../src/skills/filter.js';
 import type { SkillMeta } from '../../../src/skills/registry.js';
-import { asSkillId } from '../../../src/core/types.js';
 
 function makeMeta(id: string, overrides: Partial<SkillMeta> = {}): SkillMeta {
   return {
@@ -68,7 +68,10 @@ describe('searchSkills', () => {
   });
 
   it('matches on tags', () => {
-    const all = [makeMeta('a', { tags: ['finance', 'trading'] }), makeMeta('b', { tags: ['weather'] })];
+    const all = [
+      makeMeta('a', { tags: ['finance', 'trading'] }),
+      makeMeta('b', { tags: ['weather'] }),
+    ];
     const result = searchSkills(all, 'finance');
     expect(result.map((s) => s.id)).toContain('a');
     expect(result.map((s) => s.id)).not.toContain('b');

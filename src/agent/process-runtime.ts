@@ -56,7 +56,7 @@ function buildError(message: string, retryable = false): ProcessErrorEvent {
   };
 }
 
-function normalizeThreadKey(runner: AgentRunner, requested?: string): string {
+function normalizeThreadKey(_runner: AgentRunner, requested?: string): string {
   if (requested && requested.trim().length > 0) {
     return requested;
   }
@@ -64,7 +64,7 @@ function normalizeThreadKey(runner: AgentRunner, requested?: string): string {
 }
 
 function buildInitialRunnerState(
-  runner: AgentRunner,
+  _runner: AgentRunner,
   threadKey: string,
 ): SerializedAgentRunnerState {
   return {

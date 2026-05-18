@@ -157,6 +157,19 @@ function upsertStepResult(
   return next;
 }
 
+function findSuspendedDelegatedRunId(
+  stepResults: WorkflowStepResult[],
+  stepId: string,
+): string | undefined {
+  for (let index = stepResults.length - 1; index >= 0; index -= 1) {
+    const result = stepResults[index];
+    if (result?.stepId === stepId && result.delegatedRunStatus === 'suspended') {
+      return result.delegatedRunId;
+    }
+  }
+  return undefined;
+}
+
 export class WorkflowProcessRuntime
   implements ProcessRuntime<WorkflowProcessState, WorkflowProcessInput>
 {
@@ -228,9 +241,9 @@ export class WorkflowProcessRuntime
         if (dotIdx > 0) {
           const sid = key.slice(0, dotIdx);
           const vname = key.slice(dotIdx + 1);
-          if (!stepVars[sid]) stepVars[sid] = {};
-          // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-          stepVars[sid]![vname] = value;
+          const stepBucket = stepVars[sid] ?? {};
+          stepBucket[vname] = value;
+          stepVars[sid] = stepBucket;
         }
       }
     }
@@ -501,11 +514,7 @@ export class WorkflowProcessRuntime
             agentId,
             message: applyFormatInstruction(step, message),
             threadKey: workflowThreadKey(state.run.runId, currentStepIndex),
-            delegatedRunId:
-              state.run.stepResults.findLast(
-                (result) =>
-                  result.stepId === step.id && result.delegatedRunStatus === 'suspended',
-              )?.delegatedRunId,
+            delegatedRunId: findSuspendedDelegatedRunId(state.run.stepResults, step.id),
             onToken,
           }),
         );
@@ -582,6 +591,7 @@ export class WorkflowProcessRuntime
     if (!this.handlers.runAgentStep) {
       throw new Error(`Workflow super node step handler is not configured for '${type}'`);
     }
+    const runAgentStep = this.handlers.runAgentStep;
 
     const participantAgentIds = (step.participantAgentIds ?? [])
       .map((agentId) => agentId.trim())
@@ -599,23 +609,23 @@ export class WorkflowProcessRuntime
         const rolePrompt = rolePrompts[index] ?? `补充视角 ${index + 1}`;
         try {
           const execution = normalizeWorkflowAgentStepExecutionResult(
-            await this.handlers.runAgentStep?.({
-            runId: state.run.runId,
-            stepId: `${step.id}:participant:${index + 1}`,
-            agentId,
-            message: buildWorkflowSuperNodeParticipantPrompt({
-              type,
-              baseMessage: message,
-              rolePrompt,
-              index,
-              total: participantAgentIds.length,
-              domainRules: step.domainRules,
-            }),
-            threadKey: workflowThreadKey(
-              state.run.runId,
-              currentStepIndex,
-              `participant-${index + 1}`,
-            ),
+            await runAgentStep({
+              runId: state.run.runId,
+              stepId: `${step.id}:participant:${index + 1}`,
+              agentId,
+              message: buildWorkflowSuperNodeParticipantPrompt({
+                type,
+                baseMessage: message,
+                rolePrompt,
+                index,
+                total: participantAgentIds.length,
+                domainRules: step.domainRules,
+              }),
+              threadKey: workflowThreadKey(
+                state.run.runId,
+                currentStepIndex,
+                `participant-${index + 1}`,
+              ),
             }),
           );
 
@@ -657,7 +667,7 @@ export class WorkflowProcessRuntime
 
     try {
       const execution = normalizeWorkflowAgentStepExecutionResult(
-        await this.handlers.runAgentStep({
+        await runAgentStep({
           runId: state.run.runId,
           stepId: step.id,
           agentId: coordinatorAgentId,

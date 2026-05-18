@@ -63,7 +63,7 @@ export function registerHistogram(
   }
 }
 
-export function observeHistogram(name: string, labels: Labels = {}, valueSeconds: number): void {
+export function observeHistogram(name: string, labels: Labels, valueSeconds: number): void {
   const entry = histograms.get(name);
   if (!entry) return;
   const key = labelKey(labels);
@@ -75,7 +75,7 @@ export function observeHistogram(name: string, labels: Labels = {}, valueSeconds
   row.sum += valueSeconds;
   row.count += 1;
   for (let i = 0; i < entry.buckets.length; i++) {
-    if (valueSeconds <= (entry.buckets[i] ?? Infinity)) {
+    if (valueSeconds <= (entry.buckets[i] ?? Number.POSITIVE_INFINITY)) {
       (row.le[i] as number) += 1;
     }
   }
@@ -116,16 +116,14 @@ export function renderPrometheus(): string {
           : `{le="${entry.buckets[i]}"}`;
         lines.push(`${name}_bucket${leLabel} ${le[i] ?? 0}`);
       }
-      const infLabel = labelsWithoutBrace
-        ? `{${labelsWithoutBrace},le="+Inf"}`
-        : `{le="+Inf"}`;
+      const infLabel = labelsWithoutBrace ? `{${labelsWithoutBrace},le="+Inf"}` : `{le="+Inf"}`;
       lines.push(`${name}_bucket${infLabel} ${count}`);
       lines.push(`${name}_sum${base} ${sum}`);
       lines.push(`${name}_count${base} ${count}`);
     }
   }
 
-  return lines.join('\n') + '\n';
+  return `${lines.join('\n')}\n`;
 }
 
 // ── Default metric registrations ──────────────────────────────────────────────

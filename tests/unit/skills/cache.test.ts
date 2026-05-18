@@ -91,8 +91,8 @@ describe('SkillCache', () => {
 
       const result = await cache.load('test-skill', skillFile);
       expect(result).not.toBeNull();
-      expect(result!.id).toBe('test-skill');
-      expect(result!.name).toBe('Test Skill');
+      expect(result?.id).toBe('test-skill');
+      expect(result?.name).toBe('Test Skill');
     });
 
     it('returns null when skill file does not exist (hash will be empty string, mismatch)', async () => {
@@ -157,8 +157,8 @@ describe('SkillCache', () => {
       const cache = new SkillCache(cacheDir);
       const result = await cache.getOrParse(skillFile);
       expect(result).not.toBeNull();
-      expect(result!.name).toBe('Test Skill');
-      expect(result!.tags).toContain('test');
+      expect(result?.name).toBe('Test Skill');
+      expect(result?.tags).toContain('test');
     });
 
     it('persists cache after first parse', async () => {
@@ -175,7 +175,7 @@ describe('SkillCache', () => {
       // Second parse should be served from cache (file is unchanged)
       const result2 = await cache.getOrParse(skillFile);
       expect(result2).not.toBeNull();
-      expect(result2!.name).toBe('Test Skill');
+      expect(result2?.name).toBe('Test Skill');
     });
 
     it('returns null for a non-existent SKILL.md file', async () => {

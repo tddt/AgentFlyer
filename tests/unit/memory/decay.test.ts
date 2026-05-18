@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { ageInDays, computeForgettingScore, decayScore, shouldArchive } from '../../../src/memory/decay.js';
+import {
+  ageInDays,
+  computeForgettingScore,
+  decayScore,
+  shouldArchive,
+} from '../../../src/memory/decay.js';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -94,7 +99,6 @@ describe('computeForgettingScore', () => {
   });
 
   it('superseded entry has higher score than non-superseded', () => {
-    const now = Date.now();
     const stale = computeForgettingScore(freshEntry({ superseded: true }));
     const fresh = computeForgettingScore(freshEntry({ superseded: false }));
     expect(stale.combined).toBeGreaterThan(fresh.combined);
@@ -147,7 +151,13 @@ describe('shouldArchive', () => {
   });
 
   it('returns false when combined score < default threshold', () => {
-    const lowScore = { age: 0.1, accessGap: 0.1, superseded: 0, userImportance: 0.1, combined: 0.3 };
+    const lowScore = {
+      age: 0.1,
+      accessGap: 0.1,
+      superseded: 0,
+      userImportance: 0.1,
+      combined: 0.3,
+    };
     expect(shouldArchive(lowScore)).toBe(false);
   });
 

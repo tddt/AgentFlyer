@@ -294,7 +294,7 @@ describe('AgentRunner', () => {
 
     const result = await runner.runTurn('retry later');
 
-    expect(provider.calls).toBe(2);
+    expect(provider.calls).toBe(4);
     expect(result.text).toContain('任务执行失败');
     expect(result.text).toContain('速率限制');
     expect(result.text).not.toContain('429 rate limit exceeded');
@@ -402,8 +402,12 @@ describe('AgentRunner', () => {
 
     class TextProvider implements LLMProvider {
       readonly id = 'text';
-      supports(): boolean { return true; }
-      async countTokens(): Promise<number> { return 0; }
+      supports(): boolean {
+        return true;
+      }
+      async countTokens(): Promise<number> {
+        return 0;
+      }
       async *run(_params: RunParams): AsyncIterable<StreamChunk> {
         yield { type: 'text_delta', text: 'Hello, ' };
         yield { type: 'text_delta', text: 'world!' };
@@ -432,8 +436,12 @@ describe('AgentRunner', () => {
 
     class SimpleProvider implements LLMProvider {
       readonly id = 'simple';
-      supports(): boolean { return true; }
-      async countTokens(): Promise<number> { return 0; }
+      supports(): boolean {
+        return true;
+      }
+      async countTokens(): Promise<number> {
+        return 0;
+      }
       async *run(_params: RunParams): AsyncIterable<StreamChunk> {
         yield { type: 'text_delta', text: 'chunk1' };
         yield { type: 'text_delta', text: 'chunk2' };
@@ -466,8 +474,12 @@ describe('AgentRunner', () => {
 
     class EchoProvider implements LLMProvider {
       readonly id = 'echo';
-      supports(): boolean { return true; }
-      async countTokens(): Promise<number> { return 0; }
+      supports(): boolean {
+        return true;
+      }
+      async countTokens(): Promise<number> {
+        return 0;
+      }
       async *run(_params: RunParams): AsyncIterable<StreamChunk> {
         yield { type: 'text_delta', text: 'ok' };
         yield { type: 'done', inputTokens: 1, outputTokens: 1, stopReason: 'end_turn' };
@@ -506,8 +518,12 @@ describe('AgentRunner', () => {
 
     class QuickProvider implements LLMProvider {
       readonly id = 'quick';
-      supports(): boolean { return true; }
-      async countTokens(): Promise<number> { return 0; }
+      supports(): boolean {
+        return true;
+      }
+      async countTokens(): Promise<number> {
+        return 0;
+      }
       async *run(_params: RunParams): AsyncIterable<StreamChunk> {
         yield { type: 'text_delta', text: 'done' };
         yield { type: 'done', inputTokens: 1, outputTokens: 1, stopReason: 'end_turn' };
@@ -544,8 +560,12 @@ describe('AgentRunner', () => {
 describe('AgentRunner kernel API', () => {
   class KernelProvider implements LLMProvider {
     readonly id = 'kernel';
-    supports(): boolean { return true; }
-    async countTokens(): Promise<number> { return 0; }
+    supports(): boolean {
+      return true;
+    }
+    async countTokens(): Promise<number> {
+      return 0;
+    }
     async *run(_params: RunParams): AsyncIterable<StreamChunk> {
       yield { type: 'done', inputTokens: 0, outputTokens: 0, stopReason: 'end_turn' };
     }
@@ -605,13 +625,26 @@ describe('AgentRunner kernel API', () => {
 
     await runner.beginKernelTurn('run-3', 'mismatch test');
 
-    const wrongState = { runId: 'run-WRONG', messages: [], model: 'x', maxTokens: 100,
-      systemPrompt: '', userMessage: '', options: {}, totalInputTokens: 0,
-      totalOutputTokens: 0, totalCacheReadTokens: 0, totalText: '',
-      toolRounds: 0, toolFailureMessages: [], finalFailureMessage: null,
-      finalFailureCode: undefined, recoverableStreamRetries: 0,
+    const wrongState = {
+      runId: 'run-WRONG',
+      messages: [],
+      model: 'x',
+      maxTokens: 100,
+      systemPrompt: '',
+      userMessage: '',
+      options: {},
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalText: '',
+      toolRounds: 0,
+      toolFailureMessages: [],
+      finalFailureMessage: null,
+      finalFailureCode: undefined,
+      recoverableStreamRetries: 0,
       toolLoopDetector: { lastEntry: null, consecutiveRepeats: 0 },
-      pendingToolCalls: undefined };
+      pendingToolCalls: undefined,
+    };
 
     await expect(runner.continueKernelTurn(wrongState)).rejects.toThrow(
       "kernel lease mismatch for run 'run-WRONG'",
@@ -670,13 +703,26 @@ describe('AgentRunner kernel API', () => {
 
     await runner.beginKernelTurn('run-7', 'resume mismatch');
 
-    const wrongState = { runId: 'run-WRONG', messages: [], model: 'x', maxTokens: 100,
-      systemPrompt: '', userMessage: '', options: {}, totalInputTokens: 0,
-      totalOutputTokens: 0, totalCacheReadTokens: 0, totalText: '',
-      toolRounds: 0, toolFailureMessages: [], finalFailureMessage: null,
-      finalFailureCode: undefined, recoverableStreamRetries: 0,
+    const wrongState = {
+      runId: 'run-WRONG',
+      messages: [],
+      model: 'x',
+      maxTokens: 100,
+      systemPrompt: '',
+      userMessage: '',
+      options: {},
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalText: '',
+      toolRounds: 0,
+      toolFailureMessages: [],
+      finalFailureMessage: null,
+      finalFailureCode: undefined,
+      recoverableStreamRetries: 0,
       toolLoopDetector: { lastEntry: null, consecutiveRepeats: 0 },
-      pendingToolCalls: undefined };
+      pendingToolCalls: undefined,
+    };
 
     await expect(runner.resumeKernelTurn(wrongState)).rejects.toThrow(
       "kernel lease mismatch for run 'run-WRONG'",
@@ -691,8 +737,12 @@ describe('AgentRunner utilities', () => {
 
     class DummyProvider implements LLMProvider {
       readonly id = 'dummy';
-      supports(): boolean { return true; }
-      async countTokens(): Promise<number> { return 0; }
+      supports(): boolean {
+        return true;
+      }
+      async countTokens(): Promise<number> {
+        return 0;
+      }
       async *run(_params: RunParams): AsyncIterable<StreamChunk> {
         yield { type: 'done', inputTokens: 0, outputTokens: 0, stopReason: 'end_turn' };
       }
@@ -729,8 +779,12 @@ describe('AgentRunner utilities', () => {
 
     class FastProvider implements LLMProvider {
       readonly id = 'fast';
-      supports(): boolean { return true; }
-      async countTokens(): Promise<number> { return 0; }
+      supports(): boolean {
+        return true;
+      }
+      async countTokens(): Promise<number> {
+        return 0;
+      }
       async *run(_params: RunParams): AsyncIterable<StreamChunk> {
         yield { type: 'done', inputTokens: 0, outputTokens: 0, stopReason: 'end_turn' };
       }
@@ -754,8 +808,12 @@ describe('AgentRunner utilities', () => {
 
     class NeverReturnsProvider implements LLMProvider {
       readonly id = 'never';
-      supports(): boolean { return true; }
-      async countTokens(): Promise<number> { return 0; }
+      supports(): boolean {
+        return true;
+      }
+      async countTokens(): Promise<number> {
+        return 0;
+      }
       async *run(_params: RunParams): AsyncIterable<StreamChunk> {
         yield { type: 'done', inputTokens: 0, outputTokens: 0, stopReason: 'end_turn' };
       }
@@ -780,8 +838,12 @@ describe('AgentRunner utilities', () => {
     let callCount = 0;
     class CountingProvider implements LLMProvider {
       readonly id = 'counting';
-      supports(): boolean { return true; }
-      async countTokens(): Promise<number> { return 0; }
+      supports(): boolean {
+        return true;
+      }
+      async countTokens(): Promise<number> {
+        return 0;
+      }
       async *run(params: RunParams): AsyncIterable<StreamChunk> {
         callCount += 1;
         const userCount = params.messages.filter((m) => m.role === 'user').length;

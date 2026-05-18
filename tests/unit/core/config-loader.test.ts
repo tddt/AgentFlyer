@@ -1,5 +1,5 @@
-import { readFile, writeFile } from 'node:fs/promises';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -20,7 +20,11 @@ function createTempDirSync(): string {
 }
 
 afterEach(() => {
-  tempDirs.splice(0).forEach((d) => { try { rmSync(d, { recursive: true, force: true }); } catch {} });
+  for (const d of tempDirs.splice(0)) {
+    try {
+      rmSync(d, { recursive: true, force: true });
+    } catch {}
+  }
 });
 
 const MINIMAL_V2_CONFIG = JSON.stringify({

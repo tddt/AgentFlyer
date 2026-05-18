@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
+import { asAgentId, asMemoryEntryId } from '../../../src/core/types.js';
+import type { EmbedConfig } from '../../../src/memory/embed.js';
 import { searchMemory } from '../../../src/memory/search.js';
 import type { MemoryEntry } from '../../../src/memory/store.js';
 import type { MemoryStore } from '../../../src/memory/store.js';
-import type { EmbedConfig } from '../../../src/memory/embed.js';
-import { asAgentId, asMemoryEntryId } from '../../../src/core/types.js';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -135,6 +135,8 @@ describe('searchMemory', () => {
 
     // embed() will fall back to stub (no model available in tests)
     // This should not throw
-    await expect(searchMemory(storeWithEmbeddings, 'machine learning', embedConfig)).resolves.toBeDefined();
+    await expect(
+      searchMemory(storeWithEmbeddings, 'machine learning', embedConfig),
+    ).resolves.toBeDefined();
   });
 });

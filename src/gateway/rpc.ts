@@ -453,7 +453,13 @@ export interface RpcContext {
       limit?: number;
       timeoutMs?: number;
     }): Promise<{
-      entries: Array<{ id: string; content: string; partition?: string; createdAt: number; score?: number }>;
+      entries: Array<{
+        id: string;
+        content: string;
+        partition?: string;
+        createdAt: number;
+        score?: number;
+      }>;
       respondedPeers: string[];
       timedOutPeers: string[];
     }>;
@@ -1156,9 +1162,11 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
           // inside the kernel process, not in the AgentRunner instance.
           let runId: string;
           if (ctx.agentQueues) {
-            const started = await ctx.agentQueues.for(agentId).enqueue(() =>
-              agentKernel.startTurn({ agentId, userMessage: message, threadKey: thread }),
-            );
+            const started = await ctx.agentQueues
+              .for(agentId)
+              .enqueue(() =>
+                agentKernel.startTurn({ agentId, userMessage: message, threadKey: thread }),
+              );
             runId = started.runId;
           } else {
             const started = await agentKernel.startTurn({
@@ -1827,7 +1835,11 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
 
         const running = ctx.runningTasks.get(taskId);
         if (!running?.agentRunId || running.agentRunStatus !== 'suspended') {
-          return buildErrorResponse(id, 409, `Task '${taskId}' does not have a suspended run to resume`);
+          return buildErrorResponse(
+            id,
+            409,
+            `Task '${taskId}' does not have a suspended run to resume`,
+          );
         }
 
         const startedAt = Date.now();
@@ -2196,12 +2208,9 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         if (!Array.isArray(mergeSourceIds) || mergeSourceIds.length === 0) {
           return buildErrorResponse(id, -32602, 'sourceIds (non-empty array) is required');
         }
-        const merged = await ctx.deliverableStore.merge(
-          mergeTargetId,
-          mergeSourceIds,
-          mergedTitle,
-        );
-        if (!merged) return buildErrorResponse(id, 404, `Target deliverable not found: ${mergeTargetId}`);
+        const merged = await ctx.deliverableStore.merge(mergeTargetId, mergeSourceIds, mergedTitle);
+        if (!merged)
+          return buildErrorResponse(id, 404, `Target deliverable not found: ${mergeTargetId}`);
         return { id, result: merged };
       }
 
@@ -2231,7 +2240,11 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
       }
 
       case 'artifact.setCategory': {
-        const { deliverableId: aDelId, artifactId: aId, category: aCat } = (params ?? {}) as {
+        const {
+          deliverableId: aDelId,
+          artifactId: aId,
+          category: aCat,
+        } = (params ?? {}) as {
           deliverableId?: string;
           artifactId?: string;
           category?: string | null;
@@ -2244,7 +2257,11 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
       }
 
       case 'artifact.rename': {
-        const { deliverableId: rDelId, artifactId: rId, name: rName } = (params ?? {}) as {
+        const {
+          deliverableId: rDelId,
+          artifactId: rId,
+          name: rName,
+        } = (params ?? {}) as {
           deliverableId?: string;
           artifactId?: string;
           name?: string;
@@ -2342,7 +2359,10 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
       case 'memory.federated': {
         const cfg = ctx.getConfig();
         if (!cfg.federation?.enabled || !ctx.federationNode) {
-          return { id, result: { entries: [], respondedPeers: [], timedOutPeers: [], enabled: false } };
+          return {
+            id,
+            result: { entries: [], respondedPeers: [], timedOutPeers: [], enabled: false },
+          };
         }
         const { query, partition, limit, timeoutMs } = (params ?? {}) as {
           query?: string;

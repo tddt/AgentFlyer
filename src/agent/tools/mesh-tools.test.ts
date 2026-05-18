@@ -19,7 +19,12 @@ async function createTempDir(): Promise<string> {
 }
 
 afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  await Promise.all(
+    tempDirs.splice(0).map(async (dir) => {
+      await waitForMeshDrain(dir);
+      await rm(dir, { recursive: true, force: true });
+    }),
+  );
 });
 
 class FakeProvider implements LLMProvider {
@@ -288,8 +293,12 @@ describe('mesh_send end-to-end routing', () => {
 
     class HangingProvider implements LLMProvider {
       readonly id = 'hanging';
-      supports(): boolean { return true; }
-      async countTokens(): Promise<number> { return 0; }
+      supports(): boolean {
+        return true;
+      }
+      async countTokens(): Promise<number> {
+        return 0;
+      }
       async *run(_params: RunParams): AsyncIterable<StreamChunk> {
         await new Promise(() => undefined);
         yield { type: 'done', inputTokens: 0, outputTokens: 0, stopReason: 'end_turn' };
@@ -298,10 +307,21 @@ describe('mesh_send end-to-end routing', () => {
 
     const busyRunner = new AgentRunner(
       {
-        id: 'busy-agent', name: 'Busy', mentionAliases: [], workspace: dataDir,
-        skills: [], model: 'fake-model',
-        mesh: { role: 'worker', capabilities: [], accepts: ['task'], visibility: 'public', triggers: [] },
-        owners: [], tools: { allow: [], deny: [], approval: [], maxRounds: 10 },
+        id: 'busy-agent',
+        name: 'Busy',
+        mentionAliases: [],
+        workspace: dataDir,
+        skills: [],
+        model: 'fake-model',
+        mesh: {
+          role: 'worker',
+          capabilities: [],
+          accepts: ['task'],
+          visibility: 'public',
+          triggers: [],
+        },
+        owners: [],
+        tools: { allow: [], deny: [], approval: [], maxRounds: 10 },
         persona: { language: 'zh-CN', outputDir: 'output' },
       },
       {

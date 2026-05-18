@@ -47,14 +47,16 @@ describe('CronScheduler', () => {
 
     it('throws when scheduling a duplicate id', () => {
       scheduler.schedule(makeSpec({ id: 'dup-id' }));
-      expect(() => scheduler.schedule(makeSpec({ id: 'dup-id' }))).toThrow("'dup-id' already exists");
+      expect(() => scheduler.schedule(makeSpec({ id: 'dup-id' }))).toThrow(
+        "'dup-id' already exists",
+      );
     });
 
     it('exposes nextRunAt as a future timestamp', () => {
       const job = scheduler.schedule(makeSpec());
       // nextRunAt should be a future epoch ms
       expect(typeof job.nextRunAt).toBe('number');
-      expect(job.nextRunAt!).toBeGreaterThan(Date.now() - 1000);
+      expect(job.nextRunAt).toBeGreaterThan(Date.now() - 1000);
     });
 
     it('lastRunAt is undefined before first execution', () => {

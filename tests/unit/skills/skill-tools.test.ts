@@ -2,10 +2,10 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { SkillRegistry } from '../../../src/skills/registry.js';
-import { createSkillTools } from '../../../src/skills/skill-tools.js';
 import { asSkillId } from '../../../src/core/types.js';
+import { SkillRegistry } from '../../../src/skills/registry.js';
 import type { SkillMeta } from '../../../src/skills/registry.js';
+import { createSkillTools } from '../../../src/skills/skill-tools.js';
 
 const tempDirs: string[] = [];
 
@@ -63,6 +63,17 @@ async function callHandler(tool: ReturnType<typeof createSkillTools>[number], in
   return tool.handler(input);
 }
 
+function requireTool(
+  tools: ReturnType<typeof createSkillTools>,
+  name: 'skill_list' | 'skill_read',
+): ReturnType<typeof createSkillTools>[number] {
+  const tool = tools.find((entry) => entry.definition.name === name);
+  if (!tool) {
+    throw new Error(`Missing expected tool: ${name}`);
+  }
+  return tool;
+}
+
 describe('createSkillTools', () => {
   it('returns two tools: skill_list and skill_read', () => {
     const tools = createSkillTools(makeRegistry());
@@ -74,7 +85,7 @@ describe('createSkillTools', () => {
   describe('skill_list tool', () => {
     it('returns "No skills available." when registry is empty', async () => {
       const tools = createSkillTools(makeRegistry());
-      const listTool = tools.find((t) => t.definition.name === 'skill_list')!;
+      const listTool = requireTool(tools, 'skill_list');
       const result = await callHandler(listTool, {});
       expect(result.isError).toBe(false);
       expect(result.content).toContain('No skills available');
@@ -85,7 +96,7 @@ describe('createSkillTools', () => {
       const filePath = await makeSkillFile(baseDir, 'demo-skill');
       const reg = makeRegistry([makeSkillMeta('demo-skill', filePath)]);
       const tools = createSkillTools(reg);
-      const listTool = tools.find((t) => t.definition.name === 'skill_list')!;
+      const listTool = requireTool(tools, 'skill_list');
       const result = await callHandler(listTool, {});
       expect(result.isError).toBe(false);
       expect(result.content).toContain('demo-skill');
@@ -98,7 +109,7 @@ describe('createSkillTools', () => {
       const f2 = await makeSkillFile(baseDir, 'skill-b');
       const reg = makeRegistry([makeSkillMeta('skill-a', f1), makeSkillMeta('skill-b', f2)]);
       const tools = createSkillTools(reg);
-      const listTool = tools.find((t) => t.definition.name === 'skill_list')!;
+      const listTool = requireTool(tools, 'skill_list');
       const result = await callHandler(listTool, {});
       expect(result.content).toContain('Available skills (2)');
     });
@@ -107,7 +118,7 @@ describe('createSkillTools', () => {
   describe('skill_read tool', () => {
     it('returns error when skill id is not found', async () => {
       const tools = createSkillTools(makeRegistry());
-      const readTool = tools.find((t) => t.definition.name === 'skill_read')!;
+      const readTool = requireTool(tools, 'skill_read');
       const result = await callHandler(readTool, { skill_id: 'unknown-skill' });
       expect(result.isError).toBe(true);
       expect(result.content).toContain('not found');
@@ -118,7 +129,7 @@ describe('createSkillTools', () => {
       const filePath = await makeSkillFile(baseDir, 'demo-skill');
       const reg = makeRegistry([makeSkillMeta('demo-skill', filePath)]);
       const tools = createSkillTools(reg);
-      const readTool = tools.find((t) => t.definition.name === 'skill_read')!;
+      const readTool = requireTool(tools, 'skill_read');
       const result = await callHandler(readTool, { skill_id: 'demo-skill' });
       expect(result.isError).toBe(false);
       expect(result.content).toContain('IMPORTANT — Skill directory');
@@ -130,7 +141,7 @@ describe('createSkillTools', () => {
       const filePath = await makeSkillFile(baseDir, 'demo-skill');
       const reg = makeRegistry([makeSkillMeta('demo-skill', filePath)]);
       const tools = createSkillTools(reg);
-      const readTool = tools.find((t) => t.definition.name === 'skill_read')!;
+      const readTool = requireTool(tools, 'skill_read');
       const result = await callHandler(readTool, { skill_id: 'demo-skill' });
       expect(result.content).toContain('## Instructions');
     });
@@ -139,7 +150,7 @@ describe('createSkillTools', () => {
       // Register a skill with a non-existent file path
       const reg = makeRegistry([makeSkillMeta('broken-skill', '/nonexistent/path/SKILL.md')]);
       const tools = createSkillTools(reg);
-      const readTool = tools.find((t) => t.definition.name === 'skill_read')!;
+      const readTool = requireTool(tools, 'skill_read');
       const result = await callHandler(readTool, { skill_id: 'broken-skill' });
       expect(result.isError).toBe(true);
       expect(result.content).toContain('Failed to read skill file');
@@ -150,7 +161,7 @@ describe('createSkillTools', () => {
       const filePath = await makeSkillFile(baseDir, 'known-skill');
       const reg = makeRegistry([makeSkillMeta('known-skill', filePath)]);
       const tools = createSkillTools(reg);
-      const readTool = tools.find((t) => t.definition.name === 'skill_read')!;
+      const readTool = requireTool(tools, 'skill_read');
       const result = await callHandler(readTool, { skill_id: 'ghost-skill' });
       expect(result.isError).toBe(true);
       expect(result.content).toContain('known-skill');
