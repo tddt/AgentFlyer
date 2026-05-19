@@ -133,7 +133,6 @@ export const chatCommand = defineCommand({
         note(`Runner for agent '${agentId}' failed to initialise.`, 'Error');
         process.exit(1);
       }
-      runner.setThread(threadKey);
       const agentKernel = await getAgentKernelService(instance.state);
 
       note(
@@ -154,7 +153,7 @@ export const chatCommand = defineCommand({
 
         if (text === '/clear') {
           try {
-            await runner.clearHistory();
+            await runner.clearHistory(threadKey);
             process.stdout.write(chalk.gray('History cleared.\n'));
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
@@ -163,7 +162,7 @@ export const chatCommand = defineCommand({
           return;
         }
         if (text === '/stats') {
-          process.stdout.write(chalk.gray(`Session: ${runner.currentSessionKey}\n`));
+          process.stdout.write(chalk.gray(`Session: ${runner.sessionKeyForThread(threadKey)}\n`));
           return;
         }
 

@@ -135,13 +135,19 @@ async function waitForRunPhase(
   runners: Map<string, AgentRunner>,
   runId: string,
   phase: 'suspended' | 'done',
-): Promise<{ phase: 'suspended' | 'done'; error?: { code?: string }; result?: { text?: string } }> {
+): Promise<{
+  phase: 'suspended' | 'done';
+  controlState?: string;
+  error?: { code?: string };
+  result?: { text?: string };
+}> {
   const deadline = Date.now() + 2_000;
   while (Date.now() < deadline) {
     const run = await getAgentTurnRunViaKernel({ dataDir, runners, runId });
     if (run?.phase === phase) {
       return run as {
         phase: 'suspended' | 'done';
+        controlState?: string;
         error?: { code?: string };
         result?: { text?: string };
       };
@@ -168,6 +174,26 @@ describe('executeAgentTurnViaKernel', () => {
 
     expect(result.text).toContain('hello from agent-main');
     expect(result.sessionKey).toContain('executor-thread');
+  });
+
+  it('does not overwrite the runner default thread after an explicit kernel turn', async () => {
+    const dataDir = await createTempDir();
+    const runner = createRunner(dataDir);
+    runner.setDefaultThread('operator-default-thread');
+
+    const result = await executeAgentTurnViaKernel({
+      runners: new Map([['agent-main', runner]]),
+      dataDir,
+      input: {
+        agentId: 'agent-main',
+        userMessage: 'hello isolated thread',
+        threadKey: 'executor-isolated-thread',
+      },
+    });
+
+    expect(result.sessionKey).toContain('executor-isolated-thread');
+    expect(runner.defaultSessionKey).toContain('operator-default-thread');
+    expect(runner.serializeState().defaultThreadKey).toBe('operator-default-thread');
   });
 
   it('reuses one shared executor per dataDir across multiple agents', async () => {
@@ -275,6 +301,7 @@ describe('executeAgentTurnViaKernel', () => {
 
     const suspended = await waitForRunPhase(dataDir, runners, started.runId, 'suspended');
     expect(suspended.error?.code).toBe('AGENT_LLM_RESOURCE_BLOCKED');
+    expect(suspended.controlState).toBe('suspended');
 
     const suspendedMeta = (await new SessionMetaStore(join(dataDir, 'sessions')).listAll())[0];
     expect(suspendedMeta?.status).toBe('suspended');
@@ -287,6 +314,7 @@ describe('executeAgentTurnViaKernel', () => {
       runId: started.runId,
     });
     expect(resumed?.processStatus).toBe('ready');
+    expect(resumed?.controlState).toBe('ready');
 
     const completed = await waitForRunPhase(dataDir, runners, started.runId, 'done');
     expect(completed.result?.text).toContain('quota recovered');

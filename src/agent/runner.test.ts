@@ -121,13 +121,14 @@ describe('AgentRunner recoverable stream retry', () => {
     const sessionStore = new SessionStore(join(dataDir, 'sessions'));
 
     const executionState = await runner.beginKernelTurn('run-session-stable', 'hello');
-    const originalSessionKey = runner.currentSessionKey;
+    const originalSessionKey = executionState.sessionKey;
 
     runner.restoreState({
       ...runner.serializeState(),
-      threadKey: 'other-thread',
+      activeThreadKey: 'other-thread',
+      defaultThreadKey: 'other-thread',
     });
-    const otherSessionKey = runner.currentSessionKey;
+    const otherSessionKey = runner.defaultSessionKey;
 
     await runner.applyKernelLlmGenerateSyscall(executionState, {
       requestId: 'req-1',
@@ -152,6 +153,48 @@ describe('AgentRunner recoverable stream retry', () => {
 
     expect(originalHistory.at(-1)?.content).toBe('reply on original session');
     expect(otherHistory).toEqual([]);
+  });
+
+  it('keeps the default thread stable after an explicit kernel thread completes', async () => {
+    const dataDir = await createTempDir();
+    const provider = new RecoverableRetryProvider();
+    const runner = createRunner(dataDir, provider);
+
+    runner.setDefaultThread('operator-default-thread');
+
+    const executionState = await runner.beginKernelTurn(
+      'run-explicit-kernel-thread',
+      'hello',
+      {},
+      'kernel-thread-only',
+    );
+
+    expect(executionState.sessionKey).toContain('kernel-thread-only');
+    expect(runner.activeSessionKey).toContain('kernel-thread-only');
+
+    runner.forceReset(executionState.runId);
+
+    expect(runner.defaultSessionKey).toContain('operator-default-thread');
+    expect(runner.serializeState().defaultThreadKey).toBe('operator-default-thread');
+  });
+
+  it('runs a direct turn on an explicit thread without mutating the default thread', async () => {
+    const dataDir = await createTempDir();
+    const provider = new RecoverableRetryProvider();
+    const runner = createRunner(dataDir, provider);
+
+    runner.setDefaultThread('operator-default-thread');
+
+    const result = await runner.runTurn('hello explicit direct thread', {
+      threadKey: 'direct-explicit-thread',
+    });
+
+    expect(result.sessionKey).toContain('direct-explicit-thread');
+    expect(runner.defaultSessionKey).toContain('operator-default-thread');
+    expect(runner.sessionKeyForThread('direct-explicit-thread')).toContain(
+      'direct-explicit-thread',
+    );
+    expect(runner.serializeState().defaultThreadKey).toBe('operator-default-thread');
   });
 
   it('does not restore thread or session state from tool syscall cache updates', async () => {
@@ -213,15 +256,16 @@ describe('AgentRunner recoverable stream retry', () => {
 
     runner.restoreState({
       ...runner.serializeState(),
-      threadKey: 'other-thread-after-tool-call',
+      activeThreadKey: 'other-thread-after-tool-call',
+      defaultThreadKey: 'other-thread-after-tool-call',
     });
 
     await runner.applyKernelToolCallSyscall(executionState, resolution);
 
-    expect(runner.currentSessionKey).toContain('other-thread-after-tool-call');
+    expect(runner.defaultSessionKey).toContain('other-thread-after-tool-call');
   });
 
-  it('does not carry prompt cache through serialized runner state', async () => {
+  it('carries prompt cache through serialized runner state', async () => {
     const dataDir = await createTempDir();
     const provider = new RecoverableRetryProvider();
     const runner = createRunner(dataDir, provider);
@@ -230,28 +274,69 @@ describe('AgentRunner recoverable stream retry', () => {
     runner.forceReset('run-build-cache');
 
     expect(runner.serializeState()).toEqual({
-      threadKey: 'default',
+      activeThreadKey: 'default',
+      defaultThreadKey: 'default',
       toolResultCache: [],
+      promptLayerHashes: expect.arrayContaining([
+        expect.objectContaining({ index: 0 }),
+        expect.objectContaining({ index: 1 }),
+        expect.objectContaining({ index: 2 }),
+        expect.objectContaining({ index: 3 }),
+      ]),
+      cachedSystemPrompt: expect.any(String),
     });
   });
 
-  it('rejects setThread while a turn is active or beginning', async () => {
+  it('rejects setDefaultThread while a turn is active or beginning', async () => {
     const dataDir = await createTempDir();
     const provider = new RecoverableRetryProvider();
     const runner = createRunner(dataDir, provider);
 
     const beginPromise = runner.beginKernelTurn('run-begin-stable', 'hello during begin');
-    expect(() => runner.setThread('thread-switched-during-begin')).toThrow(
-      "Agent 'agent-main' cannot change thread while a turn is active",
+    expect(() => runner.setDefaultThread('thread-switched-during-begin')).toThrow(
+      "Agent 'agent-main' cannot change default thread while a turn is active",
     );
 
     const executionState = await beginPromise;
-    expect(() => runner.setThread('thread-switched-after-begin')).toThrow(
-      "Agent 'agent-main' cannot change thread while a turn is active",
+    expect(() => runner.setDefaultThread('thread-switched-after-begin')).toThrow(
+      "Agent 'agent-main' cannot change default thread while a turn is active",
     );
 
     runner.forceReset(executionState.runId);
-    expect(() => runner.setThread('thread-allowed-after-reset')).not.toThrow();
+    expect(() => runner.setDefaultThread('thread-allowed-after-reset')).not.toThrow();
+  });
+
+  it('syncs runner lease mode explicitly without inferring from runId', async () => {
+    const dataDir = await createTempDir();
+    const provider = new RecoverableRetryProvider();
+    const runner = createRunner(dataDir, provider);
+
+    runner.setDefaultThread('operator-default-thread');
+
+    runner.syncRuntimeState(
+      'queued-thread',
+      'run-queued',
+      [],
+      [],
+      null,
+      'operator-default-thread',
+      'idle',
+    );
+    expect(runner.isRunning).toBe(false);
+    expect(runner.activeSessionKey).toBeNull();
+    expect(runner.defaultSessionKey).toContain('operator-default-thread');
+
+    runner.syncRuntimeState(
+      'kernel-thread',
+      'run-live',
+      [],
+      [],
+      null,
+      'operator-default-thread',
+      'kernel',
+    );
+    expect(runner.isRunning).toBe(true);
+    expect(runner.activeSessionKey).toContain('kernel-thread');
   });
 
   it('replaces tools for a category without rebuilding the runner', async () => {
@@ -408,11 +493,11 @@ describe('AgentRunner recoverable stream retry', () => {
 
     const executionState = await runner.beginKernelTurn('run-clear-active', 'hello');
 
-    await expect(runner.clearHistory()).rejects.toThrow(
+    await expect(runner.clearHistory('default')).rejects.toThrow(
       "Agent 'agent-main' cannot clear history while a turn is active",
     );
 
     runner.forceReset(executionState.runId);
-    await expect(runner.clearHistory()).resolves.toBeUndefined();
+    await expect(runner.clearHistory('default')).resolves.toBeUndefined();
   });
 });

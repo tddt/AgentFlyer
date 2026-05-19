@@ -3,12 +3,20 @@ import type { ProcessStepContext, ProcessStepResult } from '../core/kernel/types
 import type { ProcessErrorEvent } from '../core/kernel/types.js';
 import type { StreamChunk } from '../core/types.js';
 import type {
+  KernelTurnStepResult,
+  RunnerLeaseSyncMode,
   RunnerOptions,
   SerializedAgentRunnerState,
   SerializedAgentTurnExecutionState,
   TurnResult,
 } from './runner.js';
 import type { AgentRunner } from './runner.js';
+import {
+  type AgentTurnControlState,
+  type AgentTurnPhase,
+  deriveAgentTurnControlStateForPhase,
+  deriveRunnerLeaseModeForAgentTurnPhase,
+} from './turn-phase-contract.js';
 
 export interface AgentTurnProcessInput {
   agentId: string;
@@ -19,15 +27,8 @@ export interface AgentTurnProcessInput {
 }
 
 export interface AgentTurnProcessState {
-  phase:
-    | 'pending'
-    | 'running'
-    | 'waiting_llm'
-    | 'waiting_approval'
-    | 'waiting_tool'
-    | 'suspended'
-    | 'done'
-    | 'error';
+  phase: AgentTurnPhase;
+  controlState?: AgentTurnControlState;
   runId: string;
   agentId: string;
   userMessage: string;
@@ -48,6 +49,41 @@ type AgentRunnerResolver =
   | Map<string, AgentRunner>
   | ((agentId: string) => AgentRunner | undefined);
 
+type AgentWaitingPhase = Extract<
+  AgentTurnProcessState['phase'],
+  'waiting_llm' | 'waiting_approval' | 'waiting_tool'
+>;
+
+type AgentSyscallExecutor = 'llm' | 'tool' | 'approval';
+
+interface AgentSyscallBinding {
+  kind: SyscallRequest['kind'];
+  operation: string;
+  phase: AgentWaitingPhase;
+  executor: AgentSyscallExecutor;
+}
+
+const AGENT_SYSCALL_BINDINGS: readonly AgentSyscallBinding[] = [
+  {
+    kind: 'llm.generate',
+    operation: 'agent.turn.generate',
+    phase: 'waiting_llm',
+    executor: 'llm',
+  },
+  {
+    kind: 'tool.call',
+    operation: 'agent.turn.tool-call-batch',
+    phase: 'waiting_tool',
+    executor: 'tool',
+  },
+  {
+    kind: 'custom',
+    operation: 'agent.turn.approval-request',
+    phase: 'waiting_approval',
+    executor: 'approval',
+  },
+];
+
 function buildError(message: string, retryable = false): ProcessErrorEvent {
   return {
     code: retryable ? 'AGENT_TURN_RETRYABLE_ERROR' : 'AGENT_TURN_ERROR',
@@ -64,12 +100,20 @@ function normalizeThreadKey(_runner: AgentRunner, requested?: string): string {
 }
 
 function buildInitialRunnerState(
-  _runner: AgentRunner,
+  runner: AgentRunner,
   threadKey: string,
 ): SerializedAgentRunnerState {
+  const snapshot = runner.serializeState();
+  const defaultThreadKey =
+    (runner as AgentRunner & { defaultThreadKey?: string }).defaultThreadKey ??
+    snapshot.defaultThreadKey ??
+    'default';
   return {
-    threadKey,
-    toolResultCache: [],
+    activeThreadKey: threadKey,
+    defaultThreadKey,
+    toolResultCache: threadKey === defaultThreadKey ? snapshot.toolResultCache : [],
+    promptLayerHashes: snapshot.promptLayerHashes ?? [],
+    cachedSystemPrompt: snapshot.cachedSystemPrompt ?? null,
   };
 }
 
@@ -81,16 +125,61 @@ function resolveRunner(runners: AgentRunnerResolver, agentId: string): AgentRunn
   return runner;
 }
 
+function resolveAgentSyscallBinding(
+  request: Pick<SyscallRequest, 'kind' | 'operation'>,
+): AgentSyscallBinding {
+  const binding = AGENT_SYSCALL_BINDINGS.find(
+    (candidate) => candidate.kind === request.kind && candidate.operation === request.operation,
+  );
+  if (!binding) {
+    throw new Error(`Unsupported agent syscall '${request.kind}:${request.operation}'`);
+  }
+  return binding;
+}
+
+function applyProcessPhase(
+  state: AgentTurnProcessState,
+  phase: AgentTurnProcessState['phase'],
+): AgentTurnProcessState {
+  return {
+    ...state,
+    phase,
+    controlState: deriveAgentTurnControlStateForPhase(phase),
+  };
+}
+
+function normalizeProcessState(state: AgentTurnProcessState): AgentTurnProcessState {
+  if (state.controlState) {
+    return state;
+  }
+  return {
+    ...state,
+    controlState: deriveAgentTurnControlStateForPhase(state.phase),
+  };
+}
+
 function syncRunnerRuntimeState(runner: AgentRunner, state: AgentTurnProcessState): void {
   const candidate = runner as AgentRunner & {
     syncRuntimeState?: (
       threadKey: string,
       runId: string | null,
       toolResultCache?: SerializedAgentRunnerState['toolResultCache'],
+      promptLayerHashes?: SerializedAgentRunnerState['promptLayerHashes'],
+      cachedSystemPrompt?: SerializedAgentRunnerState['cachedSystemPrompt'],
+      defaultThreadKey?: SerializedAgentRunnerState['defaultThreadKey'],
+      leaseMode?: RunnerLeaseSyncMode,
     ) => void;
   };
   if (candidate.syncRuntimeState) {
-    candidate.syncRuntimeState(state.threadKey, state.runId, state.runnerState.toolResultCache);
+    candidate.syncRuntimeState(
+      state.threadKey,
+      state.runId,
+      state.runnerState.toolResultCache,
+      state.runnerState.promptLayerHashes,
+      state.runnerState.cachedSystemPrompt,
+      state.runnerState.defaultThreadKey,
+      deriveRunnerLeaseModeForAgentTurnPhase(state.phase),
+    );
     return;
   }
   runner.restoreState(state.runnerState);
@@ -102,10 +191,22 @@ function syncRunnerPendingState(runner: AgentRunner, state: AgentTurnProcessStat
       threadKey: string,
       runId: string | null,
       toolResultCache?: SerializedAgentRunnerState['toolResultCache'],
+      promptLayerHashes?: SerializedAgentRunnerState['promptLayerHashes'],
+      cachedSystemPrompt?: SerializedAgentRunnerState['cachedSystemPrompt'],
+      defaultThreadKey?: SerializedAgentRunnerState['defaultThreadKey'],
+      leaseMode?: RunnerLeaseSyncMode,
     ) => void;
   };
   if (candidate.syncRuntimeState) {
-    candidate.syncRuntimeState(state.threadKey, null, state.runnerState.toolResultCache);
+    candidate.syncRuntimeState(
+      state.threadKey,
+      null,
+      state.runnerState.toolResultCache,
+      state.runnerState.promptLayerHashes,
+      state.runnerState.cachedSystemPrompt,
+      state.runnerState.defaultThreadKey,
+      'idle',
+    );
     return;
   }
   runner.restoreState(state.runnerState);
@@ -145,11 +246,89 @@ export class AgentTurnProcessRuntime
     }
   }
 
+  private phaseForSyscall(syscall: SyscallRequest): AgentWaitingPhase {
+    return resolveAgentSyscallBinding(syscall).phase;
+  }
+
+  private appendChunks(runId: string, stream: StreamChunk[], chunks: StreamChunk[]): StreamChunk[] {
+    const nextStream = [...stream];
+    for (const chunk of chunks) {
+      nextStream.push(chunk);
+      this.callbacks.onChunk?.(runId, chunk);
+    }
+    return nextStream;
+  }
+
+  private buildStepProgressResult(
+    state: AgentTurnProcessState,
+    runner: AgentRunner,
+    stepResult: KernelTurnStepResult,
+    stream: StreamChunk[],
+    nextRunAt: number,
+  ): ProcessStepResult<AgentTurnProcessState> {
+    const runnerState = runner.serializeState();
+
+    if (stepResult.done && stepResult.result) {
+      return {
+        signal: 'DONE',
+        state: {
+          ...applyProcessPhase(state, 'done'),
+          executionState: stepResult.state,
+          runnerState,
+          stream,
+          result: stepResult.result,
+        },
+      };
+    }
+
+    if (stepResult.suspended) {
+      return {
+        signal: 'SUSPENDED',
+        nextRunAt: stepResult.nextRunAt,
+        error: stepResult.suspended,
+        state: {
+          ...applyProcessPhase(state, 'suspended'),
+          executionState: stepResult.state,
+          runnerState,
+          stream,
+          error: stepResult.suspended,
+        },
+      };
+    }
+
+    if (stepResult.syscall) {
+      return {
+        signal: 'WAITING_SYSCALL',
+        syscall: stepResult.syscall,
+        state: {
+          ...applyProcessPhase(state, this.phaseForSyscall(stepResult.syscall)),
+          executionState: stepResult.state,
+          runnerState,
+          stream,
+          error: undefined,
+        },
+      };
+    }
+
+    return {
+      signal: 'YIELD',
+      nextRunAt,
+      state: {
+        ...applyProcessPhase(state, 'running'),
+        executionState: stepResult.state,
+        runnerState,
+        stream,
+        error: undefined,
+      },
+    };
+  }
+
   createInitialState(input: AgentTurnProcessInput): AgentTurnProcessState {
     const runner = resolveRunner(this.runners, input.agentId);
     const threadKey = normalizeThreadKey(runner, input.threadKey);
     return {
       phase: 'pending',
+      controlState: 'queued',
       runId: input.runId ?? `agent-turn:${input.agentId}`,
       agentId: input.agentId,
       userMessage: input.userMessage,
@@ -170,17 +349,18 @@ export class AgentTurnProcessRuntime
         throw new Error(`Agent turn execution state is missing for run '${state.runId}'`);
       }
       const runner = resolveRunner(this.runners, state.agentId);
-      if (request.kind === 'llm.generate') {
+      const binding = resolveAgentSyscallBinding(request);
+      if (binding.executor === 'llm') {
         return await runner.executeKernelLlmGenerateSyscall(
           state.executionState,
           request,
           resolvedAt,
         );
       }
-      if (request.kind === 'custom' && request.operation === 'agent.turn.approval-request') {
+      if (binding.executor === 'approval') {
         return await runner.executeKernelApprovalSyscall(state.executionState, request, resolvedAt);
       }
-      if (request.kind === 'tool.call') {
+      if (binding.executor === 'tool') {
         return await runner.executeKernelToolCallSyscall(
           state.executionState,
           request,
@@ -188,7 +368,7 @@ export class AgentTurnProcessRuntime
           state.runnerState.toolResultCache,
         );
       }
-      throw new Error(`Unsupported agent syscall kind '${request.kind}'`);
+      throw new Error(`Unsupported agent syscall executor '${binding.executor}'`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return {
@@ -204,6 +384,7 @@ export class AgentTurnProcessRuntime
     state: AgentTurnProcessState,
     _context: ProcessStepContext,
   ): Promise<ProcessStepResult<AgentTurnProcessState>> {
+    state = normalizeProcessState(state);
     if (state.phase === 'done') {
       return {
         signal: 'DONE',
@@ -228,22 +409,13 @@ export class AgentTurnProcessRuntime
             throw new Error(`Agent turn execution state is missing for run '${state.runId}'`);
           }
           const stepResult = await runner.resumeKernelTurn(state.executionState);
-          return {
-            signal: 'WAITING_SYSCALL',
-            syscall: stepResult.syscall,
-            state: {
-              ...state,
-              phase:
-                stepResult.syscall?.kind === 'tool.call'
-                  ? 'waiting_tool'
-                  : stepResult.syscall?.kind === 'llm.generate'
-                    ? 'waiting_llm'
-                    : 'waiting_approval',
-              executionState: stepResult.state,
-              runnerState: runner.serializeState(),
-              error: undefined,
-            },
-          };
+          return this.buildStepProgressResult(
+            state,
+            runner,
+            stepResult,
+            state.stream,
+            _context.now,
+          );
         }
         if (state.phase === 'pending') {
           syncRunnerPendingState(runner, state);
@@ -251,13 +423,13 @@ export class AgentTurnProcessRuntime
             state.runId,
             state.userMessage,
             state.options,
+            state.threadKey,
           );
           return {
             signal: 'YIELD',
             nextRunAt: _context.now,
             state: {
-              ...state,
-              phase: 'running',
+              ...applyProcessPhase(state, 'running'),
               executionState,
               runnerState: runner.serializeState(),
             },
@@ -279,72 +451,8 @@ export class AgentTurnProcessRuntime
             state.executionState,
             _context.lastSyscallResult,
           );
-          const stream = [...state.stream];
-          for (const chunk of stepResult.chunks) {
-            stream.push(chunk);
-            this.callbacks.onChunk?.(state.runId, chunk);
-          }
-
-          if (stepResult.done && stepResult.result) {
-            return {
-              signal: 'DONE',
-              state: {
-                ...state,
-                phase: 'done',
-                executionState: stepResult.state,
-                runnerState: runner.serializeState(),
-                stream,
-                result: stepResult.result,
-              },
-            };
-          }
-
-          if (stepResult.suspended) {
-            return {
-              signal: 'SUSPENDED',
-              nextRunAt: stepResult.nextRunAt,
-              error: stepResult.suspended,
-              state: {
-                ...state,
-                phase: 'suspended',
-                executionState: stepResult.state,
-                runnerState: runner.serializeState(),
-                stream,
-                error: stepResult.suspended,
-              },
-            };
-          }
-
-          if (stepResult.syscall) {
-            return {
-              signal: 'WAITING_SYSCALL',
-              syscall: stepResult.syscall,
-              state: {
-                ...state,
-                phase:
-                  stepResult.syscall.kind === 'tool.call'
-                    ? 'waiting_tool'
-                    : stepResult.syscall.kind === 'llm.generate'
-                      ? 'waiting_llm'
-                      : 'waiting_approval',
-                executionState: stepResult.state,
-                runnerState: runner.serializeState(),
-                stream,
-              },
-            };
-          }
-
-          return {
-            signal: 'YIELD',
-            nextRunAt: _context.now,
-            state: {
-              ...state,
-              phase: 'running',
-              executionState: stepResult.state,
-              runnerState: runner.serializeState(),
-              stream,
-            },
-          };
+          const stream = this.appendChunks(state.runId, state.stream, stepResult.chunks);
+          return this.buildStepProgressResult(state, runner, stepResult, stream, _context.now);
         }
 
         if (state.phase === 'waiting_tool') {
@@ -356,72 +464,8 @@ export class AgentTurnProcessRuntime
             state.executionState,
             _context.lastSyscallResult,
           );
-          const stream = [...state.stream];
-          for (const chunk of stepResult.chunks) {
-            stream.push(chunk);
-            this.callbacks.onChunk?.(state.runId, chunk);
-          }
-
-          if (stepResult.done && stepResult.result) {
-            return {
-              signal: 'DONE',
-              state: {
-                ...state,
-                phase: 'done',
-                executionState: stepResult.state,
-                runnerState: runner.serializeState(),
-                stream,
-                result: stepResult.result,
-              },
-            };
-          }
-
-          if (stepResult.suspended) {
-            return {
-              signal: 'SUSPENDED',
-              nextRunAt: stepResult.nextRunAt,
-              error: stepResult.suspended,
-              state: {
-                ...state,
-                phase: 'suspended',
-                executionState: stepResult.state,
-                runnerState: runner.serializeState(),
-                stream,
-                error: stepResult.suspended,
-              },
-            };
-          }
-
-          if (stepResult.syscall) {
-            return {
-              signal: 'WAITING_SYSCALL',
-              syscall: stepResult.syscall,
-              state: {
-                ...state,
-                phase:
-                  stepResult.syscall.kind === 'tool.call'
-                    ? 'waiting_tool'
-                    : stepResult.syscall.kind === 'llm.generate'
-                      ? 'waiting_llm'
-                      : 'waiting_approval',
-                executionState: stepResult.state,
-                runnerState: runner.serializeState(),
-                stream,
-              },
-            };
-          }
-
-          return {
-            signal: 'YIELD',
-            nextRunAt: _context.now,
-            state: {
-              ...state,
-              phase: 'running',
-              executionState: stepResult.state,
-              runnerState: runner.serializeState(),
-              stream,
-            },
-          };
+          const stream = this.appendChunks(state.runId, state.stream, stepResult.chunks);
+          return this.buildStepProgressResult(state, runner, stepResult, stream, _context.now);
         }
 
         if (state.phase === 'waiting_approval') {
@@ -435,141 +479,14 @@ export class AgentTurnProcessRuntime
             state.executionState,
             _context.lastSyscallResult,
           );
-          const stream = [...state.stream];
-          for (const chunk of stepResult.chunks) {
-            stream.push(chunk);
-            this.callbacks.onChunk?.(state.runId, chunk);
-          }
-
-          if (stepResult.done && stepResult.result) {
-            return {
-              signal: 'DONE',
-              state: {
-                ...state,
-                phase: 'done',
-                executionState: stepResult.state,
-                runnerState: runner.serializeState(),
-                stream,
-                result: stepResult.result,
-              },
-            };
-          }
-
-          if (stepResult.suspended) {
-            return {
-              signal: 'SUSPENDED',
-              nextRunAt: stepResult.nextRunAt,
-              error: stepResult.suspended,
-              state: {
-                ...state,
-                phase: 'suspended',
-                executionState: stepResult.state,
-                runnerState: runner.serializeState(),
-                stream,
-                error: stepResult.suspended,
-              },
-            };
-          }
-
-          if (stepResult.syscall) {
-            return {
-              signal: 'WAITING_SYSCALL',
-              syscall: stepResult.syscall,
-              state: {
-                ...state,
-                phase:
-                  stepResult.syscall.kind === 'tool.call'
-                    ? 'waiting_tool'
-                    : stepResult.syscall.kind === 'llm.generate'
-                      ? 'waiting_llm'
-                      : 'waiting_approval',
-                executionState: stepResult.state,
-                runnerState: runner.serializeState(),
-                stream,
-              },
-            };
-          }
-
-          return {
-            signal: 'YIELD',
-            nextRunAt: _context.now,
-            state: {
-              ...state,
-              phase: 'running',
-              executionState: stepResult.state,
-              runnerState: runner.serializeState(),
-              stream,
-            },
-          };
+          const stream = this.appendChunks(state.runId, state.stream, stepResult.chunks);
+          return this.buildStepProgressResult(state, runner, stepResult, stream, _context.now);
         }
 
         if (state.phase === 'running') {
           const stepResult = await runner.continueKernelTurn(state.executionState);
-          const stream = [...state.stream];
-          for (const chunk of stepResult.chunks) {
-            stream.push(chunk);
-            this.callbacks.onChunk?.(state.runId, chunk);
-          }
-
-          if (stepResult.done && stepResult.result) {
-            return {
-              signal: 'DONE',
-              state: {
-                ...state,
-                phase: 'done',
-                executionState: stepResult.state,
-                runnerState: runner.serializeState(),
-                stream,
-                result: stepResult.result,
-              },
-            };
-          }
-
-          if (stepResult.suspended) {
-            return {
-              signal: 'SUSPENDED',
-              nextRunAt: stepResult.nextRunAt,
-              error: stepResult.suspended,
-              state: {
-                ...state,
-                phase: 'suspended',
-                executionState: stepResult.state,
-                runnerState: runner.serializeState(),
-                stream,
-                error: stepResult.suspended,
-              },
-            };
-          }
-
-          if (stepResult.syscall) {
-            return {
-              signal: 'WAITING_SYSCALL',
-              syscall: stepResult.syscall,
-              state: {
-                ...state,
-                phase:
-                  stepResult.syscall.kind === 'tool.call'
-                    ? 'waiting_tool'
-                    : stepResult.syscall.kind === 'llm.generate'
-                      ? 'waiting_llm'
-                      : 'waiting_approval',
-                executionState: stepResult.state,
-                runnerState: runner.serializeState(),
-                stream,
-              },
-            };
-          }
-
-          return {
-            signal: 'YIELD',
-            nextRunAt: _context.now,
-            state: {
-              ...state,
-              executionState: stepResult.state,
-              runnerState: runner.serializeState(),
-              stream,
-            },
-          };
+          const stream = this.appendChunks(state.runId, state.stream, stepResult.chunks);
+          return this.buildStepProgressResult(state, runner, stepResult, stream, _context.now);
         }
       } catch (error) {
         try {
@@ -586,8 +503,7 @@ export class AgentTurnProcessRuntime
           signal: 'ERROR',
           error: processError,
           state: {
-            ...state,
-            phase: 'error',
+            ...applyProcessPhase(state, 'error'),
             stream: [...state.stream, errorChunk],
             error: processError,
           },
@@ -603,10 +519,10 @@ export class AgentTurnProcessRuntime
   }
 
   serialize(state: AgentTurnProcessState): unknown {
-    return state;
+    return normalizeProcessState(state);
   }
 
   deserialize(payload: unknown): AgentTurnProcessState {
-    return payload as AgentTurnProcessState;
+    return normalizeProcessState(payload as AgentTurnProcessState);
   }
 }

@@ -37,22 +37,27 @@ function createWorkflow(overrides?: Partial<WorkflowDef>): WorkflowDef {
 function createRunner(): AgentRunner {
   let threadKey = 'default';
   return {
-    setThread(nextThreadKey: string) {
+    setDefaultThread(nextThreadKey: string) {
       threadKey = nextThreadKey;
       return undefined;
     },
     serializeState() {
       return {
-        threadKey,
+        activeThreadKey: threadKey,
+        defaultThreadKey: threadKey,
         promptLayerHashes: [],
         cachedSystemPrompt: null,
         toolResultCache: [],
       };
     },
-    restoreState(state: { threadKey: string }) {
-      threadKey = state.threadKey;
+    restoreState(state: {
+      activeThreadKey?: string;
+      defaultThreadKey?: string;
+      threadKey?: string;
+    }) {
+      threadKey = state.defaultThreadKey ?? state.activeThreadKey ?? state.threadKey ?? 'default';
     },
-    get currentSessionKey() {
+    get defaultSessionKey() {
       return `agent:agent-main:${threadKey}`;
     },
     async beginKernelTurn(runId: string, message: string) {
@@ -127,22 +132,27 @@ function createBlockingRunner(unblock: Promise<void>): AgentRunner {
     released = true;
   };
   return {
-    setThread(nextThreadKey: string) {
+    setDefaultThread(nextThreadKey: string) {
       threadKey = nextThreadKey;
       return undefined;
     },
     serializeState() {
       return {
-        threadKey,
+        activeThreadKey: threadKey,
+        defaultThreadKey: threadKey,
         promptLayerHashes: [],
         cachedSystemPrompt: null,
         toolResultCache: [],
       };
     },
-    restoreState(state: { threadKey: string }) {
-      threadKey = state.threadKey;
+    restoreState(state: {
+      activeThreadKey?: string;
+      defaultThreadKey?: string;
+      threadKey?: string;
+    }) {
+      threadKey = state.defaultThreadKey ?? state.activeThreadKey ?? state.threadKey ?? 'default';
     },
-    get currentSessionKey() {
+    get defaultSessionKey() {
       return `agent:agent-main:${threadKey}`;
     },
     async beginKernelTurn(runId: string, message: string) {
@@ -198,22 +208,27 @@ function createBlockingRunner(unblock: Promise<void>): AgentRunner {
 function createFailingRunner(message = 'runner failed'): AgentRunner {
   let threadKey = 'default';
   return {
-    setThread(nextThreadKey: string) {
+    setDefaultThread(nextThreadKey: string) {
       threadKey = nextThreadKey;
       return undefined;
     },
     serializeState() {
       return {
-        threadKey,
+        activeThreadKey: threadKey,
+        defaultThreadKey: threadKey,
         promptLayerHashes: [],
         cachedSystemPrompt: null,
         toolResultCache: [],
       };
     },
-    restoreState(state: { threadKey: string }) {
-      threadKey = state.threadKey;
+    restoreState(state: {
+      activeThreadKey?: string;
+      defaultThreadKey?: string;
+      threadKey?: string;
+    }) {
+      threadKey = state.defaultThreadKey ?? state.activeThreadKey ?? state.threadKey ?? 'default';
     },
-    get currentSessionKey() {
+    get defaultSessionKey() {
       return `agent:agent-main:${threadKey}`;
     },
     async beginKernelTurn(runId: string, userMessage: string) {
@@ -1209,7 +1224,7 @@ describe('workflow-backend kernel integration', () => {
         parentRunId: runId,
         parentStepId: 'collect',
         childStepId: 'collect:coordinator',
-        threadKey: 'workflow:' + runId + ':step0:coordinator',
+        threadKey: `workflow:${runId}:step0:coordinator`,
         status: 'done',
         delegatedRunStatus: 'done',
       },
@@ -1219,7 +1234,7 @@ describe('workflow-backend kernel integration', () => {
         parentRunId: runId,
         parentStepId: 'collect',
         childStepId: 'collect:participant:1',
-        threadKey: 'workflow:' + runId + ':step0:participant-1',
+        threadKey: `workflow:${runId}:step0:participant-1`,
         participantIndex: 1,
         status: 'done',
         delegatedRunStatus: 'done',
@@ -1230,7 +1245,7 @@ describe('workflow-backend kernel integration', () => {
         parentRunId: runId,
         parentStepId: 'collect',
         childStepId: 'collect:participant:2',
-        threadKey: 'workflow:' + runId + ':step0:participant-2',
+        threadKey: `workflow:${runId}:step0:participant-2`,
         participantIndex: 2,
         status: 'done',
         delegatedRunStatus: 'done',

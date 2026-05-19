@@ -3,6 +3,7 @@ import { createLogger } from '../logger.js';
 import type { ProcessId } from '../types.js';
 import { asProcessId } from '../types.js';
 import { PriorityScheduler } from './priority-scheduler.js';
+import { deriveProcessStatusForSignal } from './process-transition-contract.js';
 import type {
   CheckpointStore,
   CreateProcessOptions,
@@ -220,6 +221,7 @@ export class AgentKernel {
     now: number,
   ): KernelProcessSnapshot {
     const nextState = runtime.serialize(result.state);
+    const nextStatus = deriveProcessStatusForSignal(result.signal);
     const common = {
       state: nextState,
       updatedAt: now,
@@ -234,35 +236,35 @@ export class AgentKernel {
       case 'YIELD':
         return this.updateSnapshot(current.pid, {
           ...common,
-          status: 'ready',
+          status: nextStatus,
           pendingSyscall: undefined,
           nextRunAt: result.nextRunAt ?? now,
         });
       case 'WAITING_SYSCALL':
         return this.updateSnapshot(current.pid, {
           ...common,
-          status: 'waiting',
+          status: nextStatus,
           pendingSyscall: result.syscall,
           nextRunAt: undefined,
         });
       case 'SUSPENDED':
         return this.updateSnapshot(current.pid, {
           ...common,
-          status: 'suspended',
+          status: nextStatus,
           pendingSyscall: undefined,
           nextRunAt: result.nextRunAt,
         });
       case 'DONE':
         return this.updateSnapshot(current.pid, {
           ...common,
-          status: 'done',
+          status: nextStatus,
           pendingSyscall: undefined,
           nextRunAt: undefined,
         });
       case 'RETRYABLE_ERROR':
         return this.updateSnapshot(current.pid, {
           ...common,
-          status: 'ready',
+          status: nextStatus,
           retryCount: current.retryCount + 1,
           pendingSyscall: undefined,
           nextRunAt: this.scheduler.computeRetryAt(now, current.retryCount + 1, result.delayMs),
@@ -270,7 +272,7 @@ export class AgentKernel {
       default:
         return this.updateSnapshot(current.pid, {
           ...common,
-          status: 'error',
+          status: nextStatus,
           pendingSyscall: undefined,
           nextRunAt: undefined,
         });

@@ -1,16 +1,15 @@
 import { useCallback, useState } from 'react';
 import { Badge } from '../components/Badge.js';
 import { Button } from '../components/Button.js';
+import { useAgentsWithActivity } from '../hooks/useAgentsWithActivity.js';
 import { useLocale } from '../context/i18n.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
 import { useToast } from '../hooks/useToast.js';
 import { formatProblemCode, isSuspendedProblemCode, problemCodeBadgeVariant } from '../problem-code-display.js';
 import { getRecoveryHint } from '../recovery-hints.js';
 import type {
-  AgentActivityInfo,
   AgentConfig,
   AgentInfo,
-  AgentListResult,
   ErrorStatsByAgentEntry,
   ErrorStatsTrendPoint,
   SessionClearResult,
@@ -403,12 +402,7 @@ export function AgentsTab({
   const [selected, setSelected] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
 
-  const {
-    data: agentsResult,
-    loading,
-    error,
-    refetch,
-  } = useQuery<AgentListResult>(() => rpc<AgentListResult>('agent.list'), []);
+  const { agents: list, loading, error, refetch } = useAgentsWithActivity();
 
   const { data: config, refetch: refetchConfig } = useQuery<{
     agents?: AgentConfig[] | Record<string, AgentConfig>;
@@ -544,10 +538,9 @@ export function AgentsTab({
     [toast, refetch],
   );
 
-  if (loading && !agentsResult) return <div className="text-sm p-8" style={{ color: 'var(--af-text-muted)' }}>{t('common.loading')}</div>;
+  if (loading && list.length === 0) return <div className="text-sm p-8" style={{ color: 'var(--af-text-muted)' }}>{t('common.loading')}</div>;
   if (error) return <div className="text-red-400 text-sm p-8">{t('common.error')}{error}</div>;
 
-  const list: AgentInfo[] = Array.isArray(agentsResult?.agents) ? agentsResult.agents : [];
   const activeCount = list.filter((agent) => (agent.activity?.state ?? 'idle') !== 'idle').length;
 
   // Group by workspace

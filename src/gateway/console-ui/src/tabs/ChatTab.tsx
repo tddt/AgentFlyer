@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Badge } from '../components/Badge.js';
 import { Button } from '../components/Button.js';
 import { CopyButton } from '../components/CopyButton.js';
 import { DeliverableModal } from '../components/DeliverableModal.js';
 import { useLocale } from '../context/i18n.js';
+import { useAgentsWithActivity } from '../hooks/useAgentsWithActivity.js';
 import { MarkdownView } from '../components/MarkdownView.js';
 import { formatProblemCode, problemCodeBadgeVariant } from '../problem-code-display.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
@@ -12,9 +13,9 @@ import type { ChatRecoveryContext } from '../types.js';
 import type {
   AgentActivityInfo,
   AgentInfo,
-  AgentListResult,
   AgentRunInfo,
   ChatChunk,
+  ChannelListResult,
   InboxEvent,
   InboxEventKind,
   SessionListResult,
@@ -36,6 +37,15 @@ function chatAgentStateLabel(
     return { text: t('agents.runningQueuedBadge', { n: activity.pendingCount }), variant: 'green' };
   }
   return { text: t('agents.runningBadge'), variant: 'green' };
+}
+
+function formatChannelDisplay(channelId: string, channelName?: string | null): string {
+  const trimmedId = channelId.trim();
+  const trimmedName = channelName?.trim();
+  if (!trimmedName || trimmedName === trimmedId) {
+    return trimmedId;
+  }
+  return `${trimmedName} (${trimmedId})`;
 }
 
 function firstQueuedThread(activity: AgentActivityInfo | undefined): string | null {
@@ -82,6 +92,13 @@ interface HubFocusTarget {
   deliverableId?: string;
 }
 
+interface HubContextHint {
+  label: string;
+  title: string;
+  summary: string;
+  meta: string[];
+}
+
 // ── Per-agent panel ──────────────────────────────────────────────────────────
 
 interface AgentPanelProps {
@@ -90,6 +107,8 @@ interface AgentPanelProps {
   initialThreadKey?: string;
   recoveryContext?: ChatRecoveryContext | null;
   hubFocusTarget?: HubFocusTarget | null;
+  hubContextHint?: HubContextHint | null;
+  getChannelLabel: (channelId?: string | null) => string | null;
 }
 
 interface RecoveryEvidenceContext {
@@ -195,6 +214,17 @@ function findLastMessage(messages: Message[], role: Message['role']): Message | 
     const content = compactText(message.content);
     if (content) {
       return { ...message, content };
+    }
+  }
+  return null;
+}
+
+function findLastPreviewText(messages: Array<{ text?: string; content?: string }>): string | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    const value = compactText(message?.text ?? message?.content ?? '');
+    if (value) {
+      return truncateText(value, 96);
     }
   }
   return null;
@@ -1007,6 +1037,133 @@ function timeAgo(ms: number): string {
   return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
+const CHAT_TIMESTAMP_BREAK_MS = 5 * 60 * 1000;
+
+function isSameDay(left: number, right: number): boolean {
+  const leftDate = new Date(left);
+  const rightDate = new Date(right);
+  return (
+    leftDate.getFullYear() === rightDate.getFullYear() &&
+    leftDate.getMonth() === rightDate.getMonth() &&
+    leftDate.getDate() === rightDate.getDate()
+  );
+}
+
+function formatChatTimestamp(
+  timestamp: number,
+  t: (key: string, vars?: Record<string, string | number>) => string,
+): string {
+  const value = new Date(timestamp);
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const yesterdayStart = todayStart - 86_400_000;
+  const timeLabel = value.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  if (timestamp >= todayStart) {
+    return t('chat.timestamp.today', { time: timeLabel });
+  }
+  if (timestamp >= yesterdayStart) {
+    return t('chat.timestamp.yesterday', { time: timeLabel });
+  }
+  return value.toLocaleString([], {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function shouldShowChatTimestamp(message: Message, previousMessage?: Message): boolean {
+  if (message.timestamp === undefined) {
+    return false;
+  }
+  if (!previousMessage || previousMessage.timestamp === undefined) {
+    return true;
+  }
+  if (!isSameDay(message.timestamp, previousMessage.timestamp)) {
+    return true;
+  }
+  return message.timestamp - previousMessage.timestamp >= CHAT_TIMESTAMP_BREAK_MS;
+}
+
+function ChatTimestampDivider({ label }: { label: string }) {
+  return (
+    <div className="flex items-center justify-center py-1">
+      <div
+        className="rounded-full px-3 py-1 text-[10px] font-medium tracking-[0.08em]"
+        style={{
+          background: 'var(--af-surface-2)',
+          color: 'var(--af-text-faint)',
+          boxShadow: '0 0 0 1px var(--af-card-ring)',
+        }}
+      >
+        {label}
+      </div>
+    </div>
+  );
+}
+
+function ChatUnreadDivider({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-3 py-1">
+      <div className="h-px flex-1" style={{ background: 'var(--af-accent-soft)' }} />
+      <div
+        className="rounded-full px-3 py-1 text-[10px] font-semibold tracking-[0.08em]"
+        style={{
+          background: 'var(--af-accent-soft)',
+          color: 'var(--af-accent-text)',
+          boxShadow: '0 0 0 1px var(--af-accent-soft-2)',
+        }}
+      >
+        {label}
+      </div>
+      <div className="h-px flex-1" style={{ background: 'var(--af-accent-soft)' }} />
+    </div>
+  );
+}
+
+function ThreadHeaderSummary({
+  eyebrow,
+  title,
+  subtitle,
+  meta,
+}: {
+  eyebrow: string;
+  title: string;
+  subtitle?: string | null;
+  meta?: string[];
+}) {
+  const visibleMeta = (meta ?? []).filter(Boolean);
+  return (
+    <div className="min-w-0">
+      <div className="text-[11px] uppercase tracking-[0.18em]" style={{ color: 'var(--af-text-faint)' }}>
+        {eyebrow}
+      </div>
+      <div className="mt-1 text-sm font-semibold line-clamp-2" style={{ color: 'var(--af-text-heading)' }}>
+        {title}
+      </div>
+      {subtitle ? (
+        <div className="mt-1 line-clamp-2 text-xs leading-5" style={{ color: 'var(--af-text-muted)' }}>
+          {subtitle}
+        </div>
+      ) : null}
+      {visibleMeta.length > 0 ? (
+        <div className="mt-2 flex flex-wrap gap-2 text-[10px]" style={{ color: 'var(--af-text-faint)' }}>
+          {visibleMeta.map((item) => (
+            <span
+              key={item}
+              className="rounded-full px-2 py-1"
+              style={{ background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}
+            >
+              {item}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function compactSearchText(text: string): string {
   return text.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
 }
@@ -1153,7 +1310,15 @@ function chunkRunId(chunk: ChatChunk): string | null {
   return null;
 }
 
-function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocusTarget }: AgentPanelProps) {
+function AgentPanel({
+  agent,
+  agents,
+  initialThreadKey,
+  recoveryContext,
+  hubFocusTarget,
+  hubContextHint,
+  getChannelLabel,
+}: AgentPanelProps) {
   const { t } = useLocale();
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
@@ -1161,15 +1326,23 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
   const [pendingStatus, setPendingStatus] = useState<string | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [resumableRunId, setResumableRunId] = useState<string | null>(null);
+  const [completionNoticeRunId, setCompletionNoticeRunId] = useState<string | null>(null);
+  const [queuePosition, setQueuePosition] = useState<number | null>(null);
+  const [sessionPreviewByKey, setSessionPreviewByKey] = useState<Record<string, string>>({});
   const [confirmRecoverySend, setConfirmRecoverySend] = useState(false);
   const [currentThread, setCurrentThread] = useState(`console:${agent.agentId}`);
   const [visibleRecoveryContext, setVisibleRecoveryContext] = useState<ChatRecoveryContext | null>(null);
   const [focusedMessageId, setFocusedMessageId] = useState<string | null>(null);
+  const [isNearBottom, setIsNearBottom] = useState(true);
+  const [unseenMessageCount, setUnseenMessageCount] = useState(0);
+  const [unreadAnchorIndex, setUnreadAnchorIndex] = useState<number | null>(null);
   const [expandedContextPanel, setExpandedContextPanel] = useState<'recovery' | 'hub' | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const activeRunIdRef = useRef<string | null>(null);
   const focusedRecoveryEventIdRef = useRef<number | null>(null);
   const messageRefs = useRef(new Map<string, HTMLDivElement>());
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const previousThreadRef = useRef(currentThread);
 
   const updateActiveRunId = (runId: string | null) => {
     activeRunIdRef.current = runId;
@@ -1189,12 +1362,186 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
     }
   }, [recoveryContext?.eventId, recoveryContext]);
 
+  useEffect(() => {
+    if (!completionNoticeRunId) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setCompletionNoticeRunId(null);
+    }, 2400);
+    return () => window.clearTimeout(timer);
+  }, [completionNoticeRunId]);
+
   const [showSessions, setShowSessions] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const participantAliases = useMemo(
     () => Array.from(new Set((agent.mentionAliases ?? []).map((alias) => alias.trim()).filter(Boolean))),
     [agent.mentionAliases],
   );
+  const inputPlaceholder = useMemo(
+    () => getRecoveryInputPlaceholder(visibleRecoveryContext, t),
+    [visibleRecoveryContext, t],
+  );
+  const recoveryEvidenceContext = useMemo(() => getRecoveryEvidenceContext(messages), [messages]);
+  const recoveryPatterns = useMemo(
+    () => (visibleRecoveryContext ? detectToolResultPatterns(messages) : []),
+    [messages, visibleRecoveryContext],
+  );
+  const recoveryPatternMetas = useMemo(
+    () =>
+      recoveryPatterns
+        .map((pattern) => getToolResultPatternMeta(pattern, t))
+        .filter(
+          (
+            meta,
+          ): meta is { label: string; variant: 'green' | 'blue' | 'yellow' | 'red' | 'purple' | 'gray' } =>
+            meta !== null,
+        ),
+    [recoveryPatterns, t],
+  );
+  const recoveryEvidenceEntries = useMemo(
+    () => (visibleRecoveryContext ? buildRecoveryEvidenceEntries(messages, t) : []),
+    [messages, t, visibleRecoveryContext],
+  );
+  const suggestedRecoveryMessage = useMemo(
+    () =>
+      visibleRecoveryContext
+        ? getRecoverySuggestedMessage(visibleRecoveryContext, messages, t)
+        : '',
+    [visibleRecoveryContext, messages, t],
+  );
+  const structuredRecoveryMessage = useMemo(() => {
+    if (!visibleRecoveryContext) {
+      return '';
+    }
+    const task = recoveryEvidenceContext.userContext || t('chat.recovery.structured.unknownGoal');
+    const evidence =
+      recoveryEvidenceContext.toolResultContext ||
+      recoveryEvidenceContext.errorFragment ||
+      suggestedRecoveryMessage;
+    return getStructuredRecoverySuggestion(task, suggestedRecoveryMessage, evidence, recoveryPatterns, t);
+  }, [visibleRecoveryContext, recoveryEvidenceContext, suggestedRecoveryMessage, recoveryPatterns, t]);
+  const structuredRecoveryVariants = useMemo(() => {
+    if (!visibleRecoveryContext) {
+      return [];
+    }
+    const task = recoveryEvidenceContext.userContext || t('chat.recovery.structured.unknownGoal');
+    return getStructuredRecoveryVariants(task, recoveryPatterns, t);
+  }, [visibleRecoveryContext, recoveryEvidenceContext.userContext, recoveryPatterns, t]);
+
+  useEffect(() => {
+    setFocusedMessageId(findHubMessageMatch(messages, hubFocusTarget ?? null));
+  }, [messages, hubFocusTarget]);
+
+  const runStatusNotice = useMemo(() => {
+    if (resumableRunId) {
+      return {
+        tone: 'suspended' as const,
+        label: t('chat.run.state.suspended'),
+        summary: pendingStatus ?? t('chat.run.suspended'),
+        hint: t('chat.run.suspendedHint'),
+      };
+    }
+    if (busy && queuePosition !== null) {
+      return {
+        tone: 'queued' as const,
+        label: t('chat.run.state.queued'),
+        summary: pendingStatus ?? t('chat.queue.waiting', { position: String(queuePosition) }),
+        hint: t('chat.queue.waitingHint'),
+      };
+    }
+    if (busy && activeRunId) {
+      return {
+        tone: 'running' as const,
+        label: t('chat.run.state.running'),
+        summary: pendingStatus ?? t('chat.run.streaming'),
+        hint: pendingStatus ? null : t('chat.run.streamingHint'),
+      };
+    }
+    if (completionNoticeRunId) {
+      return {
+        tone: 'completed' as const,
+        label: t('chat.run.state.completed'),
+        summary: t('chat.run.completed'),
+        hint: t('chat.run.completedHint'),
+      };
+    }
+    if (pendingStatus) {
+      return {
+        tone: 'neutral' as const,
+        label: null,
+        summary: pendingStatus,
+        hint: null,
+      };
+    }
+    return null;
+  }, [activeRunId, busy, completionNoticeRunId, pendingStatus, queuePosition, resumableRunId, t]);
+
+  const visibleRunId = activeRunId ?? resumableRunId ?? completionNoticeRunId;
+
+  useEffect(() => {
+    if (!focusedMessageId) {
+      return;
+    }
+    const element = messageRefs.current.get(focusedMessageId);
+    element?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [focusedMessageId]);
+
+  const updateIsNearBottom = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (!container) {
+      return;
+    }
+    const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    setIsNearBottom(distanceToBottom <= 96);
+  }, []);
+
+  const scrollChatToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    bottomRef.current?.scrollIntoView({ block: 'end', behavior });
+    setIsNearBottom(true);
+    setUnseenMessageCount(0);
+    setUnreadAnchorIndex(null);
+  }, []);
+
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) {
+      return;
+    }
+    const handleScroll = () => updateIsNearBottom();
+    handleScroll();
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, [updateIsNearBottom, currentThread]);
+
+  useEffect(() => {
+    if (focusedMessageId) {
+      return;
+    }
+    const threadChanged = previousThreadRef.current !== currentThread;
+    previousThreadRef.current = currentThread;
+    if (!threadChanged && !isNearBottom) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      scrollChatToBottom('auto');
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [currentThread, messages, focusedMessageId, isNearBottom, scrollChatToBottom]);
+
+  useEffect(() => {
+    if (focusedMessageId || isNearBottom) {
+      setUnseenMessageCount(0);
+      setUnreadAnchorIndex(null);
+      return;
+    }
+    const lastMessage = messages[messages.length - 1];
+    if (!lastMessage || lastMessage.role === 'thinking' || lastMessage.streaming) {
+      return;
+    }
+    setUnseenMessageCount((current) => current + 1);
+    setUnreadAnchorIndex((current) => current ?? Math.max(0, messages.length - 1));
+  }, [messages, isNearBottom, focusedMessageId]);
 
   // Sessions for this agent (for thread selection)
   const { data: sessionsData, refetch: refetchSessions } = useQuery<SessionListResult>(
@@ -1204,15 +1551,86 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
   const agentSessions: SessionMetaInfo[] = (sessionsData?.sessions ?? [])
     .filter((s) => s.agentId === agent.agentId)
     .sort((a, b) => b.lastActivity - a.lastActivity);
+  const currentSessionKey = `agent:${agent.agentId}:${currentThread}`;
+  const currentSession = agentSessions.find((session) => session.threadKey === currentThread) ?? null;
+
+  useEffect(() => {
+    const preview = findLastPreviewText(messages) ?? t('chat.session.emptyPreview');
+    setSessionPreviewByKey((current) => {
+      if (current[currentSessionKey] === preview) {
+        return current;
+      }
+      return { ...current, [currentSessionKey]: preview };
+    });
+  }, [currentSessionKey, messages, t]);
+
+  useEffect(() => {
+    if (!showSessions || agentSessions.length === 0) {
+      return;
+    }
+    const missingSessions = agentSessions.filter((session) => !sessionPreviewByKey[session.sessionKey]).slice(0, 12);
+    if (missingSessions.length === 0) {
+      return;
+    }
+    let cancelled = false;
+    void Promise.all(
+      missingSessions.map(async (session) => {
+        try {
+          const result = await rpc<SessionMessagesResult>('session.messages', {
+            sessionKey: session.sessionKey,
+            includeToolResults: true,
+          });
+          return [
+            session.sessionKey,
+            findLastPreviewText(result.messages) ??
+              (session.error ? t('chat.session.errorPreview') : t('chat.session.emptyPreview')),
+          ] as const;
+        } catch {
+          return [
+            session.sessionKey,
+            session.error ? t('chat.session.errorPreview') : t('chat.session.emptyPreview'),
+          ] as const;
+        }
+      }),
+    ).then((entries) => {
+      if (cancelled) {
+        return;
+      }
+      setSessionPreviewByKey((current) => ({
+        ...current,
+        ...Object.fromEntries(entries),
+      }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentSessions, sessionPreviewByKey, showSessions, t]);
+
+  const currentThreadPreview = useMemo(() => {
+    const preview = sessionPreviewByKey[currentSession?.sessionKey ?? currentSessionKey];
+    if (preview && preview !== t('chat.session.emptyPreview')) {
+      return preview;
+    }
+    return findLastPreviewText(messages);
+  }, [currentSession?.sessionKey, currentSessionKey, messages, sessionPreviewByKey, t]);
+  const currentThreadActivityTs =
+    currentSession?.lastActivity ?? messages[messages.length - 1]?.timestamp ?? Date.now();
+  const currentThreadSummaryMeta = [
+    t('chat.session.meta', {
+      count: String(currentSession?.messageCount ?? messages.length),
+      time: timeAgo(currentThreadActivityTs),
+    }),
+    currentThread,
+    getChannelLabel(hubFocusTarget?.channelId) ?? '',
+  ].filter(Boolean);
 
   // Reload history whenever thread changes
   useEffect(() => {
-    const sessionKey = `agent:${agent.agentId}:${currentThread}`;
-    rpc<SessionMessagesResult>('session.messages', { sessionKey, includeToolResults: true })
+    rpc<SessionMessagesResult>('session.messages', { sessionKey: currentSessionKey, includeToolResults: true })
       .then((res) => {
         setMessages(
           res.messages.map((m, index) => ({
-            id: `${sessionKey}:${m.timestamp}:${index}`,
+            id: `${currentSessionKey}:${m.timestamp}:${index}`,
             role: m.isToolResult ? 'assistant' : m.role,
             content: m.text,
             timestamp: m.timestamp,
@@ -1222,13 +1640,17 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
         );
       })
       .catch(() => setMessages([]));
-  }, [currentThread]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentSessionKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadSession = (session: SessionMetaInfo) => {
     setCurrentThread(session.threadKey);
     setShowSessions(false);
     updateActiveRunId(null);
     setResumableRunId(null);
+    setCompletionNoticeRunId(null);
+    setQueuePosition(null);
+    setUnseenMessageCount(0);
+    setUnreadAnchorIndex(null);
   };
 
   const startNewThread = () => {
@@ -1238,6 +1660,10 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
     setShowSessions(false);
     updateActiveRunId(null);
     setResumableRunId(null);
+    setCompletionNoticeRunId(null);
+    setQueuePosition(null);
+    setUnseenMessageCount(0);
+    setUnreadAnchorIndex(null);
   };
 
   const fetchRunStatus = async (runId: string): Promise<AgentRunInfo | null> => {
@@ -1251,6 +1677,8 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
   const streamChatRequest = async (requestBody: Record<string, unknown>): Promise<void> => {
     const TOKEN = window.__AF_TOKEN__;
     setBusy(true);
+    setCompletionNoticeRunId(null);
+    setQueuePosition(null);
     try {
       const res = await fetch(`${window.location.origin}/chat`, {
         method: 'POST',
@@ -1277,6 +1705,7 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
 
         const parts = buf.split('\n');
         buf = parts.pop() ?? '';
+        let shouldYieldToPaint = false;
 
         for (const line of parts) {
           if (!line.startsWith('data: ')) continue;
@@ -1295,16 +1724,19 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
           }
 
           if (chunk.type === 'queued') {
+            setQueuePosition(chunk.position);
             setPendingStatus(t('chat.queue.waiting', { position: String(chunk.position) }));
             continue;
           }
 
           if (chunk.type === 'started') {
+            setQueuePosition(null);
             setPendingStatus(chunk.resumed ? t('chat.run.resuming') : null);
             continue;
           }
 
           if (chunk.type === 'text_delta') {
+            setQueuePosition(null);
             setPendingStatus(null);
             replyContent += chunk.text;
             setMessages((prev) => {
@@ -1315,10 +1747,12 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
               }
               return next;
             });
+            shouldYieldToPaint = true;
             continue;
           }
 
           if (chunk.type === 'thinking' || chunk.type === 'thinking_delta') {
+            setQueuePosition(null);
             setPendingStatus(null);
             thinkingContent += chunk.text;
             setMessages((prev) => {
@@ -1337,6 +1771,7 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
                   next.splice(lastIdx, 0, {
                     role: 'thinking',
                     content: thinkingContent,
+                    timestamp: Date.now(),
                     streaming: true,
                   });
                 }
@@ -1354,10 +1789,12 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
               }
               return next;
             });
+            shouldYieldToPaint = true;
             continue;
           }
 
           if (chunk.type === 'tool_use_start') {
+            setQueuePosition(null);
             setPendingStatus(null);
             pendingTools.set(chunk.id, { id: chunk.id, name: chunk.name, input: '' });
             setMessages((prev) => {
@@ -1375,10 +1812,12 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
               }
               return next;
             });
+            shouldYieldToPaint = true;
             continue;
           }
 
           if (chunk.type === 'tool_use_delta') {
+            setQueuePosition(null);
             setPendingStatus(null);
             const tool = pendingTools.get(chunk.id);
             if (tool) {
@@ -1389,6 +1828,7 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
           }
 
           if (chunk.type === 'tool_result') {
+            setQueuePosition(null);
             setPendingStatus(null);
             setMessages((prev) => {
               const next = [...prev];
@@ -1400,11 +1840,15 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
               }
               return next;
             });
+            shouldYieldToPaint = true;
             continue;
           }
 
           if (chunk.type === 'done') {
+            const finishedRunId = chunkRunId(chunk) ?? activeRunIdRef.current;
             setPendingStatus(null);
+            setQueuePosition(null);
+            setCompletionNoticeRunId(finishedRunId);
             setMessages((prev) => {
               const next = [...prev];
               const last = next[next.length - 1];
@@ -1440,10 +1884,19 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
           }
         }
 
+        if (shouldYieldToPaint) {
+          await new Promise<void>((resolve) => {
+            window.requestAnimationFrame(() => resolve());
+          });
+        }
+
         return await readNextChunk();
       };
 
-      setMessages((prev) => [...prev, { role: 'assistant', content: '', streaming: true }]);
+      setMessages((prev) => [
+        ...prev,
+        { role: 'assistant', content: '', timestamp: Date.now(), streaming: true },
+      ]);
       await readNextChunk();
 
       setMessages((prev) => {
@@ -1455,6 +1908,7 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
         return next;
       });
       setPendingStatus(null);
+      setQueuePosition(null);
       updateActiveRunId(null);
       setResumableRunId(null);
     } catch (e) {
@@ -1468,8 +1922,10 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
         updateActiveRunId(failedRunId);
         setResumableRunId(failedRunId);
         setPendingStatus(t('chat.run.suspended'));
+        setQueuePosition(null);
       } else {
         setPendingStatus(null);
+        setQueuePosition(null);
         updateActiveRunId(null);
         setResumableRunId(null);
       }
@@ -1478,7 +1934,11 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
         if (next[next.length - 1]?.streaming) next.pop();
         return [
           ...next,
-          { role: 'assistant', content: `Error: ${e instanceof Error ? e.message : String(e)}` },
+          {
+            role: 'assistant',
+            content: `Error: ${e instanceof Error ? e.message : String(e)}`,
+            timestamp: Date.now(),
+          },
         ];
       });
     } finally {
@@ -1497,6 +1957,7 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
       return;
     }
     setPendingStatus(t('chat.run.resuming'));
+    setQueuePosition(null);
     setResumableRunId(null);
     updateActiveRunId(resumableRunId);
     await streamChatRequest({ runId: resumableRunId, resume: true, thread: currentThread });
@@ -1507,9 +1968,10 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
     if (!text || busy) return;
     setInput('');
     setPendingStatus(null);
+    setQueuePosition(null);
     setResumableRunId(null);
     updateActiveRunId(null);
-    setMessages((prev) => [...prev, { role: 'user', content: text }]);
+    setMessages((prev) => [...prev, { role: 'user', content: text, timestamp: Date.now() }]);
 
     const targetAgentId = resolveMentionTarget(text, agents, agent.agentId);
     await streamChatRequest({ agentId: targetAgentId, message: text, thread: currentThread });
@@ -1521,8 +1983,58 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
       return;
     }
     setConfirmRecoverySend(false);
-    const nextInput = buildRecoverySuggestionInput(input);
+    const nextInput = input.trim() || suggestedRecoveryMessage || structuredRecoveryMessage;
     await sendMessage(nextInput);
+  };
+
+  const applyRecoverySuggestion = () => {
+    if (!suggestedRecoveryMessage) {
+      return;
+    }
+    setInput(suggestedRecoveryMessage);
+    setConfirmRecoverySend(false);
+    inputRef.current?.focus();
+  };
+
+  const applyStructuredRecoverySuggestion = () => {
+    if (!structuredRecoveryMessage) {
+      return;
+    }
+    setInput(structuredRecoveryMessage);
+    setConfirmRecoverySend(false);
+    inputRef.current?.focus();
+  };
+
+  const applyStructuredRecoveryVariant = (template: string) => {
+    setInput(template);
+    setConfirmRecoverySend(false);
+    inputRef.current?.focus();
+  };
+
+  const applyHubContextToInput = (startNewThreadFromEvent: boolean) => {
+    if (!hubFocusTarget) {
+      return;
+    }
+    const prompt = buildHubContextPrompt(hubFocusTarget, t);
+    if (startNewThreadFromEvent) {
+      const nextThread = createConsoleThreadKey(agent.agentId);
+      setCurrentThread(nextThread);
+      setMessages([]);
+      setShowSessions(false);
+      setPendingStatus(null);
+      setQueuePosition(null);
+      setResumableRunId(null);
+      updateActiveRunId(null);
+      setFocusedMessageId(null);
+      setInput(prompt);
+    } else {
+      setInput((current) => {
+        const trimmed = current.trim();
+        return trimmed ? `${trimmed}\n\n${prompt}` : prompt;
+      });
+    }
+    setExpandedContextPanel('hub');
+    inputRef.current?.focus();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1531,6 +2043,9 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
       void sendMessage();
     }
   };
+
+  const showRecoveryPanel = visibleRecoveryContext !== null;
+  const showHubContextPanel = hubFocusTarget != null;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -1556,15 +2071,44 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
                 </span>
               ))}
             </div>
-            <div className="mt-2 text-[11px] uppercase tracking-[0.18em] text-cyan-300/65">
-              Active Thread
-            </div>
-            <div className="mt-1 font-mono text-[11px] truncate max-w-[460px]" style={{ color: 'var(--af-text-muted)' }} title={currentThread}>
-              {currentThread}
-            </div>
-            <div className="mt-2 text-xs" style={{ color: 'var(--af-text-muted)' }}>
-              {t('chat.inbox.hint')}
-            </div>
+            <ThreadHeaderSummary
+              eyebrow={t('chat.threadSummary.current')}
+              title={
+                currentThreadPreview ??
+                (currentSession?.error ? t('chat.session.errorPreview') : t('chat.startConversation', { name: agent.name ?? agent.agentId }))
+              }
+              subtitle={t('chat.inbox.hint')}
+              meta={currentThreadSummaryMeta}
+            />
+            {hubContextHint ? (
+              <div
+                className="mt-3 rounded-xl px-3 py-2.5"
+                style={{ background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}
+              >
+                <div className="text-[10px] uppercase tracking-[0.16em]" style={{ color: 'var(--af-accent)' }}>
+                  {hubContextHint.label}
+                </div>
+                <div className="mt-1 text-xs font-medium line-clamp-2" style={{ color: 'var(--af-text-heading)' }}>
+                  {hubContextHint.title}
+                </div>
+                <div className="mt-1 text-[11px] leading-5 line-clamp-2" style={{ color: 'var(--af-text-muted)' }}>
+                  {hubContextHint.summary}
+                </div>
+                {hubContextHint.meta.length > 0 ? (
+                  <div className="mt-2 flex flex-wrap gap-2 text-[10px]" style={{ color: 'var(--af-text-faint)' }}>
+                    {hubContextHint.meta.map((item) => (
+                      <span
+                        key={item}
+                        className="rounded-full px-2 py-1"
+                        style={{ background: 'var(--af-card-bg)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}
+                      >
+                        {item}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
           <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
             <Button size="sm" variant="default" onClick={startNewThread}>
@@ -1615,7 +2159,7 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
                       <button
                         key={s.sessionKey}
                         onClick={() => loadSession(s)}
-                        className={`w-full px-3 py-2.5 text-left flex flex-col gap-0.5 ${
+                        className={`w-full px-3 py-2.5 text-left flex flex-col gap-1 ${
                           s.threadKey === currentThread ? '' : ''
                         }`}
                         style={{
@@ -1624,16 +2168,22 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
                         onMouseEnter={(e) => { if (s.threadKey !== currentThread) (e.currentTarget as HTMLButtonElement).style.background = 'var(--af-surface-2)'; }}
                         onMouseLeave={(e) => { if (s.threadKey !== currentThread) (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
                       >
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-mono truncate" style={{ color: 'var(--af-text-muted)' }}>{s.threadKey}</span>
-                          {s.threadKey === currentThread && (
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="text-xs font-medium line-clamp-2" style={{ color: 'var(--af-text-base)' }}>
+                              {sessionPreviewByKey[s.sessionKey] ?? (s.error ? t('chat.session.errorPreview') : t('chat.session.emptyPreview'))}
+                            </div>
+                          </div>
+                          {s.threadKey === currentThread ? (
                             <span className="text-[10px] ml-1 shrink-0" style={{ color: 'var(--af-accent)' }}>{t('chat.active')}</span>
-                          )}
+                          ) : null}
                         </div>
-                        <div className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--af-text-faint)' }}>
-                          <span>{s.messageCount} msgs</span>
-                          <span>·</span>
-                          <span>{timeAgo(s.lastActivity)}</span>
+                        <div className="flex items-center gap-2 flex-wrap text-[10px]" style={{ color: 'var(--af-text-faint)' }}>
+                          <span>{t('chat.session.meta', { count: String(s.messageCount), time: timeAgo(s.lastActivity) })}</span>
+                          {s.errorCode ? <Badge variant="red">{s.errorCode}</Badge> : null}
+                        </div>
+                        <div className="font-mono text-[10px] truncate" style={{ color: 'var(--af-text-muted)' }} title={s.threadKey}>
+                          {s.threadKey}
                         </div>
                       </button>
                     ))}
@@ -1769,8 +2319,8 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
                           : t('chat.inbox.kind.reply')}
                       </Badge>
                       <span className="text-sm font-medium text-cyan-100">{t('chat.hub.linkedTitle')}</span>
-                      {hubFocusTarget?.channelId ? (
-                        <span className="text-[11px] text-cyan-300/70">{hubFocusTarget.channelId}</span>
+                      {getChannelLabel(hubFocusTarget?.channelId) ? (
+                        <span className="text-[11px] text-cyan-300/70">{getChannelLabel(hubFocusTarget?.channelId)}</span>
                       ) : null}
                     </div>
                     <div className="mt-1 text-xs text-cyan-100/80 leading-5">
@@ -1808,43 +2358,104 @@ function AgentPanel({ agent, agents, initialThreadKey, recoveryContext, hubFocus
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto flex flex-col gap-4 pr-1 min-h-0 pt-4">
-        {messages.length === 0 && (
-          <div className="rounded-2xl border border-dashed px-5 py-8 text-center text-sm mt-2"
-            style={{ borderColor: 'var(--af-border)', background: 'var(--af-surface-2)', color: 'var(--af-text-muted)' }}
-          >
-            {t('chat.startConversation', { name: agent.name ?? agent.agentId })}
+      <div className="relative flex-1 min-h-0">
+        <div ref={scrollContainerRef} className="h-full overflow-y-auto flex flex-col gap-4 pr-1 min-h-0 pt-4">
+          {messages.length === 0 && (
+            <div className="rounded-2xl border border-dashed px-5 py-8 text-center text-sm mt-2"
+              style={{ borderColor: 'var(--af-border)', background: 'var(--af-surface-2)', color: 'var(--af-text-muted)' }}
+            >
+              {t('chat.startConversation', { name: agent.name ?? agent.agentId })}
+            </div>
+          )}
+          {messages.map((msg, i) => {
+            const previousMessage = i > 0 ? messages[i - 1] : undefined;
+            const showTimestamp = shouldShowChatTimestamp(msg, previousMessage);
+            return (
+              <div key={msg.id ?? i} className="flex flex-col gap-2">
+                {unseenMessageCount > 0 && unreadAnchorIndex === i ? (
+                  <ChatUnreadDivider
+                    label={t('chat.unreadDivider', { count: unseenMessageCount })}
+                  />
+                ) : null}
+                {showTimestamp && msg.timestamp !== undefined ? (
+                  <ChatTimestampDivider label={formatChatTimestamp(msg.timestamp, t)} />
+                ) : null}
+                <ChatBubble
+                  msg={msg}
+                  highlighted={msg.id === focusedMessageId}
+                  onMount={(element) => {
+                    if (!msg.id) {
+                      return;
+                    }
+                    if (element) {
+                      messageRefs.current.set(msg.id, element);
+                      return;
+                    }
+                    messageRefs.current.delete(msg.id);
+                  }}
+                />
+              </div>
+            );
+          })}
+          <div ref={bottomRef} />
+        </div>
+
+        {!isNearBottom && messages.length > 0 && !focusedMessageId ? (
+          <div className="pointer-events-none absolute bottom-4 right-3 z-10">
+            <div className="pointer-events-auto">
+              <Button size="sm" variant="default" onClick={() => scrollChatToBottom()}>
+                {unseenMessageCount > 0
+                  ? t('chat.backToBottomWithCount', { count: unseenMessageCount })
+                  : t('chat.backToBottom')}
+              </Button>
+            </div>
           </div>
-        )}
-        {messages.map((msg, i) => (
-          <ChatBubble
-            key={msg.id ?? i}
-            msg={msg}
-            highlighted={msg.id === focusedMessageId}
-            onMount={(element) => {
-              if (!msg.id) {
-                return;
-              }
-              if (element) {
-                messageRefs.current.set(msg.id, element);
-                return;
-              }
-              messageRefs.current.delete(msg.id);
-            }}
-          />
-        ))}
-        <div ref={bottomRef} />
+        ) : null}
       </div>
 
       <div className="pt-3 shrink-0 border-t border-white/6 mt-3">
-        {pendingStatus || activeRunId || resumableRunId ? (
+        {runStatusNotice || activeRunId || resumableRunId ? (
           <div className="mb-2 rounded-2xl border border-cyan-400/14 bg-cyan-950/12 px-3 py-2 text-xs text-cyan-100/85">
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <div className="min-w-0">
-                {pendingStatus ? <div>{pendingStatus}</div> : null}
-                {activeRunId ? (
+                <div className="flex items-center gap-2 flex-wrap">
+                  {runStatusNotice?.label ? (
+                    <span
+                      className="rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-[0.08em]"
+                      style={{
+                        background:
+                          runStatusNotice.tone === 'suspended'
+                            ? 'rgba(251, 191, 36, 0.16)'
+                            : runStatusNotice.tone === 'queued'
+                              ? 'rgba(245, 158, 11, 0.16)'
+                            : runStatusNotice.tone === 'completed'
+                              ? 'rgba(74, 222, 128, 0.16)'
+                              : runStatusNotice.tone === 'running'
+                              ? 'rgba(34, 211, 238, 0.16)'
+                              : 'rgba(148, 163, 184, 0.16)',
+                        color:
+                          runStatusNotice.tone === 'suspended'
+                            ? 'rgb(253, 224, 71)'
+                            : runStatusNotice.tone === 'queued'
+                              ? 'rgb(253, 230, 138)'
+                            : runStatusNotice.tone === 'completed'
+                              ? 'rgb(187, 247, 208)'
+                              : runStatusNotice.tone === 'running'
+                              ? 'rgb(165, 243, 252)'
+                              : 'rgb(226, 232, 240)',
+                      }}
+                    >
+                      {runStatusNotice.label}
+                    </span>
+                  ) : null}
+                  {runStatusNotice?.summary ? <div>{runStatusNotice.summary}</div> : null}
+                </div>
+                {runStatusNotice?.hint ? (
+                  <div className="mt-1 text-[11px] text-cyan-200/70">{runStatusNotice.hint}</div>
+                ) : null}
+                {visibleRunId ? (
                   <div className="mt-1 font-mono text-[10px] text-cyan-200/75 break-all">
-                    {t('chat.run.handle', { runId: activeRunId })}
+                    {t('chat.run.handle', { runId: visibleRunId })}
                   </div>
                 ) : null}
               </div>
@@ -1921,11 +2532,24 @@ export function ChatTab({
   const [processedHubThreadKeys, setProcessedHubThreadKeys] = useState<string[]>(() => readStoredStringArray(HUB_PROCESSED_THREAD_KEYS_STORAGE_KEY));
   const [showProcessedThreads, setShowProcessedThreads] = useState(false);
 
-  const { data: agentsResult, refetch } = useQuery<AgentListResult>(
-    () => rpc<AgentListResult>('agent.list'),
-    [],
+  const { agents, refetch } = useAgentsWithActivity();
+  const { data: channelResult } = useQuery<ChannelListResult>(() => rpc<ChannelListResult>('channel.list'));
+  const channelNameById = useMemo(
+    () =>
+      Object.fromEntries(
+        (channelResult?.channels ?? []).map((channel) => [channel.id, channel.name]),
+      ) as Record<string, string>,
+    [channelResult?.channels],
   );
-  const agents: AgentInfo[] = Array.isArray(agentsResult?.agents) ? agentsResult.agents : [];
+  const getChannelLabel = useCallback(
+    (channelId?: string | null) => {
+      if (!channelId) {
+        return null;
+      }
+      return formatChannelDisplay(channelId, channelNameById[channelId]);
+    },
+    [channelNameById],
+  );
   const seenInboxEventIdSet = new Set(seenInboxEventIds);
   const processedHubThreadKeySet = new Set(processedHubThreadKeys);
   const hubThreads: HubThreadView[] = buildHubThreads(inboxEvents).map((thread) => ({
@@ -1935,7 +2559,11 @@ export function ChatTab({
   }));
   const hubChannels = Array.from(
     new Set(inboxEvents.map((event) => event.channelId).filter((value): value is string => Boolean(value))),
-  ).sort();
+  ).sort((left, right) => {
+    const leftLabel = getChannelLabel(left) ?? left;
+    const rightLabel = getChannelLabel(right) ?? right;
+    return leftLabel.localeCompare(rightLabel);
+  });
   const normalizedHubQuery = hubQuery.trim().toLocaleLowerCase();
   const filteredHubThreads = hubThreads.filter((thread) => {
     if (!showProcessedThreads && thread.isProcessed) {
@@ -1976,7 +2604,12 @@ export function ChatTab({
       thread.preview,
       thread.threadKey ?? '',
       ...thread.agentIds,
-      ...thread.events.flatMap((event) => [event.title, event.text, event.channelId ?? '']),
+      ...thread.events.flatMap((event) => [
+        event.title,
+        event.text,
+        event.channelId ?? '',
+        getChannelLabel(event.channelId) ?? '',
+      ]),
     ];
     return haystacks.some((value) => value.toLocaleLowerCase().includes(normalizedHubQuery));
   });
@@ -2004,6 +2637,76 @@ export function ChatTab({
   // Derive effective selected agent: fall back to first in list while state hasn't synced yet.
   // This prevents the brief flash where agents are loaded but none appears selected.
   const effectiveActiveId = activeAgentId || agents[0]?.agentId || '';
+  const hasActiveHubFilters =
+    hubKindFilter !== 'all' ||
+    hubAgentFilter !== 'all' ||
+    hubWindowFilter !== 'all' ||
+    hubChannelFilter !== 'all' ||
+    hubQuery.trim().length > 0;
+  const activeHubContextHint = useMemo<HubContextHint | null>(() => {
+    const threadMatchesSelection = Boolean(
+      selectedHubThread?.threadKey && selectedThreadKey && selectedHubThread.threadKey === selectedThreadKey,
+    );
+    const focusMatchesSelection = Boolean(
+      hubFocusTarget &&
+        ((hubFocusTarget.agentId && hubFocusTarget.agentId === effectiveActiveId) ||
+          (hubFocusTarget.threadKey && hubFocusTarget.threadKey === selectedThreadKey)),
+    );
+    if (!focusMatchesSelection && !(hasActiveHubFilters && threadMatchesSelection)) {
+      return null;
+    }
+    const hubWindowLabel =
+      hubWindowFilter === '1h'
+        ? t('chat.inbox.window.1h')
+        : hubWindowFilter === '24h'
+          ? t('chat.inbox.window.24h')
+          : hubWindowFilter === '7d'
+            ? t('chat.inbox.window.7d')
+            : '';
+    const filterMeta = [
+      hubKindFilter === 'reply'
+        ? t('chat.inbox.filter.reply')
+        : hubKindFilter === 'deliverable'
+          ? t('chat.inbox.filter.deliverable')
+          : '',
+      hubAgentFilter !== 'all' ? getAgentLabel(hubAgentFilter, agents) : '',
+      hubChannelFilter !== 'all' ? getChannelLabel(hubChannelFilter) ?? hubChannelFilter : '',
+      hubWindowLabel,
+      hubQuery.trim(),
+    ].filter(Boolean);
+    const updatedMeta = selectedHubThread?.latestTs ? t('chat.threadSummary.updated', { time: timeAgo(selectedHubThread.latestTs) }) : '';
+    return {
+      label: t('chat.context.fromHub'),
+      title:
+        selectedHubThread?.title ||
+        hubFocusTarget?.title ||
+        truncateText(selectedHubThread?.preview || hubFocusTarget?.text || '', 96) ||
+        t('chat.inbox.threadFallback'),
+      summary:
+        truncateText(selectedHubThread?.preview || hubFocusTarget?.text || '', 120) ||
+        t('chat.context.fromHubHint'),
+      meta: [
+        updatedMeta,
+        getChannelLabel(selectedHubThread?.latestEvent.channelId ?? hubFocusTarget?.channelId) ?? '',
+        ...(selectedHubThread?.threadKey ? [selectedHubThread.threadKey] : []),
+        ...filterMeta,
+      ].filter(Boolean),
+    };
+  }, [
+    agents,
+    effectiveActiveId,
+    getChannelLabel,
+    hasActiveHubFilters,
+    hubAgentFilter,
+    hubChannelFilter,
+    hubFocusTarget,
+    hubKindFilter,
+    hubQuery,
+    hubWindowFilter,
+    selectedHubThread,
+    selectedThreadKey,
+    t,
+  ]);
 
   useEffect(() => {
     if (initialAgentId) {
@@ -2110,6 +2813,7 @@ export function ChatTab({
           filteredHubThreads={filteredHubThreads}
           selectedHubThread={selectedHubThread}
           hubChannels={hubChannels}
+          getChannelLabel={getChannelLabel}
           hubQuery={hubQuery}
           setHubQuery={setHubQuery}
           hubKindFilter={hubKindFilter}
@@ -2257,6 +2961,8 @@ export function ChatTab({
                 recoveryContext={
                   initialRecoveryContext?.agentId === activeAgent.agentId ? initialRecoveryContext : null
                 }
+                hubContextHint={activeHubContextHint}
+                getChannelLabel={getChannelLabel}
               />
             ) : null;
           })()
@@ -2392,12 +3098,14 @@ function HubConversationBubble({
   event,
   seen,
   agentLabel,
+  getChannelLabel,
   onOpenThread,
   onOpenDeliverable,
 }: {
   event: InboxEvent;
   seen: boolean;
   agentLabel: string;
+  getChannelLabel: (channelId?: string | null) => string | null;
   onOpenThread: () => void;
   onOpenDeliverable?: () => void;
 }) {
@@ -2435,7 +3143,7 @@ function HubConversationBubble({
         <div className="mt-3 text-sm font-medium" style={{ color: 'var(--af-text-heading)' }}>{event.title}</div>
         <div className="mt-2 whitespace-pre-wrap text-xs leading-6" style={{ color: 'var(--af-text-base)' }}>{event.text}</div>
         <div className="mt-3 flex flex-wrap gap-2 text-[10px]" style={{ color: 'var(--af-text-faint)' }}>
-          {event.channelId ? <span>{event.channelId}</span> : null}
+          {getChannelLabel(event.channelId) ? <span>{getChannelLabel(event.channelId)}</span> : null}
           {event.publicationSummary ? <span>{event.publicationSummary}</span> : null}
           {event.threadKey ? <span>{event.threadKey}</span> : null}
         </div>
@@ -2462,6 +3170,7 @@ function HubWorkspaceContent({
   filteredHubThreads,
   selectedHubThread,
   hubChannels,
+  getChannelLabel,
   hubQuery,
   setHubQuery,
   hubKindFilter,
@@ -2492,6 +3201,7 @@ function HubWorkspaceContent({
   filteredHubThreads: HubThreadView[];
   selectedHubThread: HubThreadView | null;
   hubChannels: string[];
+  getChannelLabel: (channelId?: string | null) => string | null;
   hubQuery: string;
   setHubQuery: (value: string) => void;
   hubKindFilter: 'all' | 'reply' | 'deliverable';
@@ -2587,7 +3297,7 @@ function HubWorkspaceContent({
               <option value="all">{t('chat.inbox.filter.allChannels')}</option>
               {hubChannels.map((channelId) => (
                 <option key={channelId} value={channelId}>
-                  {channelId}
+                  {getChannelLabel(channelId) ?? channelId}
                 </option>
               ))}
             </select>
@@ -2696,6 +3406,9 @@ function HubWorkspaceContent({
                           : t('chat.inbox.kind.reply')}
                       </Badge>
                       <span>{t('chat.inbox.events', { count: thread.events.length })}</span>
+                      {getChannelLabel(thread.latestEvent.channelId) ? (
+                        <span className="truncate max-w-[180px]">{getChannelLabel(thread.latestEvent.channelId)}</span>
+                      ) : null}
                       {thread.threadKey ? <span>{thread.threadKey}</span> : null}
                     </div>
                   </button>
@@ -2716,19 +3429,20 @@ function HubWorkspaceContent({
                 style={{ borderBottom: '1px solid var(--af-border)', background: 'var(--af-surface-2)' }}
               >
                 <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--af-text-faint)' }}>
-                      {t('chat.inbox.activityTitle')}
-                    </div>
-                    <div className="mt-1 truncate text-sm font-semibold" style={{ color: 'var(--af-text-heading)' }}>
-                      {selectedHubThread.title || t('chat.inbox.threadFallback')}
-                    </div>
-                    <div className="mt-1 line-clamp-2 text-xs" style={{ color: 'var(--af-text-muted)' }}>
-                      {selectedHubThread.agentIds.length > 0
+                  <ThreadHeaderSummary
+                    eyebrow={t('chat.inbox.activityTitle')}
+                    title={selectedHubThread.title || truncateText(selectedHubThread.preview, 96) || t('chat.inbox.threadFallback')}
+                    subtitle={
+                      selectedHubThread.agentIds.length > 0
                         ? selectedHubThread.agentIds.map((agentId) => getAgentLabel(agentId, agents)).join(' · ')
-                        : t('chat.inbox.system')}
-                    </div>
-                  </div>
+                        : t('chat.inbox.system')
+                    }
+                    meta={[
+                      t('chat.threadSummary.updated', { time: timeAgo(selectedHubThread.latestTs) }),
+                      selectedHubThread.threadKey ?? '',
+                      getChannelLabel(selectedHubThread.latestEvent.channelId) ?? '',
+                    ]}
+                  />
                   <div className="flex flex-wrap justify-end gap-2">
                     <Badge variant="green">{t('chat.inbox.replyCount', { count: selectedHubThread.replyCount })}</Badge>
                     <Badge variant="purple">{t('chat.inbox.deliverableCount', { count: selectedHubThread.deliverableCount })}</Badge>
@@ -2760,6 +3474,7 @@ function HubWorkspaceContent({
                         event={event}
                         seen={eventSeen}
                         agentLabel={getAgentLabel(event.agentId, agents)}
+                        getChannelLabel={getChannelLabel}
                         onOpenThread={() => {
                           if (onOpenThreadFromEvent) {
                             onOpenThreadFromEvent(event, selectedHubThread.key);

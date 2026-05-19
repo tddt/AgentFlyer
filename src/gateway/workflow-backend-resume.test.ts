@@ -143,7 +143,12 @@ describe('workflow backend resume rpc', () => {
     const delegatedRunId = suspended.stepResults[0]?.delegatedRunId;
     expect(delegatedRunId).toBeTruthy();
 
-    const resumed = await dispatchWorkflowRpc('workflow.resume', 2, { runId, childStepId: 'agent-step' }, ctx);
+    const resumed = await dispatchWorkflowRpc(
+      'workflow.resume',
+      2,
+      { runId, childStepId: 'agent-step' },
+      ctx,
+    );
     expect(resumed.result).toMatchObject({
       action: 'resume',
       accepted: true,

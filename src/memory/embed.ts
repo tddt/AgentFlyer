@@ -65,6 +65,10 @@ async function getPipeline(modelId: string): Promise<typeof _pipeline> {
  * Falls back to a zero vector if the model is unavailable.
  */
 export async function embed(text: string, config: EmbedConfig): Promise<Float32Array> {
+  if (config.model === 'stub') {
+    return stubEmbed(text);
+  }
+
   const pipe = await getPipeline(config.model);
   if (!pipe) {
     return stubEmbed(text);

@@ -17,6 +17,12 @@ import {
 } from './process-runtime.js';
 import type { AgentRunner } from './runner.js';
 import type { TurnResult } from './runner.js';
+import {
+  type AgentTurnControlState,
+  deriveAgentTurnRunRecord,
+  getAgentTurnCompletionOutcome,
+  isSuspendedAgentTurnRun,
+} from './turn-run-state.js';
 
 type AgentRunnerResolver =
   | Map<string, AgentRunner>
@@ -62,6 +68,7 @@ export interface AgentTurnKernelRunRecord {
   threadKey: string;
   processStatus: ProcessStatus;
   phase: AgentTurnProcessState['phase'];
+  controlState?: AgentTurnControlState;
   createdAt: number;
   updatedAt: number;
   result?: TurnResult;
@@ -223,7 +230,15 @@ class AgentKernelTurnExecutor {
         const state = this.runtime.deserialize(snapshot.state) as AgentTurnProcessState;
         const runner = this.resolveRunnerFn(state.agentId);
         if (runner) {
-          runner.syncRuntimeState(state.threadKey, runId, state.runnerState.toolResultCache);
+          runner.syncRuntimeState(
+            state.threadKey,
+            runId,
+            state.runnerState.toolResultCache,
+            state.runnerState.promptLayerHashes,
+            state.runnerState.cachedSystemPrompt,
+            state.runnerState.defaultThreadKey,
+            'kernel',
+          );
           runner.forceReset(runId);
         }
         this.runRecords.set(runId, {
@@ -380,7 +395,8 @@ class AgentKernelTurnExecutor {
     const runId = String(snapshot.pid);
     if (
       this.suspendedRuns.has(runId) &&
-      previousRecord?.processStatus === 'suspended' &&
+      previousRecord &&
+      isSuspendedAgentTurnRun(previousRecord) &&
       previousRecord.updatedAt === snapshot.updatedAt
     ) {
       return;
@@ -468,24 +484,7 @@ class AgentKernelTurnExecutor {
     runId: string,
   ): { ok: true; result: TurnResult } | { ok: false; message: string } | null {
     const record = this.runRecords.get(runId);
-    if (!record) {
-      return null;
-    }
-    if (record.phase === 'done' && record.result) {
-      return { ok: true, result: record.result };
-    }
-    if (
-      record.processStatus === 'error' ||
-      record.processStatus === 'suspended' ||
-      record.phase === 'error' ||
-      record.phase === 'suspended'
-    ) {
-      return {
-        ok: false,
-        message: record.error?.message ?? 'Agent turn failed',
-      };
-    }
-    return null;
+    return record ? getAgentTurnCompletionOutcome(record) : null;
   }
 
   private snapshotToState(snapshot: KernelProcessSnapshot): AgentTurnProcessState {
@@ -493,19 +492,7 @@ class AgentKernelTurnExecutor {
   }
 
   private snapshotToRunRecord(snapshot: KernelProcessSnapshot): AgentTurnKernelRunRecord {
-    const state = this.snapshotToState(snapshot);
-    return {
-      runId: String(snapshot.pid),
-      agentId: state.agentId,
-      threadKey: state.threadKey,
-      processStatus: snapshot.status,
-      phase: state.phase,
-      createdAt: snapshot.createdAt,
-      updatedAt: snapshot.updatedAt,
-      result: state.result,
-      sessionKey: state.result?.sessionKey,
-      error: state.error,
-    };
+    return deriveAgentTurnRunRecord(snapshot, this.snapshotToState(snapshot));
   }
 }
 

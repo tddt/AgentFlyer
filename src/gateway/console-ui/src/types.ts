@@ -135,7 +135,8 @@ export interface RunningTaskInfo {
   agentId?: string;
   workflowId?: string;
   agentRunId?: string;
-  agentRunStatus?: 'running' | 'suspended';
+  status: 'running' | 'suspended';
+  resumable: boolean;
 }
 
 export interface TaskRunRecord {

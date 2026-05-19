@@ -1,4 +1,5 @@
 import type { ProcessId } from '../types.js';
+import { isRunnableProcessStatus } from './process-transition-contract.js';
 import type { KernelProcessSnapshot, ProcessPriority } from './types.js';
 
 const PRIORITY_SCORE: Record<ProcessPriority, number> = {
@@ -7,8 +8,6 @@ const PRIORITY_SCORE: Record<ProcessPriority, number> = {
   normal: 200,
   low: 100,
 };
-
-const RUNNABLE_STATUS = new Set(['ready', 'running'] as const);
 
 export class PriorityScheduler {
   selectNext(snapshots: KernelProcessSnapshot[], now: number): KernelProcessSnapshot | null {
@@ -32,7 +31,7 @@ export class PriorityScheduler {
   }
 
   isRunnable(snapshot: KernelProcessSnapshot, now: number): boolean {
-    if (!RUNNABLE_STATUS.has(snapshot.status as 'ready' | 'running')) return false;
+    if (!isRunnableProcessStatus(snapshot.status)) return false;
     return (snapshot.nextRunAt ?? 0) <= now;
   }
 

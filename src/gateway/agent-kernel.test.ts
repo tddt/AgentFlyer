@@ -330,12 +330,14 @@ async function waitForRpcRunPhase(
 ): Promise<{
   phase: 'pending' | 'suspended' | 'done';
   processStatus: string;
+  controlState?: string;
   error?: { code: string; message: string };
   result?: { text: string };
 }> {
   let lastRun: {
     phase: 'pending' | 'suspended' | 'done';
     processStatus: string;
+    controlState?: string;
     error?: { code: string; message: string };
     result?: { text: string };
   } | null = null;
@@ -347,6 +349,7 @@ async function waitForRpcRunPhase(
     const run = response.result as {
       phase: 'suspended' | 'done';
       processStatus: string;
+      controlState?: string;
       error?: { code: string; message: string };
       result?: { text: string };
     } | null;
@@ -618,7 +621,7 @@ describe('AgentKernelService', () => {
   it('uses the default thread when a queued run omits threadKey', async () => {
     const dataDir = await createTempDir();
     const runner = createRunner(dataDir);
-    runner.setThread('leaked-thread');
+    runner.setDefaultThread('leaked-thread');
     const service = trackService(
       new AgentKernelService({
         dataDir,
@@ -767,6 +770,7 @@ describe('AgentKernelService', () => {
 
     const suspended = await waitForRpcRunPhase(ctx, runId, 'suspended');
     expect(suspended.processStatus).toBe('suspended');
+    expect(suspended.controlState).toBe('suspended');
     expect(suspended.error?.code).toBe('AGENT_LLM_RESOURCE_BLOCKED');
 
     blocked = false;
@@ -824,7 +828,7 @@ describe('AgentKernelService', () => {
       {
         id: 22,
         method: 'session.clear',
-        params: { sessionKey: runner.currentSessionKey },
+        params: { sessionKey: runner.activeSessionKey },
       },
       ctx,
     );
@@ -833,7 +837,7 @@ describe('AgentKernelService', () => {
       id: 22,
       error: {
         code: 409,
-        message: `Session '${runner.currentSessionKey}' cannot be cleared while its runner turn is active`,
+        message: `Session '${runner.activeSessionKey}' cannot be cleared while its runner turn is active`,
       },
     });
 
@@ -849,6 +853,51 @@ describe('AgentKernelService', () => {
     );
 
     expect(cleared).toEqual({ id: 3, result: { cleared: true, agentId: 'agent-main' } });
+  });
+
+  it('clears the explicit default session when session.clear is called by agentId', async () => {
+    const dataDir = await createTempDir();
+    const runner = createRunner(dataDir);
+    runner.setDefaultThread('leaked-thread');
+    const ctx = createRpcContext(dataDir, runner);
+
+    const sessionStore = new SessionStore(join(dataDir, 'sessions'));
+    const defaultSessionKey = runner.sessionKeyForThread('default');
+    const leakedSessionKey = runner.sessionKeyForThread('leaked-thread');
+
+    await sessionStore.overwrite(defaultSessionKey, [
+      {
+        id: 'default-msg',
+        sessionKey: defaultSessionKey,
+        role: 'user',
+        content: 'default-thread-history',
+        timestamp: Date.now(),
+      },
+    ]);
+    await sessionStore.overwrite(leakedSessionKey, [
+      {
+        id: 'leaked-msg',
+        sessionKey: leakedSessionKey,
+        role: 'user',
+        content: 'leaked-thread-history',
+        timestamp: Date.now(),
+      },
+    ]);
+
+    const cleared = await dispatchRpc(
+      {
+        id: 30,
+        method: 'session.clear',
+        params: { agentId: 'agent-main' },
+      },
+      ctx,
+    );
+
+    expect(cleared).toEqual({ id: 30, result: { cleared: true, agentId: 'agent-main' } });
+    await expect(sessionStore.readAll(defaultSessionKey)).resolves.toEqual([]);
+    await expect(sessionStore.readAll(leakedSessionKey)).resolves.toEqual([
+      expect.objectContaining({ content: 'leaked-thread-history' }),
+    ]);
   });
 
   it('runs agent.chat concurrently — second chat completes before first is released', async () => {
@@ -1052,6 +1101,7 @@ describe('AgentKernelService', () => {
     try {
       const pending = await waitForRpcRunPhase(ctx, secondRunId, 'pending');
       expect(['waiting', 'ready']).toContain(pending.processStatus);
+      expect(['queued', 'ready']).toContain(pending.controlState);
 
       const statusResponse = await dispatchRpc(
         {
@@ -1088,6 +1138,7 @@ describe('AgentKernelService', () => {
             threadKey: 'queued-run-second-thread',
             processStatus: 'waiting',
             phase: 'pending',
+            controlState: 'queued',
           },
         ]);
       } else {

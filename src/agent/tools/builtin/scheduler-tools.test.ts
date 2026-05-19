@@ -351,6 +351,60 @@ describe('createSchedulerTools persistence boundary', () => {
     expect(listed.content).toContain(String(history[0]?.agentRunId));
   });
 
+  it('refreshes task_list current run state from kernel while a delegated run is still in flight', async () => {
+    let rejectExecution: ((error: Error) => void) | undefined;
+    const executionStarted = new Promise<void>((resolve) => {
+      mockedExecuteAgentTurnViaKernel.mockImplementationOnce(
+        async () =>
+          await new Promise((_resolve, reject: (error: Error) => void) => {
+            rejectExecution = reject;
+            resolve();
+          }),
+      );
+    });
+    mockedGetAgentTurnRunViaKernel.mockImplementation(
+      async ({ runId }) =>
+        ({
+          runId,
+          processStatus: 'suspended',
+          phase: 'suspended',
+          error: {
+            code: 'AGENT_LLM_RESOURCE_BLOCKED',
+            message: '当前运行已挂起，可在外部条件恢复后继续。',
+            retryable: true,
+          },
+        }) as never,
+    );
+
+    const dataDir = await createTempDir();
+    const scheduler = new SchedulerStub();
+    const schedule = getToolHandler('task_schedule', dataDir, scheduler);
+    const taskList = getToolHandler('task_list', dataDir, scheduler);
+
+    const scheduled = await schedule({
+      agent_id: 'agent-main',
+      message: 'do blocked work',
+      name: 'Live refresh sync',
+      interval_minutes: 5,
+    });
+    const taskId = /Task ID: (.+)/u.exec(scheduled.content)?.[1];
+    expect(taskId).toBeTruthy();
+
+    const runningPromise = scheduler.run(taskId ?? '');
+    await executionStarted;
+    const delegatedRunId = String(
+      mockedExecuteAgentTurnViaKernel.mock.calls.at(-1)?.[0].input.runId,
+    );
+
+    const listedWhileRunning = await taskList({});
+    expect(listedWhileRunning.isError).toBe(false);
+    expect(listedWhileRunning.content).toContain('current agent run: suspended');
+    expect(listedWhileRunning.content).toContain(delegatedRunId);
+
+    rejectExecution?.(new Error('quota blocked'));
+    await runningPromise;
+  });
+
   it('skips new cron executions while a suspended delegated run is still active', async () => {
     mockedExecuteAgentTurnViaKernel.mockRejectedValueOnce(new Error('quota blocked'));
     mockedGetAgentTurnRunViaKernel.mockResolvedValueOnce({

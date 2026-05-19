@@ -5,6 +5,7 @@ import { AgentQueueRegistry } from './agent-queue.js';
 import * as chatDeliverablesModule from './chat-deliverables.js';
 import { type RouterOptions, routeRequest } from './router.js';
 import type { RpcContext } from './rpc.js';
+import { SchedulerActivityBroadcaster } from './scheduler-activity.js';
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -58,6 +59,7 @@ interface MockRes {
   setHeader: ReturnType<typeof vi.fn>;
   write: ReturnType<typeof vi.fn>;
   end: ReturnType<typeof vi.fn>;
+  on: ReturnType<typeof vi.fn>;
   body: () => string;
 }
 
@@ -75,6 +77,7 @@ function makeRes(): MockRes {
     end: vi.fn((data?: string) => {
       if (data) chunks.push(data);
     }),
+    on: vi.fn(() => res),
     body: () => chunks.join(''),
   };
   return res;
@@ -281,6 +284,110 @@ describe('GET /favicon.ico', () => {
       204,
       expect.objectContaining({ 'Cache-Control': expect.any(String) }),
     );
+  });
+
+  describe('GET /api/scheduler-activity', () => {
+    it('streams scheduler running snapshots on initial load and follow-up activity', async () => {
+      const schedulerActivity = new SchedulerActivityBroadcaster();
+      let currentRun: {
+        runId: string;
+        agentId: string;
+        threadKey: string;
+        processStatus: 'running' | 'suspended';
+        phase: 'running' | 'suspended';
+        controlState: 'active' | 'suspended';
+        createdAt: number;
+        updatedAt: number;
+      } | null = {
+        runId: 'run-live',
+        agentId: 'agent-main',
+        threadKey: 'default',
+        processStatus: 'running',
+        phase: 'running',
+        controlState: 'active',
+        createdAt: 1,
+        updatedAt: 2,
+      };
+      let kernelActivityListener: ((agentId: string) => void) | null = null;
+
+      mockedGetAgentKernelService.mockResolvedValue({
+        getRun: vi.fn(() => currentRun),
+        subscribeActivity: vi.fn((listener: (agentId: string) => void) => {
+          kernelActivityListener = listener;
+          return () => {
+            kernelActivityListener = null;
+          };
+        }),
+      } as never);
+
+      const ctx = makeCtx({
+        schedulerActivity,
+        getConfig: () => ({ agents: [{ id: 'agent-main', name: 'Main Agent' }] }) as never,
+      });
+      ctx.runningTasks.set('task-live', {
+        taskId: 'task-live',
+        taskName: 'Live task',
+        startedAt: Date.now(),
+        agentId: 'agent-main',
+        agentRunId: 'run-live',
+      });
+
+      const req = makeReq('/api/scheduler-activity?token=test-token');
+      const res = makeRes();
+      const handled = await routeRequest(req, res as unknown as ServerResponse, {
+        ...makeOpts(),
+        rpcContext: ctx,
+      });
+
+      expect(handled).toBe(true);
+      let events = parseSseEvents(res.body());
+      expect(events[0]).toEqual({
+        running: [
+          expect.objectContaining({
+            taskId: 'task-live',
+            agentRunId: 'run-live',
+            status: 'running',
+            resumable: false,
+          }),
+        ],
+      });
+
+      currentRun = {
+        runId: 'run-live',
+        agentId: 'agent-main',
+        threadKey: 'default',
+        processStatus: 'suspended',
+        phase: 'suspended',
+        controlState: 'suspended',
+        createdAt: 1,
+        updatedAt: 3,
+      };
+      const notifyKernelActivity = kernelActivityListener as ((agentId: string) => void) | null;
+      if (notifyKernelActivity) {
+        notifyKernelActivity('agent-main');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      events = parseSseEvents(res.body());
+      expect(events[1]).toEqual({
+        running: [
+          expect.objectContaining({
+            taskId: 'task-live',
+            agentRunId: 'run-live',
+            status: 'suspended',
+            resumable: true,
+          }),
+        ],
+      });
+
+      currentRun = null;
+      ctx.runningTasks.delete('task-live');
+      schedulerActivity.publish();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      events = parseSseEvents(res.body());
+      expect(events[2]).toEqual({ running: [] });
+    });
   });
 });
 

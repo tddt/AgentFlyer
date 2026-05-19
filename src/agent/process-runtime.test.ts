@@ -191,13 +191,13 @@ describe('AgentRunner state serialization', () => {
     const dataDir = await createTempDir();
     const runner = createRunner(dataDir);
 
-    runner.setThread('custom-thread');
+    runner.setDefaultThread('custom-thread');
     const before = runner.serializeState();
 
     const other = createRunner(dataDir);
     other.restoreState(before);
 
-    expect(other.currentSessionKey).toBe(runner.currentSessionKey);
+    expect(other.defaultSessionKey).toBe(runner.defaultSessionKey);
     expect(other.serializeState()).toEqual(before);
   });
 
@@ -205,10 +205,12 @@ describe('AgentRunner state serialization', () => {
     const runner = {
       serializeState(): SerializedAgentRunnerState {
         return {
-          threadKey: 'leaked-thread',
+          activeThreadKey: 'leaked-thread',
           toolResultCache: [
             { key: 'read_file|{"path":"leak"}', value: { isError: false, content: 'leak' } },
           ],
+          promptLayerHashes: [{ index: 0, hash: 'hash-0' }],
+          cachedSystemPrompt: 'cached-prompt',
         };
       },
     } as unknown as AgentRunner;
@@ -221,19 +223,27 @@ describe('AgentRunner state serialization', () => {
 
     expect(initialState.threadKey).toBe('default');
     expect(initialState.runnerState).toEqual({
-      threadKey: 'default',
-      toolResultCache: [],
+      activeThreadKey: 'default',
+      defaultThreadKey: 'default',
+      toolResultCache: [
+        { key: 'read_file|{"path":"leak"}', value: { isError: false, content: 'leak' } },
+      ],
+      promptLayerHashes: [{ index: 0, hash: 'hash-0' }],
+      cachedSystemPrompt: 'cached-prompt',
     });
   });
 
-  it('does not inherit prompt or tool caches even when the requested thread matches the shared runner', async () => {
+  it('inherits prompt and tool caches when the requested thread matches the default thread', async () => {
     const runner = {
       serializeState(): SerializedAgentRunnerState {
         return {
-          threadKey: 'default',
+          activeThreadKey: 'default',
+          defaultThreadKey: 'default',
           toolResultCache: [
             { key: 'read_file|{"path":"cached"}', value: { isError: false, content: 'cached' } },
           ],
+          promptLayerHashes: [{ index: 1, hash: 'hash-1' }],
+          cachedSystemPrompt: 'cached-system-prompt',
         };
       },
     } as unknown as AgentRunner;
@@ -246,8 +256,44 @@ describe('AgentRunner state serialization', () => {
     });
 
     expect(initialState.runnerState).toEqual({
-      threadKey: 'default',
+      activeThreadKey: 'default',
+      defaultThreadKey: 'default',
+      toolResultCache: [
+        { key: 'read_file|{"path":"cached"}', value: { isError: false, content: 'cached' } },
+      ],
+      promptLayerHashes: [{ index: 1, hash: 'hash-1' }],
+      cachedSystemPrompt: 'cached-system-prompt',
+    });
+  });
+
+  it('keeps prompt cache but clears tool cache when the requested thread differs from the default thread', async () => {
+    const runner = {
+      serializeState(): SerializedAgentRunnerState {
+        return {
+          activeThreadKey: 'default',
+          defaultThreadKey: 'default',
+          toolResultCache: [
+            { key: 'read_file|{"path":"cached"}', value: { isError: false, content: 'cached' } },
+          ],
+          promptLayerHashes: [{ index: 2, hash: 'hash-2' }],
+          cachedSystemPrompt: 'cached-prompt-other-thread',
+        };
+      },
+    } as unknown as AgentRunner;
+
+    const runtime = new AgentTurnProcessRuntime(new Map([['agent-main', runner]]));
+    const initialState = runtime.createInitialState({
+      agentId: 'agent-main',
+      userMessage: 'hello other thread',
+      threadKey: 'thread-other',
+    });
+
+    expect(initialState.runnerState).toEqual({
+      activeThreadKey: 'thread-other',
+      defaultThreadKey: 'default',
       toolResultCache: [],
+      promptLayerHashes: [{ index: 2, hash: 'hash-2' }],
+      cachedSystemPrompt: 'cached-prompt-other-thread',
     });
   });
 
@@ -270,14 +316,17 @@ describe('AgentTurnProcessRuntime', () => {
   it('serializes concurrent step state swaps on the same runner instance', async () => {
     let currentThread = 'default';
     const runner = {
-      currentSessionKey: 'session:agent-main:default',
+      defaultSessionKey: 'session:agent-main:default',
       syncRuntimeState(threadKey: string, _runId: string | null): void {
         currentThread = threadKey;
       },
       serializeState(): SerializedAgentRunnerState {
         return {
-          threadKey: currentThread,
+          activeThreadKey: currentThread,
+          defaultThreadKey: 'default',
           toolResultCache: [],
+          promptLayerHashes: [],
+          cachedSystemPrompt: null,
         };
       },
       async applyKernelLlmGenerateSyscall(
@@ -291,7 +340,13 @@ describe('AgentTurnProcessRuntime', () => {
           state: {} as SerializedAgentTurnExecutionState,
           chunks: [],
           done: false,
-          syscall: { id: `next-${currentThread}`, kind: 'llm.generate' as const },
+          syscall: {
+            id: `next-${currentThread}`,
+            kind: 'llm.generate' as const,
+            operation: 'agent.turn.generate',
+            payload: {},
+            createdAt: Date.now(),
+          },
         };
       },
     } as unknown as AgentRunner;
@@ -312,8 +367,11 @@ describe('AgentTurnProcessRuntime', () => {
           runId: 'run-a',
           threadKey: 'thread-a',
           runnerState: {
-            threadKey: 'thread-a',
+            activeThreadKey: 'thread-a',
+            defaultThreadKey: 'default',
             toolResultCache: [],
+            promptLayerHashes: [],
+            cachedSystemPrompt: null,
           },
         },
         {
@@ -332,8 +390,11 @@ describe('AgentTurnProcessRuntime', () => {
           runId: 'run-b',
           threadKey: 'thread-b',
           runnerState: {
-            threadKey: 'thread-b',
+            activeThreadKey: 'thread-b',
+            defaultThreadKey: 'default',
             toolResultCache: [],
+            promptLayerHashes: [],
+            cachedSystemPrompt: null,
           },
         },
         {
@@ -349,15 +410,18 @@ describe('AgentTurnProcessRuntime', () => {
 
     expect(stepA.signal).toBe('WAITING_SYSCALL');
     expect(stepB.signal).toBe('WAITING_SYSCALL');
-    expect(stepA.state.runnerState.threadKey).toBe('thread-a');
-    expect(stepB.state.runnerState.threadKey).toBe('thread-b');
+    expect(stepA.state.runnerState.activeThreadKey).toBe('thread-a');
+    expect(stepA.state.runnerState.defaultThreadKey).toBe('default');
+    expect(stepB.state.runnerState.activeThreadKey).toBe('thread-b');
+    expect(stepB.state.runnerState.defaultThreadKey).toBe('default');
   });
 
   it('prefers explicit runtime sync over restoreState during kernel steps', async () => {
     const restoreState = vi.fn();
     const syncRuntimeState = vi.fn();
     const serializeState = vi.fn(() => ({
-      threadKey: 'thread-sync-preferred',
+      activeThreadKey: 'thread-sync-preferred',
+      defaultThreadKey: 'operator-default-thread',
       toolResultCache: [
         { key: 'read_file|{"path":"alpha"}', value: { isError: false, content: 'alpha' } },
       ],
@@ -366,7 +430,13 @@ describe('AgentTurnProcessRuntime', () => {
       state: {} as SerializedAgentTurnExecutionState,
       chunks: [],
       done: false,
-      syscall: { id: 'next-sync', kind: 'llm.generate' as const },
+      syscall: {
+        id: 'next-sync',
+        kind: 'llm.generate' as const,
+        operation: 'agent.turn.generate',
+        payload: {},
+        createdAt: Date.now(),
+      },
     }));
     const runner = {
       restoreState,
@@ -385,7 +455,8 @@ describe('AgentTurnProcessRuntime', () => {
         options: undefined,
         threadKey: 'thread-sync-preferred',
         runnerState: {
-          threadKey: 'thread-sync-preferred',
+          activeThreadKey: 'thread-sync-preferred',
+          defaultThreadKey: 'operator-default-thread',
           toolResultCache: [
             { key: 'read_file|{"path":"alpha"}', value: { isError: false, content: 'alpha' } },
           ],
@@ -421,10 +492,94 @@ describe('AgentTurnProcessRuntime', () => {
     );
 
     expect(result.signal).toBe('WAITING_SYSCALL');
-    expect(syncRuntimeState).toHaveBeenCalledWith('thread-sync-preferred', 'run-sync-preferred', [
-      { key: 'read_file|{"path":"alpha"}', value: { isError: false, content: 'alpha' } },
-    ]);
+    expect(syncRuntimeState).toHaveBeenCalledWith(
+      'thread-sync-preferred',
+      'run-sync-preferred',
+      [{ key: 'read_file|{"path":"alpha"}', value: { isError: false, content: 'alpha' } }],
+      undefined,
+      undefined,
+      'operator-default-thread',
+      'kernel',
+    );
     expect(serializeState).toHaveBeenCalledTimes(1);
+    expect(restoreState).not.toHaveBeenCalled();
+  });
+
+  it('syncs an idle lease before beginning a pending kernel step', async () => {
+    const restoreState = vi.fn();
+    const syncRuntimeState = vi.fn();
+    const beginKernelTurn = vi.fn(async () => ({
+      runId: 'run-pending-sync',
+      sessionKey: 'agent:agent-main:thread-pending-sync' as never,
+      userMessage: 'hello',
+      options: undefined,
+      model: 'fake-model',
+      maxTokens: 64,
+      systemPrompt: '',
+      messages: [],
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalText: '',
+      toolRounds: 0,
+      toolFailureMessages: [],
+      finalFailureMessage: null,
+      finalFailureCode: undefined,
+      recoverableStreamRetries: 0,
+      toolLoopDetector: { lastEntry: null, consecutiveRepeats: 0 },
+      pendingToolCalls: [],
+    }));
+    const serializeState = vi.fn(() => ({
+      activeThreadKey: 'operator-default-thread',
+      defaultThreadKey: 'operator-default-thread',
+      toolResultCache: [],
+      promptLayerHashes: [],
+      cachedSystemPrompt: null,
+    }));
+    const runner = {
+      restoreState,
+      syncRuntimeState,
+      beginKernelTurn,
+      serializeState,
+    } as unknown as AgentRunner;
+    const runtime = new AgentTurnProcessRuntime(new Map([['agent-main', runner]]));
+
+    const result = await runtime.step(
+      {
+        phase: 'pending',
+        runId: 'run-pending-sync',
+        agentId: 'agent-main',
+        userMessage: 'hello',
+        options: undefined,
+        threadKey: 'thread-pending-sync',
+        runnerState: {
+          activeThreadKey: 'thread-pending-sync',
+          defaultThreadKey: 'operator-default-thread',
+          toolResultCache: [],
+          promptLayerHashes: [],
+          cachedSystemPrompt: null,
+        },
+        stream: [],
+      },
+      {
+        pid: 'pid-pending' as never,
+        now: Date.now(),
+        runCount: 1,
+        retryCount: 0,
+        metadata: {},
+      },
+    );
+
+    expect(result.signal).toBe('YIELD');
+    expect(syncRuntimeState).toHaveBeenCalledWith(
+      'thread-pending-sync',
+      null,
+      [],
+      [],
+      null,
+      'operator-default-thread',
+      'idle',
+    );
     expect(restoreState).not.toHaveBeenCalled();
   });
 
@@ -460,8 +615,11 @@ describe('AgentTurnProcessRuntime', () => {
           userMessage: 'alpha',
           threadKey: 'thread-alpha',
           runnerState: {
-            threadKey: 'thread-alpha',
+            activeThreadKey: 'thread-alpha',
+            defaultThreadKey: 'default',
             toolResultCache: [],
+            promptLayerHashes: [],
+            cachedSystemPrompt: null,
           },
           executionState: {
             sessionKey: 'agent:agent-main:thread-alpha' as never,
@@ -488,7 +646,13 @@ describe('AgentTurnProcessRuntime', () => {
           stream: [],
           options: undefined,
         },
-        { id: 'req-alpha', kind: 'tool.call' } as SyscallRequest,
+        {
+          id: 'req-alpha',
+          kind: 'tool.call',
+          operation: 'agent.turn.tool-call-batch',
+          payload: {},
+          createdAt: Date.now(),
+        } as SyscallRequest,
         Date.now(),
       ),
       runtime.executePendingSyscall(
@@ -499,8 +663,11 @@ describe('AgentTurnProcessRuntime', () => {
           userMessage: 'beta',
           threadKey: 'thread-beta',
           runnerState: {
-            threadKey: 'thread-beta',
+            activeThreadKey: 'thread-beta',
+            defaultThreadKey: 'default',
             toolResultCache: [],
+            promptLayerHashes: [],
+            cachedSystemPrompt: null,
           },
           executionState: {
             sessionKey: 'agent:agent-main:thread-beta' as never,
@@ -527,7 +694,13 @@ describe('AgentTurnProcessRuntime', () => {
           stream: [],
           options: undefined,
         },
-        { id: 'req-beta', kind: 'tool.call' } as SyscallRequest,
+        {
+          id: 'req-beta',
+          kind: 'tool.call',
+          operation: 'agent.turn.tool-call-batch',
+          payload: {},
+          createdAt: Date.now(),
+        } as SyscallRequest,
         Date.now(),
       ),
     ]);
@@ -582,8 +755,11 @@ describe('AgentTurnProcessRuntime', () => {
     } as unknown as AgentRunner;
     const runtime = new AgentTurnProcessRuntime(new Map([['agent-main', runner]]));
     const runnerState: SerializedAgentRunnerState = {
-      threadKey: 'thread-no-restore',
+      activeThreadKey: 'thread-no-restore',
+      defaultThreadKey: 'operator-default-thread',
       toolResultCache: [],
+      promptLayerHashes: [],
+      cachedSystemPrompt: null,
     };
     const executionState: SerializedAgentTurnExecutionState = {
       sessionKey: 'agent:agent-main:thread-no-restore' as never,
@@ -618,7 +794,13 @@ describe('AgentTurnProcessRuntime', () => {
         executionState,
         stream: [],
       },
-      { id: 'req-llm', kind: 'llm.generate' } as SyscallRequest,
+      {
+        id: 'req-llm',
+        kind: 'llm.generate',
+        operation: 'agent.turn.generate',
+        payload: {},
+        createdAt: Date.now(),
+      } as SyscallRequest,
       Date.now(),
     );
     await runtime.executePendingSyscall(
@@ -642,7 +824,13 @@ describe('AgentTurnProcessRuntime', () => {
         },
         stream: [],
       },
-      { id: 'req-tool', kind: 'tool.call' } as SyscallRequest,
+      {
+        id: 'req-tool',
+        kind: 'tool.call',
+        operation: 'agent.turn.tool-call-batch',
+        payload: {},
+        createdAt: Date.now(),
+      } as SyscallRequest,
       Date.now(),
     );
     await runtime.executePendingSyscall(
@@ -704,6 +892,7 @@ describe('AgentTurnProcessRuntime', () => {
 
     expect(prepared.signal).toBe('YIELD');
     expect(prepared.state.phase).toBe('running');
+    expect(prepared.state.controlState).toBe('active');
     expect(prepared.state.executionState).toBeTruthy();
 
     const result = await runtime.step(prepared.state, {
@@ -716,6 +905,7 @@ describe('AgentTurnProcessRuntime', () => {
 
     expect(result.signal).toBe('WAITING_SYSCALL');
     expect(result.state.phase).toBe('waiting_llm');
+    expect(result.state.controlState).toBe('active');
     const llmSyscall = result.syscall;
     if (!llmSyscall) {
       throw new Error('expected llm syscall');
@@ -734,10 +924,78 @@ describe('AgentTurnProcessRuntime', () => {
 
     expect(completed.signal).toBe('DONE');
     expect(completed.state.phase).toBe('done');
+    expect(completed.state.controlState).toBe('done');
     expect(completed.state.result?.text).toContain('hello from runtime');
     expect(completed.state.result?.sessionKey).toContain('kernel-thread');
     expect(completed.state.stream).toHaveLength(2);
     expect(seenChunks).toHaveLength(2);
+  });
+
+  it('rejects unsupported custom syscall operations during execution', async () => {
+    const runtime = new AgentTurnProcessRuntime(
+      new Map([
+        [
+          'agent-main',
+          {
+            executeKernelLlmGenerateSyscall: vi.fn(),
+            executeKernelToolCallSyscall: vi.fn(),
+            executeKernelApprovalSyscall: vi.fn(),
+          } as unknown as AgentRunner,
+        ],
+      ]),
+    );
+
+    const resolution = await runtime.executePendingSyscall(
+      {
+        phase: 'waiting_approval',
+        runId: 'run-bad-custom',
+        agentId: 'agent-main',
+        userMessage: 'hello',
+        options: undefined,
+        threadKey: 'thread-bad-custom',
+        runnerState: {
+          activeThreadKey: 'thread-bad-custom',
+          defaultThreadKey: 'default',
+          toolResultCache: [],
+          promptLayerHashes: [],
+          cachedSystemPrompt: null,
+        },
+        executionState: {
+          sessionKey: 'agent:agent-main:thread-bad-custom' as never,
+          runId: 'run-bad-custom',
+          userMessage: 'hello',
+          model: 'fake-model',
+          maxTokens: 64,
+          systemPrompt: '',
+          messages: [],
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          totalCacheReadTokens: 0,
+          totalText: '',
+          toolRounds: 0,
+          toolFailureMessages: [],
+          finalFailureMessage: null,
+          finalFailureCode: undefined,
+          recoverableStreamRetries: 0,
+          toolLoopDetector: { lastEntry: null, consecutiveRepeats: 0 },
+          pendingToolCalls: [],
+        },
+        stream: [],
+      },
+      {
+        id: 'req-bad-custom',
+        kind: 'custom',
+        operation: 'agent.turn.unsupported-custom',
+        payload: {},
+        createdAt: Date.now(),
+      } as SyscallRequest,
+      Date.now(),
+    );
+
+    expect(resolution.ok).toBe(false);
+    expect(resolution.error?.message).toContain(
+      "Unsupported agent syscall 'custom:agent.turn.unsupported-custom'",
+    );
   });
 
   it('advances one LLM/tool round per kernel step', async () => {
@@ -835,6 +1093,95 @@ describe('AgentTurnProcessRuntime', () => {
     });
     expect(roundFour.signal).toBe('DONE');
     expect(roundFour.state.result?.text).toContain('tool loop completed');
+  });
+
+  it('fails the process step when a runner emits an unsupported custom syscall operation', async () => {
+    const executionState: SerializedAgentTurnExecutionState = {
+      sessionKey: 'agent:agent-main:bad-op-thread' as never,
+      runId: 'run-bad-op',
+      userMessage: 'hello',
+      model: 'fake-model',
+      maxTokens: 64,
+      systemPrompt: '',
+      messages: [],
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalText: '',
+      toolRounds: 0,
+      toolFailureMessages: [],
+      finalFailureMessage: null,
+      finalFailureCode: undefined,
+      recoverableStreamRetries: 0,
+      toolLoopDetector: { lastEntry: null, consecutiveRepeats: 0 },
+      pendingToolCalls: undefined,
+    };
+
+    const runner = {
+      serializeState(): SerializedAgentRunnerState {
+        return {
+          activeThreadKey: 'bad-op-thread',
+          defaultThreadKey: 'default',
+          toolResultCache: [],
+          promptLayerHashes: [],
+          cachedSystemPrompt: null,
+        };
+      },
+      syncRuntimeState() {
+        return undefined;
+      },
+      async beginKernelTurn() {
+        return executionState;
+      },
+      async continueKernelTurn() {
+        return {
+          state: executionState,
+          chunks: [],
+          done: false,
+          syscall: {
+            id: 'bad-custom',
+            kind: 'custom',
+            operation: 'agent.turn.unsupported-custom',
+            payload: {},
+            createdAt: Date.now(),
+          },
+        };
+      },
+      forceReset() {
+        return undefined;
+      },
+    } as unknown as AgentRunner;
+
+    const runtime = new AgentTurnProcessRuntime(new Map([['agent-main', runner]]));
+    const initialState = runtime.createInitialState({
+      agentId: 'agent-main',
+      runId: 'run-bad-op',
+      userMessage: 'hello',
+      threadKey: 'bad-op-thread',
+    });
+
+    const prepared = await runtime.step(initialState, {
+      pid: 'pid-bad-op' as never,
+      now: Date.now(),
+      runCount: 0,
+      retryCount: 0,
+      metadata: {},
+    });
+    expect(prepared.signal).toBe('YIELD');
+
+    const result = await runtime.step(prepared.state, {
+      pid: 'pid-bad-op' as never,
+      now: Date.now(),
+      runCount: 1,
+      retryCount: 0,
+      metadata: {},
+    });
+
+    expect(result.signal).toBe('ERROR');
+    expect(result.state.phase).toBe('error');
+    expect(result.error?.message).toContain(
+      "Unsupported agent syscall 'custom:agent.turn.unsupported-custom'",
+    );
   });
 
   it('suspends on approval before executing a gated tool call', async () => {
@@ -1228,6 +1575,7 @@ describe('AgentTurnProcessRuntime', () => {
     const suspendedSnapshot = kernel.getSnapshot('run-llm-suspend' as never);
     expect(suspendedSnapshot?.status).toBe('suspended');
     expect((suspendedSnapshot?.state as { phase?: string }).phase).toBe('suspended');
+    expect((suspendedSnapshot?.state as { controlState?: string }).controlState).toBe('suspended');
     expect((suspendedSnapshot?.state as { error?: { code?: string } }).error?.code).toBe(
       'AGENT_LLM_RESOURCE_BLOCKED',
     );

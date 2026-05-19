@@ -760,7 +760,6 @@ describe('scheduler RPC summaries', () => {
       startedAt: Date.now(),
       agentId: 'agent-main',
       agentRunId: 'agent-run-1',
-      agentRunStatus: 'running',
     });
 
     const response = await dispatchRpc(
@@ -783,7 +782,77 @@ describe('scheduler RPC summaries', () => {
     expect(await readScheduledTasksFile(dataDir)).toEqual([]);
   });
 
-  it('scheduler.resume resumes a suspended delegated agent run and persists the same runId', async () => {
+  it('scheduler.running refreshes delegated run state from agent kernel and prunes terminal entries', async () => {
+    const dataDir = await createTempDir();
+    vi.spyOn(agentKernelModule, 'getAgentKernelService').mockResolvedValue({
+      getRun: vi.fn((runId: string) => {
+        if (runId === 'agent-run-live') {
+          return {
+            runId,
+            agentId: 'agent-main',
+            threadKey: 'default',
+            processStatus: 'suspended',
+            phase: 'suspended',
+            controlState: 'suspended',
+            createdAt: 1,
+            updatedAt: 2,
+          };
+        }
+        if (runId === 'agent-run-done') {
+          return {
+            runId,
+            agentId: 'agent-main',
+            threadKey: 'default',
+            processStatus: 'done',
+            phase: 'done',
+            controlState: 'done',
+            createdAt: 1,
+            updatedAt: 2,
+          };
+        }
+        return null;
+      }),
+    } as never);
+
+    const ctx = createRpcContext(dataDir);
+    ctx.runningTasks.set('task-live', {
+      taskId: 'task-live',
+      taskName: 'Live task',
+      startedAt: Date.now(),
+      agentId: 'agent-main',
+      agentRunId: 'agent-run-live',
+    });
+    ctx.runningTasks.set('task-done', {
+      taskId: 'task-done',
+      taskName: 'Finished task',
+      startedAt: Date.now(),
+      agentId: 'agent-main',
+      agentRunId: 'agent-run-done',
+    });
+
+    const response = await dispatchRpc({ id: 10, method: 'scheduler.running' }, ctx);
+
+    expect(response.error).toBeUndefined();
+    expect(response.result).toEqual({
+      running: [
+        expect.objectContaining({
+          taskId: 'task-live',
+          agentRunId: 'agent-run-live',
+          status: 'suspended',
+          resumable: true,
+        }),
+      ],
+    });
+    expect(ctx.runningTasks.get('task-live')).toEqual(
+      expect.objectContaining({
+        taskId: 'task-live',
+        agentRunId: 'agent-run-live',
+      }),
+    );
+    expect(ctx.runningTasks.has('task-done')).toBe(false);
+  });
+
+  it('scheduler.resume uses the kernel lifecycle state instead of stale running-task status', async () => {
     const dataDir = await createTempDir();
     await writeScheduledTasksFile(dataDir, [
       {
@@ -804,7 +873,16 @@ describe('scheduler RPC summaries', () => {
     vi.spyOn(agentKernelModule, 'getAgentKernelService').mockResolvedValue({
       resumeTurn,
       waitForRun,
-      getRun: vi.fn(() => null),
+      getRun: vi.fn(() => ({
+        runId: 'agent-run-2',
+        agentId: 'agent-main',
+        threadKey: 'default',
+        processStatus: 'suspended',
+        phase: 'suspended',
+        controlState: 'suspended',
+        createdAt: 1,
+        updatedAt: 2,
+      })),
     } as never);
 
     const ctx = createRpcContext(dataDir);
@@ -814,11 +892,10 @@ describe('scheduler RPC summaries', () => {
       startedAt: Date.now(),
       agentId: 'agent-main',
       agentRunId: 'agent-run-2',
-      agentRunStatus: 'suspended',
     });
 
     const response = await dispatchRpc(
-      { id: 10, method: 'scheduler.resume', params: { taskId: 'task-resume-active' } },
+      { id: 11, method: 'scheduler.resume', params: { taskId: 'task-resume-active' } },
       ctx,
     );
 

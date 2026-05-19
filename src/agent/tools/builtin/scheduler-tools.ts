@@ -4,9 +4,10 @@ import { ulid } from 'ulid';
 import { createLogger } from '../../../core/logger.js';
 import type { CronScheduler } from '../../../scheduler/cron.js';
 import {
+  type ScheduledAgentActiveRunStatus,
+  type ScheduledAgentRunStatus,
   appendScheduledTaskHistoryRecord,
-  buildScheduledTaskExecutionSummaryById,
-  readScheduledTaskHistory,
+  getScheduledTaskExecutionSummaryById,
 } from '../../../scheduler/task-history.js';
 import {
   abortAgentTurnViaKernel,
@@ -16,6 +17,8 @@ import {
   waitForAgentTurnViaKernel,
 } from '../../kernel-turn-executor.js';
 import type { AgentRunner } from '../../runner.js';
+import { executeDelegatedAgentRun } from '../../scheduled-agent-run.js';
+import { deriveAgentTurnControlState } from '../../turn-run-state.js';
 import type { RegisteredTool } from '../registry.js';
 import {
   type ScheduledTaskRecord,
@@ -39,19 +42,32 @@ function intervalToCron(minutes: number): string {
 interface ScheduledAgentTurnOutcome {
   text: string;
   runId: string;
-  runStatus: 'done' | 'error' | 'suspended';
+  runStatus: ScheduledAgentRunStatus;
 }
 
 interface ActiveScheduledRun {
   agentId: string;
   runId: string;
-  runStatus: 'running' | 'suspended';
+  runStatus: ScheduledAgentActiveRunStatus;
 }
 
 interface ScheduledRunFinalizeOptions {
   runKey: string;
   startedAt: number;
   countAsNewExecution: boolean;
+}
+
+function deriveActiveScheduledRunStatus(
+  run: Parameters<typeof deriveAgentTurnControlState>[0],
+): ScheduledAgentActiveRunStatus | null {
+  const controlState = deriveAgentTurnControlState(run);
+  if (controlState === 'suspended') {
+    return 'suspended';
+  }
+  if (controlState === 'done' || controlState === 'error') {
+    return null;
+  }
+  return 'running';
 }
 
 /** Drain an AgentRunner turn and preserve the delegated run metadata. */
@@ -63,41 +79,26 @@ async function runTurn(
   dataDir: string,
   runId: string,
 ): Promise<ScheduledAgentTurnOutcome> {
-  try {
-    const result = await executeAgentTurnViaKernel({
-      runners: new Map([[agentId, runner]]),
-      dataDir,
-      input: {
-        runId,
-        agentId,
-        userMessage: message,
-        threadKey: thread,
-      },
-    });
-    return {
-      text: result.text || '(no output)',
-      runId,
-      runStatus: 'done',
-    };
-  } catch (err) {
-    const current = await getAgentTurnRunViaKernel({
-      runners: new Map([[agentId, runner]]),
-      dataDir,
-      runId,
-    });
-    if (current?.processStatus === 'suspended' || current?.phase === 'suspended') {
-      return {
-        text: current.error?.message ?? String(err),
-        runId,
-        runStatus: 'suspended',
-      };
-    }
-    return {
-      text: `Error: ${String(err)}`,
-      runId,
-      runStatus: 'error',
-    };
-  }
+  return executeDelegatedAgentRun({
+    resolveRunId: async () => runId,
+    waitForResult: async (resolvedRunId) =>
+      await executeAgentTurnViaKernel({
+        runners: new Map([[agentId, runner]]),
+        dataDir,
+        input: {
+          runId: resolvedRunId,
+          agentId,
+          userMessage: message,
+          threadKey: thread,
+        },
+      }),
+    readRun: async (resolvedRunId) =>
+      await getAgentTurnRunViaKernel({
+        runners: new Map([[agentId, runner]]),
+        dataDir,
+        runId: resolvedRunId,
+      }),
+  });
 }
 
 async function waitForTurn(
@@ -105,37 +106,31 @@ async function waitForTurn(
   runner: AgentRunner,
   dataDir: string,
   runId: string,
+  onRunState?: (runId: string) => void,
 ): Promise<ScheduledAgentTurnOutcome> {
-  try {
-    const result = await waitForAgentTurnViaKernel({
-      runners: new Map([[agentId, runner]]),
-      dataDir,
-      runId,
-    });
-    return {
-      text: result.text || '(no output)',
-      runId,
-      runStatus: 'done',
-    };
-  } catch (err) {
-    const current = await getAgentTurnRunViaKernel({
-      runners: new Map([[agentId, runner]]),
-      dataDir,
-      runId,
-    });
-    if (current?.processStatus === 'suspended' || current?.phase === 'suspended') {
-      return {
-        text: current.error?.message ?? String(err),
-        runId,
-        runStatus: 'suspended',
-      };
-    }
-    return {
-      text: `Error: ${String(err)}`,
-      runId,
-      runStatus: 'error',
-    };
-  }
+  return executeDelegatedAgentRun({
+    resolveRunId: async () => runId,
+    beforeWait: async (resolvedRunId) => {
+      await resumeAgentTurnViaKernel({
+        runners: new Map([[agentId, runner]]),
+        dataDir,
+        runId: resolvedRunId,
+      });
+    },
+    onRunState: onRunState ? ({ agentRunId }) => onRunState(agentRunId) : undefined,
+    waitForResult: async (resolvedRunId) =>
+      await waitForAgentTurnViaKernel({
+        runners: new Map([[agentId, runner]]),
+        dataDir,
+        runId: resolvedRunId,
+      }),
+    readRun: async (resolvedRunId) =>
+      await getAgentTurnRunViaKernel({
+        runners: new Map([[agentId, runner]]),
+        dataDir,
+        runId: resolvedRunId,
+      }),
+  });
 }
 
 // ── task metadata store (persistent JSON) ─────────────────────────────────
@@ -254,6 +249,32 @@ export function createSchedulerTools(
     return created;
   })();
 
+  async function refreshActiveRun(taskId: string): Promise<ActiveScheduledRun | null> {
+    const activeRun = activeRuns.get(taskId);
+    if (!activeRun) {
+      return null;
+    }
+    const current = await getAgentTurnRunViaKernel({
+      runners: new Map([[activeRun.agentId, runners.get(activeRun.agentId) as AgentRunner]]),
+      dataDir,
+      runId: activeRun.runId,
+    });
+    if (!current) {
+      return activeRun;
+    }
+    const runStatus = deriveActiveScheduledRunStatus(current);
+    if (!runStatus) {
+      activeRuns.delete(taskId);
+      return null;
+    }
+    if (activeRun.runStatus === runStatus) {
+      return activeRun;
+    }
+    const refreshed = { ...activeRun, runStatus };
+    activeRuns.set(taskId, refreshed);
+    return refreshed;
+  }
+
   async function finalizeTaskRun(
     current: ScheduledTaskRecord,
     outcome: ScheduledAgentTurnOutcome,
@@ -361,7 +382,7 @@ export function createSchedulerTools(
           return;
         }
 
-        const existingActiveRun = activeRuns.get(meta.id);
+        const existingActiveRun = await refreshActiveRun(meta.id);
         if (existingActiveRun) {
           logger.info('Scheduled task skipped because previous run is still active', {
             taskId: meta.id,
@@ -553,35 +574,35 @@ export function createSchedulerTools(
       if (taskStore.size() === 0) {
         return { isError: false, content: 'No scheduled tasks.' };
       }
-      const summaryByTaskId = buildScheduledTaskExecutionSummaryById(
-        await readScheduledTaskHistory(dataDir),
+      const summaryByTaskId = await getScheduledTaskExecutionSummaryById(dataDir);
+      const lines = await Promise.all(
+        taskStore.all().map(async (m) => {
+          const summary = summaryByTaskId.get(m.id);
+          const activeRun = await refreshActiveRun(m.id);
+          const lastRunAt = summary?.lastRunAt;
+          const lastResult = summary?.lastResult;
+          const lastAgentRunId = summary?.lastAgentRunId;
+          const lastAgentRunStatus = summary?.lastAgentRunStatus;
+          const lastRun = lastRunAt ? new Date(lastRunAt).toLocaleString() : 'never';
+          const cronJob = scheduler.get(m.id);
+          const nextRun = cronJob?.nextRunAt ? new Date(cronJob.nextRunAt).toLocaleString() : 'n/a';
+          return [
+            `[${m.id}] ${m.name}`,
+            `  agent: ${m.agentId} | cron: ${m.cronExpr} | runs: ${m.runCount}`,
+            `  last: ${lastRun} | next: ${nextRun}`,
+            activeRun
+              ? `  current agent run: ${activeRun.runStatus} | runId: ${activeRun.runId}`
+              : '',
+            lastAgentRunStatus
+              ? `  last agent run: ${lastAgentRunStatus} | runId: ${lastAgentRunId ?? 'n/a'}`
+              : '',
+            m.reportTo ? `  reports to: ${m.reportTo}` : '',
+            lastResult ? `  last result preview: ${lastResult.slice(0, 80)}…` : '',
+          ]
+            .filter(Boolean)
+            .join('\n');
+        }),
       );
-      const lines = taskStore.all().map((m) => {
-        const summary = summaryByTaskId.get(m.id);
-        const activeRun = activeRuns.get(m.id);
-        const lastRunAt = summary?.lastRunAt;
-        const lastResult = summary?.lastResult;
-        const lastAgentRunId = summary?.lastAgentRunId;
-        const lastAgentRunStatus = summary?.lastAgentRunStatus;
-        const lastRun = lastRunAt ? new Date(lastRunAt).toLocaleString() : 'never';
-        const cronJob = scheduler.get(m.id);
-        const nextRun = cronJob?.nextRunAt ? new Date(cronJob.nextRunAt).toLocaleString() : 'n/a';
-        return [
-          `[${m.id}] ${m.name}`,
-          `  agent: ${m.agentId} | cron: ${m.cronExpr} | runs: ${m.runCount}`,
-          `  last: ${lastRun} | next: ${nextRun}`,
-          activeRun
-            ? `  current agent run: ${activeRun.runStatus} | runId: ${activeRun.runId}`
-            : '',
-          lastAgentRunStatus
-            ? `  last agent run: ${lastAgentRunStatus} | runId: ${lastAgentRunId ?? 'n/a'}`
-            : '',
-          m.reportTo ? `  reports to: ${m.reportTo}` : '',
-          lastResult ? `  last result preview: ${lastResult.slice(0, 80)}…` : '',
-        ]
-          .filter(Boolean)
-          .join('\n');
-      });
       return { isError: false, content: lines.join('\n\n') };
     },
   };
@@ -605,7 +626,7 @@ export function createSchedulerTools(
       if (!meta) {
         return { isError: true, content: `Task '${task_id}' not found.` };
       }
-      const activeRun = activeRuns.get(task_id);
+      const activeRun = await refreshActiveRun(task_id);
       if (!activeRun || activeRun.runStatus !== 'suspended') {
         return {
           isError: true,
@@ -620,19 +641,20 @@ export function createSchedulerTools(
         };
       }
 
-      await resumeAgentTurnViaKernel({
-        runners: new Map([[activeRun.agentId, runner]]),
-        dataDir,
-        runId: activeRun.runId,
-      });
-      activeRuns.set(task_id, {
-        agentId: activeRun.agentId,
-        runId: activeRun.runId,
-        runStatus: 'running',
-      });
-
       const resumedAt = Date.now();
-      const resumedOutcome = await waitForTurn(activeRun.agentId, runner, dataDir, activeRun.runId);
+      const resumedOutcome = await waitForTurn(
+        activeRun.agentId,
+        runner,
+        dataDir,
+        activeRun.runId,
+        (resolvedRunId) => {
+          activeRuns.set(task_id, {
+            agentId: activeRun.agentId,
+            runId: resolvedRunId,
+            runStatus: 'running',
+          });
+        },
+      );
       await finalizeTaskRun(meta, resumedOutcome, {
         runKey: `sched-${task_id}-resume-${resumedAt}`,
         startedAt: resumedAt,
@@ -682,7 +704,7 @@ export function createSchedulerTools(
       if (!meta) {
         return { isError: true, content: `Task '${task_id}' not found.` };
       }
-      const activeRun = activeRuns.get(task_id);
+      const activeRun = await refreshActiveRun(task_id);
       if (activeRun) {
         const activeRunner = runners.get(activeRun.agentId);
         try {

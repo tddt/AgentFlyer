@@ -16,6 +16,7 @@ import {
   waitForAgentTurnViaKernel,
 } from '../kernel-turn-executor.js';
 import type { AgentRunner } from '../runner.js';
+import { isSuspendedAgentTurnRun } from '../turn-run-state.js';
 import type { RegisteredTool } from './registry.js';
 
 const logger = createLogger('tools:mesh');
@@ -290,7 +291,7 @@ export function createMeshTools(
           dataDir,
           runId,
         });
-        if (current?.processStatus === 'suspended' || current?.phase === 'suspended') {
+        if (current && isSuspendedAgentTurnRun(current)) {
           taskStore.update(taskId, {
             status: 'suspended',
             error: current.error?.message ?? String(err),

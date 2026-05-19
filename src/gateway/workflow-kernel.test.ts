@@ -42,26 +42,31 @@ function createRunner(): AgentRunner {
   let threadKey = 'default';
   let activeRunId: string | null = null;
   return {
-    setThread(nextThreadKey: string) {
+    setDefaultThread(nextThreadKey: string) {
       threadKey = nextThreadKey;
       return undefined;
     },
     serializeState() {
       return {
-        threadKey,
+        activeThreadKey: activeRunId ? threadKey : threadKey,
+        defaultThreadKey: threadKey,
         promptLayerHashes: [],
         cachedSystemPrompt: null,
         toolResultCache: [],
       };
     },
-    restoreState(state: { threadKey: string }) {
-      threadKey = state.threadKey;
+    restoreState(state: {
+      activeThreadKey?: string;
+      defaultThreadKey?: string;
+      threadKey?: string;
+    }) {
+      threadKey = state.defaultThreadKey ?? state.activeThreadKey ?? state.threadKey ?? 'default';
     },
     syncRuntimeState(nextThreadKey: string, runId: string | null) {
       threadKey = nextThreadKey;
       activeRunId = runId;
     },
-    get currentSessionKey() {
+    get defaultSessionKey() {
       return `agent:agent-main:${threadKey}`;
     },
     get isRunning() {
@@ -125,26 +130,31 @@ function createHungRunner(): AgentRunner {
   let threadKey = 'default';
   let activeRunId: string | null = null;
   return {
-    setThread(nextThreadKey: string) {
+    setDefaultThread(nextThreadKey: string) {
       threadKey = nextThreadKey;
       return undefined;
     },
     serializeState() {
       return {
-        threadKey,
+        activeThreadKey: threadKey,
+        defaultThreadKey: threadKey,
         promptLayerHashes: [],
         cachedSystemPrompt: null,
         toolResultCache: [],
       };
     },
-    restoreState(state: { threadKey: string }) {
-      threadKey = state.threadKey;
+    restoreState(state: {
+      activeThreadKey?: string;
+      defaultThreadKey?: string;
+      threadKey?: string;
+    }) {
+      threadKey = state.defaultThreadKey ?? state.activeThreadKey ?? state.threadKey ?? 'default';
     },
     syncRuntimeState(nextThreadKey: string, runId: string | null) {
       threadKey = nextThreadKey;
       activeRunId = runId;
     },
-    get currentSessionKey() {
+    get defaultSessionKey() {
       return `agent:agent-main:${threadKey}`;
     },
     get isRunning() {
@@ -198,26 +208,31 @@ function createQueuedRunner(): {
   });
 
   const runner = {
-    setThread(nextThreadKey: string) {
+    setDefaultThread(nextThreadKey: string) {
       threadKey = nextThreadKey;
       return undefined;
     },
     serializeState() {
       return {
-        threadKey,
+        activeThreadKey: threadKey,
+        defaultThreadKey: threadKey,
         promptLayerHashes: [],
         cachedSystemPrompt: null,
         toolResultCache: [],
       };
     },
-    restoreState(state: { threadKey: string }) {
-      threadKey = state.threadKey;
+    restoreState(state: {
+      activeThreadKey?: string;
+      defaultThreadKey?: string;
+      threadKey?: string;
+    }) {
+      threadKey = state.defaultThreadKey ?? state.activeThreadKey ?? state.threadKey ?? 'default';
     },
     syncRuntimeState(nextThreadKey: string, runId: string | null) {
       threadKey = nextThreadKey;
       activeRunId = runId;
     },
-    get currentSessionKey() {
+    get defaultSessionKey() {
       return `agent:agent-main:${threadKey}`;
     },
     get isRunning() {

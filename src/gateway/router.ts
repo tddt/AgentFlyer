@@ -4,11 +4,13 @@ import { stat } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ulid } from 'ulid';
 import { loadStats } from '../agent/stats.js';
+import { deriveAgentTurnControlState } from '../agent/turn-run-state.js';
 import { withRequestContext } from '../core/logger.js';
 import { createLogger } from '../core/logger.js';
 import { summarizeSessionErrors } from '../core/session/error-stats.js';
 import { type StreamChunk, asAgentId, parseSessionKey } from '../core/types.js';
 import { getAgentKernelService } from './agent-kernel.js';
+import type { AgentQueueSnapshot } from './agent-queue.js';
 import { isAgentQueueCancelledError } from './agent-queue.js';
 import type { AgentQueueRegistry } from './agent-queue.js';
 import { validateToken } from './auth.js';
@@ -143,6 +145,52 @@ function queryTokenFromUrl(url: string): string {
 
 function writeUnauthorized(res: ServerResponse): void {
   json(res, 401, { error: 'Unauthorized' });
+}
+
+function buildAgentActivityPayload(
+  agentId: string,
+  agentKernel: Awaited<ReturnType<typeof getAgentKernelService>>,
+  agentQueues?: AgentQueueRegistry,
+): {
+  agentId: string;
+  activity: {
+    state: 'idle' | 'running' | 'suspended';
+    busy: boolean;
+    pendingCount: number;
+    activeRun?: ReturnType<typeof agentKernel.getLatestLiveRunForAgent> extends infer T
+      ? Exclude<T, null>
+      : never;
+    queuedRuns: ReturnType<typeof agentKernel.getQueuedRunsForAgent>;
+  };
+} {
+  const queue: AgentQueueSnapshot = agentQueues?.status(agentId) ?? {
+    hasActiveTask: false,
+    pendingCount: 0,
+    busy: false,
+  };
+  const activeRun = agentKernel.getLatestLiveRunForAgent(agentId);
+  const queuedRuns = agentKernel.getQueuedRunsForAgent(agentId);
+  const activeControlState = activeRun ? deriveAgentTurnControlState(activeRun) : null;
+  const state =
+    activeControlState === 'suspended'
+      ? 'suspended'
+      : activeRun || queue.hasActiveTask
+        ? 'running'
+        : 'idle';
+  return {
+    agentId,
+    activity: {
+      state,
+      busy: queue.busy || !!activeRun || queuedRuns.length > 0,
+      pendingCount: Math.max(queue.pendingCount, queuedRuns.length),
+      activeRun: activeRun ?? undefined,
+      queuedRuns,
+    },
+  };
+}
+
+function hasRunningSchedulerTaskForAgent(ctx: RpcContext, agentId: string): boolean {
+  return Array.from(ctx.runningTasks.values()).some((task) => task.agentId === agentId);
 }
 
 async function streamContentItem(
@@ -501,6 +549,159 @@ async function _routeRequest(
       'Transfer-Encoding': 'chunked',
     });
     opts.inboxBroadcaster.subscribe(res);
+    return true;
+  }
+
+  if (url.startsWith('/api/agent-activity') && method === 'GET') {
+    const queryToken = queryTokenFromUrl(url);
+    const authCheck = validateToken(`Bearer ${queryToken}`, opts.authToken);
+    if (!authCheck.ok) {
+      writeUnauthorized(res);
+      return true;
+    }
+
+    const agentKernel = await getAgentKernelService(opts.rpcContext);
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'Transfer-Encoding': 'chunked',
+    });
+
+    const sendEvent = (data: unknown): void => {
+      try {
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+      } catch {
+        // Client already disconnected.
+      }
+    };
+
+    const initialResponse = await dispatchRpc(
+      {
+        id: 'agent-activity-stream',
+        method: 'agent.list',
+      },
+      opts.rpcContext,
+    );
+    const initialAgents =
+      'result' in initialResponse &&
+      initialResponse.result &&
+      typeof initialResponse.result === 'object' &&
+      Array.isArray((initialResponse.result as { agents?: unknown[] }).agents)
+        ? ((initialResponse.result as { agents: Array<{ agentId: string }> }).agents ?? [])
+        : [];
+    for (const agent of initialAgents) {
+      if (!agent?.agentId) {
+        continue;
+      }
+      sendEvent(buildAgentActivityPayload(agent.agentId, agentKernel, opts.agentQueues));
+    }
+
+    const sendAgentActivity = (agentId: string): void => {
+      sendEvent(buildAgentActivityPayload(agentId, agentKernel, opts.agentQueues));
+    };
+
+    const unsubscribeQueue = opts.agentQueues?.subscribe((agentId) => {
+      sendAgentActivity(agentId);
+    });
+    const unsubscribeKernel = agentKernel.subscribeActivity((agentId) => {
+      sendAgentActivity(agentId);
+    });
+    const keepAlive = setInterval(() => {
+      try {
+        res.write(': keep-alive\n\n');
+      } catch {
+        // Client already disconnected.
+      }
+    }, 15_000);
+
+    res.on('close', () => {
+      unsubscribeQueue?.();
+      unsubscribeKernel();
+      clearInterval(keepAlive);
+    });
+    return true;
+  }
+
+  if (url.startsWith('/api/scheduler-activity') && method === 'GET') {
+    const queryToken = queryTokenFromUrl(url);
+    const authCheck = validateToken(`Bearer ${queryToken}`, opts.authToken);
+    if (!authCheck.ok) {
+      writeUnauthorized(res);
+      return true;
+    }
+
+    const agentKernel = await getAgentKernelService(opts.rpcContext);
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'Transfer-Encoding': 'chunked',
+    });
+
+    const sendEvent = (data: unknown): void => {
+      try {
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+      } catch {
+        // Client already disconnected.
+      }
+    };
+
+    const sendSnapshot = async (): Promise<void> => {
+      try {
+        const response = await dispatchRpc(
+          {
+            id: 'scheduler-activity-stream',
+            method: 'scheduler.running',
+          },
+          opts.rpcContext,
+        );
+        if (!('result' in response) || !response.result) {
+          sendEvent({ running: [] });
+          return;
+        }
+        sendEvent(response.result);
+      } catch {
+        sendEvent({ running: [] });
+      }
+    };
+
+    let snapshotQueued = false;
+    const queueSnapshot = (): void => {
+      if (snapshotQueued) {
+        return;
+      }
+      snapshotQueued = true;
+      queueMicrotask(() => {
+        snapshotQueued = false;
+        void sendSnapshot();
+      });
+    };
+
+    await sendSnapshot();
+
+    const unsubscribeScheduler = opts.rpcContext.schedulerActivity?.subscribe(() => {
+      queueSnapshot();
+    });
+    const unsubscribeKernel = agentKernel.subscribeActivity((agentId) => {
+      if (!hasRunningSchedulerTaskForAgent(opts.rpcContext, agentId)) {
+        return;
+      }
+      queueSnapshot();
+    });
+    const keepAlive = setInterval(() => {
+      try {
+        res.write(': keep-alive\n\n');
+      } catch {
+        // Client already disconnected.
+      }
+    }, 15_000);
+
+    res.on('close', () => {
+      unsubscribeScheduler?.();
+      unsubscribeKernel();
+      clearInterval(keepAlive);
+    });
     return true;
   }
 

@@ -10,6 +10,14 @@ import {
 import type { RunnerOptions, TurnResult } from '../agent/runner.js';
 import type { AgentRunner } from '../agent/runner.js';
 import {
+  deriveAgentTurnControlState,
+  deriveAgentTurnRunRecord,
+  getAgentTurnCompletionOutcome,
+  isSuspendedAgentTurnRun,
+  isTerminalAgentTurnRun,
+  shouldRetainAgentTurnRunRecord,
+} from '../agent/turn-run-state.js';
+import {
   AgentKernel,
   JsonFileCheckpointStore,
   type KernelProcessSnapshot,
@@ -22,23 +30,6 @@ import { asProcessId } from '../core/types.js';
 
 const logger = createLogger('gateway:agent-kernel');
 const MAX_RUN_RECORDS = 200;
-
-function isArchivedRunRecord(record: AgentKernelRunRecord): boolean {
-  return (
-    record.processStatus === 'done' ||
-    record.processStatus === 'error' ||
-    record.phase === 'done' ||
-    record.phase === 'error'
-  );
-}
-
-function shouldCacheCompletionOutcome(record: AgentKernelRunRecord): boolean {
-  return (
-    isArchivedRunRecord(record) ||
-    record.processStatus === 'suspended' ||
-    record.phase === 'suspended'
-  );
-}
 
 class AgentKernelRunRecordStore {
   private readonly filePath: string;
@@ -90,6 +81,7 @@ export interface AgentKernelRunRecord {
   threadKey: string;
   processStatus: ProcessStatus;
   phase: AgentTurnProcessState['phase'];
+  controlState?: import('../agent/turn-run-state.js').AgentTurnControlState;
   createdAt: number;
   updatedAt: number;
   result?: TurnResult;
@@ -102,6 +94,7 @@ export interface AgentActiveRunSummary {
   threadKey: string;
   processStatus: ProcessStatus;
   phase: AgentTurnProcessState['phase'];
+  controlState?: import('../agent/turn-run-state.js').AgentTurnControlState;
   createdAt: number;
   updatedAt: number;
   sessionKey?: string;
@@ -113,6 +106,7 @@ export interface AgentQueuedRunSummary {
   threadKey: string;
   processStatus: ProcessStatus;
   phase: AgentTurnProcessState['phase'];
+  controlState?: import('../agent/turn-run-state.js').AgentTurnControlState;
   createdAt: number;
   updatedAt: number;
 }
@@ -148,6 +142,7 @@ export class AgentKernelService {
     Array<{ resolve: (result: TurnResult) => void; reject: (error: Error) => void }>
   >();
   private readonly finalizing = new Set<string>();
+  private readonly activitySubscribers = new Set<(agentId: string) => void>();
   // RATIONALE: Tracks PIDs of processes whose syscall (LLM/tool call) is
   // currently executing as a background task, so firePendingSyscalls() does not
   // re-fire the same syscall a second time if the pump runs again while the
@@ -166,7 +161,7 @@ export class AgentKernelService {
     const loadedRecords = this.runRecordStore.load();
     let prunedLegacyLiveRecord = false;
     for (const record of loadedRecords) {
-      if (!isArchivedRunRecord(record)) {
+      if (!isTerminalAgentTurnRun(record)) {
         prunedLegacyLiveRecord = true;
         continue;
       }
@@ -244,6 +239,7 @@ export class AgentKernelService {
       throw error;
     }
     this.schedulePump(0);
+    this.publishActivity(input.agentId);
     return { runId };
   }
 
@@ -258,9 +254,11 @@ export class AgentKernelService {
       threadKey,
       processStatus: 'waiting',
       phase: 'pending',
+      controlState: 'queued',
       createdAt: now,
       updatedAt: now,
     });
+    this.publishActivity(input.agentId);
     return { runId };
   }
 
@@ -310,6 +308,7 @@ export class AgentKernelService {
       threadKey: '',
       processStatus: 'error',
       phase: 'error',
+      controlState: 'error',
       createdAt: snapshot.createdAt,
       updatedAt: Date.now(),
       error: {
@@ -319,7 +318,12 @@ export class AgentKernelService {
       },
     };
     this.rememberRunRecord(cancelledRecord);
-    void this.kernel.deleteProcess(pid).catch(() => {});
+    void this.kernel
+      .deleteProcess(pid)
+      .catch(() => {})
+      .finally(() => {
+        this.publishActivity(cancelledRecord.agentId);
+      });
     this.completeRun(runId, { ok: false, message: 'Run cancelled before execution.' });
     this.activeSyscalls.delete(pid);
     return cancelledRecord;
@@ -342,6 +346,7 @@ export class AgentKernelService {
         threadKey: '',
         processStatus: 'error',
         phase: 'error',
+        controlState: 'error',
         createdAt: snapshot.createdAt,
         updatedAt: Date.now(),
         error: {
@@ -352,7 +357,12 @@ export class AgentKernelService {
       };
       this.rememberRunRecord(errorRecord);
       // Delete the kernel process so the pump doesn't keep it alive
-      void this.kernel.deleteProcess(pid).catch(() => {});
+      void this.kernel
+        .deleteProcess(pid)
+        .catch(() => {})
+        .finally(() => {
+          this.publishActivity(errorRecord.agentId);
+        });
     }
     // Resolve all completion waiters with the error
     this.completeRun(runId, {
@@ -438,6 +448,7 @@ export class AgentKernelService {
       threadKey: current.threadKey,
       processStatus: current.processStatus,
       phase: current.phase,
+      controlState: current.controlState,
       createdAt: current.createdAt,
       updatedAt: current.updatedAt,
       sessionKey: current.sessionKey,
@@ -454,6 +465,7 @@ export class AgentKernelService {
         threadKey: record.threadKey,
         processStatus: record.processStatus,
         phase: record.phase,
+        controlState: record.controlState,
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
       }));
@@ -470,6 +482,7 @@ export class AgentKernelService {
       ...queued,
       processStatus: 'error',
       phase: 'error',
+      controlState: 'error',
       updatedAt: Date.now(),
       error: {
         code: 'AGENT_TURN_CANCELLED',
@@ -478,19 +491,30 @@ export class AgentKernelService {
       },
     };
     this.rememberRunRecord(cancelledRecord);
+    this.publishActivity(cancelledRecord.agentId);
     return cancelledRecord;
   }
 
   async abortTurn(runId: string, message: string): Promise<void> {
     await this.initialize();
     const snapshot = this.kernel.getSnapshot(asProcessId(runId));
+    let activityAgentId = snapshot?.metadata.agentId ?? '';
     if (snapshot) {
       try {
         const state = this.snapshotToState(snapshot);
         const agentId = state?.agentId ?? snapshot.metadata.agentId ?? '';
+        activityAgentId = agentId;
         const runner = this.runners.get(agentId);
         if (runner && state) {
-          runner.syncRuntimeState(state.threadKey, runId, state.runnerState.toolResultCache);
+          runner.syncRuntimeState(
+            state.threadKey,
+            runId,
+            state.runnerState.toolResultCache,
+            state.runnerState.promptLayerHashes,
+            state.runnerState.cachedSystemPrompt,
+            state.runnerState.defaultThreadKey,
+            'kernel',
+          );
           runner.forceReset(runId);
         }
         this.rememberRunRecord({
@@ -499,6 +523,7 @@ export class AgentKernelService {
           threadKey: state?.threadKey ?? '',
           processStatus: 'error',
           phase: 'error',
+          controlState: 'error',
           createdAt: snapshot.createdAt,
           updatedAt: Date.now(),
           error: {
@@ -512,6 +537,7 @@ export class AgentKernelService {
       }
       await this.kernel.deleteProcess(snapshot.pid);
       this.activeSyscalls.delete(snapshot.pid);
+      this.publishActivity(activityAgentId);
     }
     this.completeRun(runId, { ok: false, message });
   }
@@ -528,7 +554,8 @@ export class AgentKernelService {
     if (!current) {
       return null;
     }
-    if (current.processStatus === 'waiting' && current.phase === 'pending') {
+    const controlState = deriveAgentTurnControlState(current);
+    if (controlState === 'queued') {
       options?.cancelPending?.(current.agentId, runId);
       const cancelled = await this.cancelQueuedTurn(runId);
       return {
@@ -538,7 +565,7 @@ export class AgentKernelService {
         run: cancelled ?? current,
       };
     }
-    if (current.processStatus === 'ready') {
+    if (controlState === 'ready') {
       const cancelled = this.cancelReadyRun(runId);
       return {
         cancelled: Boolean(cancelled),
@@ -583,7 +610,15 @@ export class AgentKernelService {
     const resumed = await this.kernel.resumeProcess(pid);
     const record = this.snapshotToRunRecord(resumed);
     this.schedulePump(0);
+    this.publishActivity(record.agentId);
     return record;
+  }
+
+  subscribeActivity(listener: (agentId: string) => void): () => void {
+    this.activitySubscribers.add(listener);
+    return () => {
+      this.activitySubscribers.delete(listener);
+    };
   }
 
   subscribeRun(runId: string, listener: (chunk: StreamChunk) => void): () => void {
@@ -646,6 +681,15 @@ export class AgentKernelService {
     }
     for (const listener of listeners) {
       listener(chunk);
+    }
+  }
+
+  private publishActivity(agentId?: string): void {
+    if (!agentId) {
+      return;
+    }
+    for (const listener of this.activitySubscribers) {
+      listener(agentId);
     }
   }
 
@@ -873,16 +917,19 @@ export class AgentKernelService {
   ): void {
     const runId = String(snapshot.pid);
     if (
-      previousRecord?.processStatus === 'suspended' &&
+      previousRecord &&
+      isSuspendedAgentTurnRun(previousRecord) &&
       previousRecord.updatedAt === snapshot.updatedAt
     ) {
       return;
     }
     const state = this.snapshotToState(snapshot);
+    const agentId = state?.agentId ?? snapshot.metadata.agentId ?? '';
     const suspendMsg = state?.error?.message ?? 'Agent turn suspended';
     this.publishChunk(runId, { type: 'text_delta', text: `⚠️ ${suspendMsg}` });
     this.publishChunk(runId, { type: 'error', message: suspendMsg });
     this.completeRun(runId, { ok: false, message: suspendMsg });
+    this.publishActivity(agentId);
   }
 
   private async finalizeSnapshot(
@@ -895,9 +942,11 @@ export class AgentKernelService {
     this.finalizing.add(runId);
     try {
       const state = this.snapshotToState(snapshot);
+      const agentId = state?.agentId ?? snapshot.metadata.agentId ?? '';
       if (!state) {
         this.completeRun(runId, { ok: false, message: 'Agent turn state is unavailable' });
         await this.kernel.deleteProcess(snapshot.pid);
+        this.publishActivity(agentId);
         return;
       }
       this.rememberRunRecord(
@@ -928,6 +977,7 @@ export class AgentKernelService {
         this.completeRun(runId, { ok: false, message: failMsg });
       }
       await this.kernel.deleteProcess(snapshot.pid);
+      this.publishActivity(agentId);
     } finally {
       this.finalizing.delete(runId);
     }
@@ -965,24 +1015,7 @@ export class AgentKernelService {
 
   private getArchivedCompletionOutcome(runId: string): CompletionOutcome | null {
     const record = this.runRecords.get(runId);
-    if (!record) {
-      return null;
-    }
-    if (record.phase === 'done' && record.result) {
-      return { ok: true, result: record.result };
-    }
-    if (
-      record.processStatus === 'error' ||
-      record.processStatus === 'suspended' ||
-      record.phase === 'error' ||
-      record.phase === 'suspended'
-    ) {
-      return {
-        ok: false,
-        message: record.error?.message ?? 'Agent turn failed',
-      };
-    }
-    return null;
+    return record ? getAgentTurnCompletionOutcome(record) : null;
   }
 
   private snapshotToState(
@@ -1005,23 +1038,11 @@ export class AgentKernelService {
   private snapshotToRunRecord(
     snapshot: ReturnType<AgentKernel['getSnapshot']> extends infer T ? Exclude<T, null> : never,
   ): AgentKernelRunRecord {
-    const state = this.snapshotToState(snapshot);
-    return {
-      runId: String(snapshot.pid),
-      agentId: state?.agentId ?? snapshot.metadata.agentId ?? '',
-      threadKey: state?.threadKey ?? '',
-      processStatus: snapshot.status,
-      phase: state?.phase ?? (snapshot.status === 'suspended' ? 'suspended' : 'error'),
-      createdAt: snapshot.createdAt,
-      updatedAt: snapshot.updatedAt,
-      result: state?.result,
-      sessionKey: state?.result?.sessionKey,
-      error: state?.error ?? snapshot.lastError,
-    };
+    return deriveAgentTurnRunRecord(snapshot, this.snapshotToState(snapshot));
   }
 
   private rememberRunRecord(record: AgentKernelRunRecord, persist = true): AgentKernelRunRecord {
-    if (!shouldCacheCompletionOutcome(record)) {
+    if (!shouldRetainAgentTurnRunRecord(record)) {
       this.runRecords.delete(record.runId);
       return record;
     }
@@ -1033,7 +1054,7 @@ export class AgentKernelService {
       }
       this.runRecords.delete(oldest);
     }
-    if (persist && isArchivedRunRecord(record)) {
+    if (persist && isTerminalAgentTurnRun(record)) {
       void this.runRecordStore.save(this.runRecords.values());
     }
     return record;

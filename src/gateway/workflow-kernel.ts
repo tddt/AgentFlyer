@@ -6,6 +6,7 @@ import {
   waitForAgentTurnViaKernel,
 } from '../agent/kernel-turn-executor.js';
 import type { AgentRunner } from '../agent/runner.js';
+import { deriveAgentTurnControlState } from '../agent/turn-run-state.js';
 import {
   AgentKernel,
   JsonFileCheckpointStore,
@@ -192,7 +193,7 @@ export class WorkflowKernelService {
               delegatedAgentId: request.agentId,
               delegatedRunId,
               delegatedRunStatus:
-                current?.processStatus === 'suspended' || current?.phase === 'suspended'
+                current && deriveAgentTurnControlState(current) === 'suspended'
                   ? ('suspended' as const)
                   : ('error' as const),
             });

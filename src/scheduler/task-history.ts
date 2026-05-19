@@ -2,6 +2,18 @@ import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+export type ScheduledAgentRunStatus = 'done' | 'error' | 'suspended';
+
+export type ScheduledAgentActiveRunStatus = 'running' | 'suspended';
+
+interface ScheduledTaskHistoryState {
+  loadPromise: Promise<void> | null;
+  history: ScheduledTaskRunRecord[];
+  summaryByTaskId: Map<string, ScheduledTaskExecutionSummaryData>;
+}
+
+const sharedScheduledTaskHistoryStates = new Map<string, ScheduledTaskHistoryState>();
+
 export interface ScheduledTaskRunRecord {
   taskId: string;
   taskName: string;
@@ -12,7 +24,7 @@ export interface ScheduledTaskRunRecord {
   result: string;
   agentId?: string;
   agentRunId?: string;
-  agentRunStatus?: 'done' | 'error' | 'suspended';
+  agentRunStatus?: ScheduledAgentRunStatus;
   workflowId?: string;
   workflowRunId?: string;
   deliverableId?: string;
@@ -22,29 +34,66 @@ export interface ScheduledTaskExecutionSummaryData {
   lastRunAt: number;
   lastResult: string;
   lastAgentRunId?: string;
-  lastAgentRunStatus?: 'done' | 'error' | 'suspended';
+  lastAgentRunStatus?: ScheduledAgentRunStatus;
   latestDeliverableId?: string;
 }
 
 const HISTORY_MAX_PER_TASK = 50;
 const HISTORY_MAX_TOTAL = 1000;
 
-export async function readScheduledTaskHistory(dataDir: string): Promise<ScheduledTaskRunRecord[]> {
-  const file = join(dataDir, 'task-run-history.json');
-  if (!existsSync(file)) return [];
-  try {
-    return JSON.parse(await readFile(file, 'utf-8')) as ScheduledTaskRunRecord[];
-  } catch {
-    return [];
+function historyFilePath(dataDir: string): string {
+  return join(dataDir, 'task-run-history.json');
+}
+
+function getScheduledTaskHistoryState(dataDir: string): ScheduledTaskHistoryState {
+  const existing = sharedScheduledTaskHistoryStates.get(dataDir);
+  if (existing) {
+    return existing;
   }
+  const created: ScheduledTaskHistoryState = {
+    loadPromise: null,
+    history: [],
+    summaryByTaskId: new Map(),
+  };
+  sharedScheduledTaskHistoryStates.set(dataDir, created);
+  return created;
+}
+
+async function ensureScheduledTaskHistoryState(
+  dataDir: string,
+): Promise<ScheduledTaskHistoryState> {
+  const state = getScheduledTaskHistoryState(dataDir);
+  if (!state.loadPromise) {
+    state.loadPromise = (async () => {
+      const file = historyFilePath(dataDir);
+      if (!existsSync(file)) {
+        state.history = [];
+        state.summaryByTaskId = new Map();
+        return;
+      }
+      try {
+        state.history = JSON.parse(await readFile(file, 'utf-8')) as ScheduledTaskRunRecord[];
+      } catch {
+        state.history = [];
+      }
+      state.summaryByTaskId = buildScheduledTaskExecutionSummaryById(state.history);
+    })();
+  }
+  await state.loadPromise;
+  return state;
+}
+
+export async function readScheduledTaskHistory(dataDir: string): Promise<ScheduledTaskRunRecord[]> {
+  const state = await ensureScheduledTaskHistoryState(dataDir);
+  return state.history.map((entry) => ({ ...entry }));
 }
 
 export async function appendScheduledTaskHistoryRecord(
   dataDir: string,
   record: ScheduledTaskRunRecord,
 ): Promise<void> {
-  let history = await readScheduledTaskHistory(dataDir);
-  history.unshift(record);
+  const state = await ensureScheduledTaskHistoryState(dataDir);
+  let history = [{ ...record }, ...state.history];
   const countByTask = new Map<string, number>();
   history = history.filter((entry) => {
     const nextCount = (countByTask.get(entry.taskId) ?? 0) + 1;
@@ -54,11 +103,16 @@ export async function appendScheduledTaskHistoryRecord(
   if (history.length > HISTORY_MAX_TOTAL) {
     history = history.slice(0, HISTORY_MAX_TOTAL);
   }
-  await writeFile(
-    join(dataDir, 'task-run-history.json'),
-    JSON.stringify(history, null, 2),
-    'utf-8',
-  );
+  state.history = history;
+  state.summaryByTaskId = buildScheduledTaskExecutionSummaryById(history);
+  await writeFile(historyFilePath(dataDir), JSON.stringify(history, null, 2), 'utf-8');
+}
+
+export async function getScheduledTaskExecutionSummaryById(
+  dataDir: string,
+): Promise<Map<string, ScheduledTaskExecutionSummaryData>> {
+  const state = await ensureScheduledTaskHistoryState(dataDir);
+  return new Map(state.summaryByTaskId);
 }
 
 export function buildScheduledTaskExecutionSummaryById(

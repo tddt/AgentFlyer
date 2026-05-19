@@ -1,5 +1,10 @@
 export { AgentKernel, type AgentKernelDeps } from './agent-kernel.js';
 export { JsonFileCheckpointStore, ScopedCheckpointStore } from './checkpoint-store.js';
+export {
+  deriveProcessStatusForSignal,
+  isRunnableProcessStatus,
+  isTerminalProcessStatus,
+} from './process-transition-contract.js';
 export { PriorityScheduler } from './priority-scheduler.js';
 export type {
   CheckpointStore,

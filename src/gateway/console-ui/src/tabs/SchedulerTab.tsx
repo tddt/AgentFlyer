@@ -1,14 +1,28 @@
-import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Badge } from '../components/Badge.js';
 import { Button } from '../components/Button.js';
 import { DeliverableModal } from '../components/DeliverableModal.js';
 import { useLocale } from '../context/i18n.js';
+import { useAgentsWithActivity } from '../hooks/useAgentsWithActivity.js';
+import { useSchedulerRunningTasks } from '../hooks/useSchedulerRunningTasks.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
+import {
+  applySchedulePreviewFailure,
+  applySchedulePreviewSuccess,
+  buildSchedulePreviewRequest,
+  INITIAL_SCHEDULE_PREVIEW_STATE,
+  resetSchedulePreviewState,
+  type SchedulePreview,
+  startSchedulePreviewState,
+} from '../scheduler-preview.js';
+import {
+  buildSchedulerRunningTaskSignature,
+  shouldRefreshSchedulerHistory,
+} from '../scheduler-running-sync.js';
 import { useToast } from '../hooks/useToast.js';
 import type {
   AgentInfo,
-  AgentListResult,
   ChannelInfo,
   ChannelListResult,
   PublicationTargetConfig,
@@ -43,18 +57,14 @@ interface TaskModalState {
   form: TaskForm;
 }
 
-interface SchedulePreview {
-  valid: boolean;
-  cronExpr: string;
-  nextRunAt?: number | null;
-  error?: string;
-}
-
 interface ConfirmState {
   title: string;
   message: string;
+  taskId?: string;
   onConfirm: () => Promise<void>;
 }
+
+type TaskActionKind = 'run' | 'resume' | 'delete' | 'toggle';
 
 function defaultTaskForm(agentId: string): TaskForm {
   return {
@@ -159,12 +169,18 @@ function buildSchedulerAgentAdvisory(agentId: string | undefined, agents: AgentI
 function FormModal({
   title,
   description,
+  pending,
+  submitDisabled,
+  submitLabel,
   onClose,
   onSubmit,
   children,
 }: {
   title: string;
   description: string;
+  pending: boolean;
+  submitDisabled: boolean;
+  submitLabel: string;
   onClose: () => void;
   onSubmit: () => void;
   children: ReactNode;
@@ -174,7 +190,7 @@ function FormModal({
     <div
       className="fixed inset-0 z-[220] flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (!pending && e.target === e.currentTarget) onClose();
       }}
     >
       <div className="w-full max-w-3xl mx-4 max-h-[85vh] overflow-auto rounded-2xl p-5 flex flex-col gap-4" style={{ background: 'var(--af-card-bg)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}>
@@ -182,13 +198,15 @@ function FormModal({
           <h3 className="text-base font-semibold" style={{ color: 'var(--af-text-heading)' }}>{title}</h3>
           <p className="text-xs mt-1" style={{ color: 'var(--af-text-muted)' }}>{description}</p>
         </div>
-        <div className="flex flex-col gap-3">{children}</div>
+        <fieldset disabled={pending} className="flex flex-col gap-3 min-w-0">
+          {children}
+        </fieldset>
         <div className="flex justify-end gap-2 pt-2" style={{ borderTop: '1px solid var(--af-border)' }}>
-          <Button variant="ghost" size="sm" onClick={onClose}>
+          <Button variant="ghost" size="sm" disabled={pending} onClick={onClose}>
             {t('common.cancel')}
           </Button>
-          <Button variant="primary" size="sm" onClick={onSubmit}>
-            {t('common.save')}
+          <Button variant="primary" size="sm" disabled={pending || submitDisabled} onClick={onSubmit}>
+            {submitLabel}
           </Button>
         </div>
       </div>
@@ -197,7 +215,15 @@ function FormModal({
   );
 }
 
-function ConfirmModal({ state, onClose }: { state: ConfirmState; onClose: () => void }) {
+function ConfirmModal({
+  state,
+  pending,
+  onClose,
+}: {
+  state: ConfirmState;
+  pending: boolean;
+  onClose: () => void;
+}) {
   const { t } = useLocale();
   return createPortal(
     <div
@@ -210,11 +236,11 @@ function ConfirmModal({ state, onClose }: { state: ConfirmState; onClose: () => 
         <h3 className="text-base font-semibold" style={{ color: 'var(--af-text-heading)' }}>{state.title}</h3>
         <p className="text-sm" style={{ color: 'var(--af-text-muted)' }}>{state.message}</p>
         <div className="flex justify-end gap-2">
-          <Button size="sm" variant="ghost" onClick={onClose}>
+          <Button size="sm" variant="ghost" disabled={pending} onClick={onClose}>
             {t('common.cancel')}
           </Button>
-          <Button size="sm" variant="danger" onClick={() => void state.onConfirm()}>
-            {t('common.confirm')}
+          <Button size="sm" variant="danger" disabled={pending} onClick={() => void state.onConfirm()}>
+            {pending ? t('common.loading') : t('common.confirm')}
           </Button>
         </div>
       </div>
@@ -328,17 +354,21 @@ export function SchedulerTab() {
   const { toast } = useToast();
   const { t } = useLocale();
   const [taskModal, setTaskModal] = useState<TaskModalState | null>(null);
-  const [preview, setPreview] = useState<SchedulePreview | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewState, setPreviewState] = useState(INITIAL_SCHEDULE_PREVIEW_STATE);
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
   const [historyModal, setHistoryModal] = useState<{
     task: TaskInfo;
     records: TaskRunRecord[];
     loading: boolean;
   } | null>(null);
-  const [runningTasks, setRunningTasks] = useState<RunningTaskInfo[]>([]);
   const [nowTs, setNowTs] = useState(Date.now());
   const [deliverableId, setDeliverableId] = useState<string | null>(null);
+  const [isTaskModalSubmitting, setIsTaskModalSubmitting] = useState(false);
+  const [pendingTaskActions, setPendingTaskActions] = useState<Record<string, TaskActionKind>>({});
+  const pendingTaskActionRef = useRef(new Set<string>());
+  const previewRequestIdRef = useRef(0);
+  const runningTasksSignatureRef = useRef<string | null>(null);
+  const previousRunningTasksRef = useRef<RunningTaskInfo[]>([]);
 
   const {
     data: schedulerResult,
@@ -346,10 +376,11 @@ export function SchedulerTab() {
     error,
     refetch,
   } = useQuery<SchedulerListResult>(() => rpc<SchedulerListResult>('scheduler.list'), []);
-  const { data: agentResult } = useQuery<AgentListResult>(
-    () => rpc<AgentListResult>('agent.list'),
-    [],
-  );
+  const { agents } = useAgentsWithActivity();
+  const {
+    runningTasks,
+    refreshRunningTasks: refreshSchedulerRunningTasks,
+  } = useSchedulerRunningTasks();
   const { data: workflowResult } = useQuery<{ workflows: WorkflowDef[] }>(
     () => rpc<{ workflows: WorkflowDef[] }>('workflow.list'),
     [],
@@ -363,27 +394,6 @@ export function SchedulerTab() {
     [],
   );
 
-  // Poll running tasks every 3 s
-  useEffect(() => {
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const res = await rpc<{ running: RunningTaskInfo[] }>('scheduler.running');
-        if (!cancelled) setRunningTasks(res.running ?? []);
-      } catch {
-        /* ignore */
-      }
-    };
-    void poll();
-    const timer = setInterval(() => {
-      void poll();
-    }, 3000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, []);
-
   // Live elapsed-time ticker
   useEffect(() => {
     const ticker = setInterval(() => setNowTs(Date.now()), 1000);
@@ -391,7 +401,6 @@ export function SchedulerTab() {
   }, []);
 
   const tasks: TaskInfo[] = Array.isArray(schedulerResult?.tasks) ? schedulerResult.tasks : [];
-  const agents: AgentInfo[] = Array.isArray(agentResult?.agents) ? agentResult.agents : [];
   const workflows: WorkflowDef[] = workflowResult?.workflows ?? [];
   const channels: ChannelInfo[] = channelResult?.channels ?? [];
   const defaultAgentId = preferredExecutionAgentId(agents);
@@ -412,22 +421,128 @@ export function SchedulerTab() {
     () => new Map(runningTasks.map((task) => [task.taskId, task] as const)),
     [runningTasks],
   );
+  const runningTasksSignature = useMemo(
+    () => buildSchedulerRunningTaskSignature(runningTasks),
+    [runningTasks],
+  );
+  const refreshRunningTasks = useCallback(async () => {
+    await refreshSchedulerRunningTasks();
+  }, [refreshSchedulerRunningTasks]);
+
+  const refreshHistoryRecords = useCallback(
+    async (
+      task: TaskInfo,
+      options: { showLoading?: boolean; notifyOnError?: boolean } = {},
+    ) => {
+      const { showLoading = true, notifyOnError = true } = options;
+      if (showLoading) {
+        setHistoryModal({ task, records: [], loading: true });
+      } else {
+        setHistoryModal((current) =>
+          current && current.task.id === task.id ? { ...current, loading: true } : current,
+        );
+      }
+      try {
+        const res = await rpc<TaskHistoryResult>('scheduler.history', { taskId: task.id });
+        setHistoryModal({ task, records: res.records, loading: false });
+      } catch (e) {
+        if (showLoading) {
+          if (notifyOnError) {
+            toast(e instanceof Error ? e.message : 'Failed to load history', 'error');
+          }
+          setHistoryModal(null);
+          return;
+        }
+        setHistoryModal((current) =>
+          current && current.task.id === task.id ? { ...current, loading: false } : current,
+        );
+        if (notifyOnError) {
+          toast(e instanceof Error ? e.message : 'Failed to refresh history', 'error');
+        }
+      }
+    },
+    [toast],
+  );
+
+  const refreshSchedulerSurface = useCallback(
+    async (taskForHistory?: TaskInfo | null) => {
+      refetch();
+      await refreshRunningTasks();
+      if (taskForHistory) {
+        await refreshHistoryRecords(taskForHistory, {
+          showLoading: false,
+          notifyOnError: false,
+        });
+      }
+    },
+    [refetch, refreshHistoryRecords, refreshRunningTasks],
+  );
+  useEffect(() => {
+    const previousSignature = runningTasksSignatureRef.current;
+    const previousRunningTasks = previousRunningTasksRef.current;
+
+    runningTasksSignatureRef.current = runningTasksSignature;
+    previousRunningTasksRef.current = runningTasks;
+
+    if (previousSignature === null || previousSignature === runningTasksSignature) {
+      return;
+    }
+
+    refetch();
+    if (
+      historyModal?.task &&
+      shouldRefreshSchedulerHistory(
+        historyModal.task.id,
+        previousRunningTasks,
+        runningTasks,
+      )
+    ) {
+      void refreshHistoryRecords(historyModal.task, {
+        showLoading: false,
+        notifyOnError: false,
+      });
+    }
+  }, [historyModal?.task, refetch, refreshHistoryRecords, runningTasks, runningTasksSignature]);
+  const startTaskAction = useCallback((taskId: string, action: TaskActionKind): boolean => {
+    if (pendingTaskActionRef.current.has(taskId)) {
+      return false;
+    }
+    pendingTaskActionRef.current.add(taskId);
+    setPendingTaskActions((current) => ({ ...current, [taskId]: action }));
+    return true;
+  }, []);
+  const finishTaskAction = useCallback((taskId: string) => {
+    pendingTaskActionRef.current.delete(taskId);
+    setPendingTaskActions((current) => {
+      if (!(taskId in current)) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[taskId];
+      return next;
+    });
+  }, []);
+  const preview = previewState.preview;
+  const previewLoading = previewState.loading;
   const taskModalAgentAdvisory = useMemo(() => {
     if (!taskModal || taskModal.form.targetType !== 'agent') {
       return null;
     }
     return buildSchedulerAgentAdvisory(taskModal.form.agentId, agents);
   }, [agents, taskModal]);
+  const previewRequest = useMemo(
+    () => (taskModal ? buildSchedulePreviewRequest(taskModal.form) : null),
+    [taskModal?.form.scheduleMode, taskModal?.form.cronExpr, taskModal?.form.intervalMinutes],
+  );
+  const isTaskModalSubmitBlocked = isTaskModalSubmitting || previewLoading || !preview?.valid;
+  const taskModalSubmitLabel = isTaskModalSubmitting
+    ? t('common.loading')
+    : previewLoading
+      ? t('scheduler.modal.validating')
+      : t('common.save');
 
   const openHistory = async (task: TaskInfo) => {
-    setHistoryModal({ task, records: [], loading: true });
-    try {
-      const res = await rpc<TaskHistoryResult>('scheduler.history', { taskId: task.id });
-      setHistoryModal({ task, records: res.records, loading: false });
-    } catch (e) {
-      toast(e instanceof Error ? e.message : 'Failed to load history', 'error');
-      setHistoryModal(null);
-    }
+    await refreshHistoryRecords(task);
   };
 
   const openCreate = () => {
@@ -443,7 +558,9 @@ export function SchedulerTab() {
       form.workflowId = workflows[0]?.id ?? '';
     }
     setTaskModal({ mode: 'add', form });
-    setPreview(null);
+    setIsTaskModalSubmitting(false);
+    previewRequestIdRef.current += 1;
+    setPreviewState(resetSchedulePreviewState(previewRequestIdRef.current));
   };
 
   const openEdit = (task: TaskInfo) => {
@@ -465,41 +582,37 @@ export function SchedulerTab() {
         enabled: task.enabled !== false,
       },
     });
-    setPreview(null);
+    setIsTaskModalSubmitting(false);
+    previewRequestIdRef.current += 1;
+    setPreviewState(resetSchedulePreviewState(previewRequestIdRef.current));
   };
 
   useEffect(() => {
-    if (!taskModal) {
-      setPreview(null);
+    previewRequestIdRef.current += 1;
+    const requestId = previewRequestIdRef.current;
+    if (!taskModal || !previewRequest) {
+      setPreviewState(resetSchedulePreviewState(requestId));
       return;
     }
 
     const timeout = setTimeout(() => {
-      setPreviewLoading(true);
-      void rpc<SchedulePreview>('scheduler.preview', {
-        cronExpr: taskModal.form.scheduleMode === 'cron' ? taskModal.form.cronExpr : undefined,
-        intervalMinutes:
-          taskModal.form.scheduleMode === 'interval' ? taskModal.form.intervalMinutes : undefined,
-      })
-        .then((res) => setPreview(res))
-        .catch((e) =>
-          setPreview({
-            valid: false,
-            cronExpr:
-              taskModal.form.scheduleMode === 'cron'
-                ? taskModal.form.cronExpr
-                : `every ${taskModal.form.intervalMinutes} min`,
-            error: e instanceof Error ? e.message : String(e),
-          }),
-        )
-        .finally(() => setPreviewLoading(false));
+      setPreviewState((current) => startSchedulePreviewState(current, requestId));
+      void rpc<SchedulePreview>('scheduler.preview', previewRequest.params)
+        .then((res) => {
+          setPreviewState((current) => applySchedulePreviewSuccess(current, requestId, res));
+        })
+        .catch((e) => {
+          setPreviewState((current) =>
+            applySchedulePreviewFailure(current, requestId, previewRequest, e),
+          );
+        });
     }, 250);
 
     return () => clearTimeout(timeout);
-  }, [taskModal]);
+  }, [previewRequest, taskModal]);
 
   const submitTask = async () => {
-    if (!taskModal) return;
+    if (!taskModal || isTaskModalSubmitting) return;
     const f = taskModal.form;
     if (!f.name.trim() || !f.message.trim()) {
       toast('name and message are required', 'error');
@@ -513,6 +626,10 @@ export function SchedulerTab() {
       toast('Please select a workflow', 'error');
       return;
     }
+    if (previewLoading) {
+      toast(t('scheduler.modal.validating'), 'error');
+      return;
+    }
     if (!preview || !preview.valid) {
       toast('Schedule is invalid. Please fix cron/interval first.', 'error');
       return;
@@ -524,6 +641,7 @@ export function SchedulerTab() {
         : { agentId: f.agentId, workflowId: undefined };
 
     try {
+      setIsTaskModalSubmitting(true);
       if (taskModal.mode === 'add') {
         await rpc('scheduler.create', {
           name: f.name.trim(),
@@ -553,54 +671,78 @@ export function SchedulerTab() {
         toast('Task updated', 'success');
       }
       setTaskModal(null);
-      refetch();
+      await refreshSchedulerSurface();
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Save failed', 'error');
+    } finally {
+      setIsTaskModalSubmitting(false);
     }
   };
 
   const runNow = async (taskId: string) => {
+    if (!startTaskAction(taskId, 'run')) {
+      return;
+    }
     try {
       await rpc('scheduler.runNow', { taskId });
       toast('Task executed', 'success');
-      refetch();
+      await refreshSchedulerSurface(historyModal?.task.id === taskId ? historyModal.task : null);
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Run failed', 'error');
+    } finally {
+      finishTaskAction(taskId);
     }
   };
 
   const resumeTask = async (taskId: string) => {
+    if (!startTaskAction(taskId, 'resume')) {
+      return;
+    }
     try {
       await rpc('scheduler.resume', { taskId });
       toast('Task resumed', 'success');
-      refetch();
+      await refreshSchedulerSurface(historyModal?.task.id === taskId ? historyModal.task : null);
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Resume failed', 'error');
+    } finally {
+      finishTaskAction(taskId);
     }
   };
 
   const removeTask = async (taskId: string) => {
+    if (!startTaskAction(taskId, 'delete')) {
+      return;
+    }
     try {
       await rpc('scheduler.cancel', { taskId });
       toast('Task deleted', 'success');
-      refetch();
+      if (historyModal?.task.id === taskId) {
+        setHistoryModal(null);
+      }
+      await refreshSchedulerSurface();
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Delete failed', 'error');
     } finally {
+      finishTaskAction(taskId);
       setConfirmState(null);
     }
   };
 
   const toggleEnabled = async (task: TaskInfo) => {
+    if (!startTaskAction(task.id, 'toggle')) {
+      return;
+    }
     try {
       await rpc('scheduler.update', {
         taskId: task.id,
         enabled: task.enabled === false,
       });
       toast(task.enabled === false ? 'Task enabled' : 'Task disabled', 'success');
-      refetch();
+      await refreshSchedulerSurface(historyModal?.task.id === task.id ? historyModal.task : null);
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Update failed', 'error');
+    } finally {
+      finishTaskAction(task.id);
     }
   };
 
@@ -621,7 +763,13 @@ export function SchedulerTab() {
           <Badge variant="blue">
             {t(tasks.length !== 1 ? 'scheduler.tasksPlural' : 'scheduler.tasks', { n: String(tasks.length) })}
           </Badge>
-          <Button size="sm" variant="ghost" onClick={refetch}>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              void refreshSchedulerSurface(historyModal?.task ?? null);
+            }}
+          >
             {t('scheduler.refresh')}
           </Button>
           <Button size="sm" variant="primary" onClick={openCreate}>
@@ -659,14 +807,19 @@ export function SchedulerTab() {
               const elapsedSec = Math.floor((nowTs - rt.startedAt) / 1000);
               const mins = Math.floor(elapsedSec / 60);
               const secs = elapsedSec % 60;
-              const suspended = rt.agentRunStatus === 'suspended';
+              const suspended = rt.status === 'suspended';
+              const pendingAction = pendingTaskActions[rt.taskId];
               return (
                 <div
                   key={rt.taskId}
                   className="px-4 py-3 flex items-center gap-4"
                   style={{ borderTop: '1px solid rgba(99,102,241,0.1)' }}
                 >
-                  <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse shrink-0" />
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                      suspended ? 'bg-amber-400' : 'bg-green-400 animate-pulse'
+                    }`}
+                  />
                   <div className="flex-1 min-w-0">
                     <span className="text-sm font-medium" style={{ color: 'var(--af-text-base)' }}>{rt.taskName}</span>
                     <span className="ml-2 text-xs" style={{ color: 'var(--af-text-faint)' }}>
@@ -685,19 +838,27 @@ export function SchedulerTab() {
                   <Badge variant={suspended ? 'yellow' : 'green'}>
                     {suspended ? t('scheduler.status.suspended') : t('scheduler.status.running')}
                   </Badge>
+                  {pendingAction ? <Badge variant="gray">{t('common.loading')}</Badge> : null}
                   <div className="flex items-center gap-2 shrink-0">
-                    {suspended ? (
-                      <Button size="sm" variant="ghost" onClick={() => void resumeTask(rt.taskId)}>
+                    {rt.resumable ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={!!pendingAction}
+                        onClick={() => void resumeTask(rt.taskId)}
+                      >
                         {t('scheduler.resume')}
                       </Button>
                     ) : null}
                     <Button
                       size="sm"
                       variant="danger"
+                      disabled={!!pendingAction}
                       onClick={() =>
                         setConfirmState({
                           title: t('scheduler.confirm.deleteTitle'),
                           message: t('scheduler.confirm.deleteMsg', { name: rt.taskName }),
+                          taskId: rt.taskId,
                           onConfirm: () => removeTask(rt.taskId),
                         })
                       }
@@ -738,7 +899,10 @@ export function SchedulerTab() {
               </tr>
             </thead>
             <tbody style={{ borderTop: '1px solid var(--af-border)' }}>
-              {sortedTasks.map((task) => (
+              {sortedTasks.map((task) => {
+                const liveRun = runningByTaskId.get(task.id);
+                const pendingAction = pendingTaskActions[task.id];
+                return (
                 <tr key={task.id} className="hover:bg-white/[0.02] transition-colors align-top" style={{ borderTop: '1px solid var(--af-border)' }}>
                   <td className="px-4 py-3" style={{ color: 'var(--af-text-base)' }}>
                     <div className="font-medium">{task.name}</div>
@@ -780,9 +944,19 @@ export function SchedulerTab() {
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    <Badge variant={task.enabled === false ? 'yellow' : 'green'}>
-                      {task.enabled === false ? 'disabled' : 'enabled'}
-                    </Badge>
+                    <div className="flex flex-wrap gap-2">
+                      {liveRun ? (
+                        <Badge variant={liveRun.status === 'suspended' ? 'yellow' : 'blue'}>
+                          {liveRun.status === 'suspended'
+                            ? t('scheduler.status.suspended')
+                            : t('scheduler.status.running')}
+                        </Badge>
+                      ) : null}
+                      {pendingAction ? <Badge variant="gray">{t('common.loading')}</Badge> : null}
+                      <Badge variant={task.enabled === false ? 'yellow' : 'green'}>
+                        {task.enabled === false ? 'disabled' : 'enabled'}
+                      </Badge>
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-xs" style={{ color: 'var(--af-text-muted)' }}>
                     {task.nextRunAt ? new Date(task.nextRunAt).toLocaleString() : '—'}
@@ -805,30 +979,37 @@ export function SchedulerTab() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap gap-2">
-                      {runningByTaskId.get(task.id)?.agentRunStatus === 'suspended' ? (
-                        <Button size="sm" variant="ghost" onClick={() => void resumeTask(task.id)}>
+                      {liveRun?.resumable ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={!!pendingAction}
+                          onClick={() => void resumeTask(task.id)}
+                        >
                           {t('scheduler.resume')}
                         </Button>
                       ) : null}
-                      <Button size="sm" variant="ghost" onClick={() => openEdit(task)}>
+                      <Button size="sm" variant="ghost" disabled={!!pendingAction} onClick={() => openEdit(task)}>
                         {t('scheduler.edit')}
                       </Button>
-                      <Button size="sm" variant="ghost" onClick={() => void runNow(task.id)}>
+                      <Button size="sm" variant="ghost" disabled={!!pendingAction} onClick={() => void runNow(task.id)}>
                         {t('scheduler.runNow')}
                       </Button>
-                      <Button size="sm" variant="ghost" onClick={() => void openHistory(task)}>
+                      <Button size="sm" variant="ghost" disabled={!!pendingAction} onClick={() => void openHistory(task)}>
                         {t('scheduler.history')}
                       </Button>
-                      <Button size="sm" variant="ghost" onClick={() => void toggleEnabled(task)}>
+                      <Button size="sm" variant="ghost" disabled={!!pendingAction} onClick={() => void toggleEnabled(task)}>
                         {task.enabled === false ? t('scheduler.enable') : t('scheduler.disable')}
                       </Button>
                       <Button
                         size="sm"
                         variant="danger"
+                        disabled={!!pendingAction}
                         onClick={() =>
                           setConfirmState({
                             title: t('scheduler.confirm.deleteTitle'),
                             message: t('scheduler.confirm.deleteMsg', { name: task.name }),
+                            taskId: task.id,
                             onConfirm: () => removeTask(task.id),
                           })
                         }
@@ -838,7 +1019,8 @@ export function SchedulerTab() {
                     </div>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -848,7 +1030,14 @@ export function SchedulerTab() {
         <FormModal
           title={taskModal.mode === 'add' ? t('scheduler.modal.createTitle') : t('scheduler.modal.editTitle')}
           description={t('scheduler.modal.description')}
-          onClose={() => setTaskModal(null)}
+          pending={isTaskModalSubmitting}
+          submitDisabled={isTaskModalSubmitBlocked}
+          submitLabel={taskModalSubmitLabel}
+          onClose={() => {
+            if (!isTaskModalSubmitting) {
+              setTaskModal(null);
+            }
+          }}
           onSubmit={() => void submitTask()}
         >
           <Field label="Task Name">
@@ -982,25 +1171,7 @@ export function SchedulerTab() {
                 }
                 className="rounded-lg px-2.5 py-2 text-xs font-mono" style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
               />
-            <div className="text-xs">
-              {previewLoading && <span style={{ color: 'var(--af-text-muted)' }}>Validating schedule…</span>}
-              {!previewLoading && preview?.valid && (
-                <div className="text-emerald-300">
-                  Valid schedule: <span className="font-mono">{preview.cronExpr}</span>
-                  <div style={{ color: 'var(--af-text-muted)' }} className="mt-1">
-                    Next run:{' '}
-                    {preview.nextRunAt ? new Date(preview.nextRunAt).toLocaleString() : 'n/a'}
-                  </div>
-                </div>
-              )}
-              {!previewLoading && preview && !preview.valid && (
-                <div className="text-red-300">
-                  Invalid schedule
-                  {preview.error ? <div className="text-red-400 mt-1">{preview.error}</div> : null}
-                </div>
-              )}
-            </div>
-          </Field>
+            </Field>
         ) : (
           <Field label="Interval Minutes">
               <input
@@ -1017,6 +1188,28 @@ export function SchedulerTab() {
               />
           </Field>
         )}
+
+          <Field label={t('scheduler.modal.validation')}>
+            <div className="rounded-lg px-3 py-2 text-xs" style={{ background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-border)' }}>
+              {previewLoading && <span style={{ color: 'var(--af-text-muted)' }}>{t('scheduler.modal.validating')}</span>}
+              {!previewLoading && preview?.valid && (
+                <div className="text-emerald-300">
+                  {t('scheduler.modal.validSchedule', { expr: preview.cronExpr })}
+                  <div style={{ color: 'var(--af-text-muted)' }} className="mt-1">
+                    {t('scheduler.modal.nextRun', {
+                      time: preview.nextRunAt ? new Date(preview.nextRunAt).toLocaleString() : 'n/a',
+                    })}
+                  </div>
+                </div>
+              )}
+              {!previewLoading && preview && !preview.valid && (
+                <div className="text-red-300">
+                  {t('scheduler.modal.invalidSchedule')}
+                  {preview.error ? <div className="text-red-400 mt-1">{preview.error}</div> : null}
+                </div>
+              )}
+            </div>
+          </Field>
 
           <Field label="Report To (Optional)">
             <select
@@ -1212,7 +1405,13 @@ export function SchedulerTab() {
         </FormModal>
       )}
 
-      {confirmState && <ConfirmModal state={confirmState} onClose={() => setConfirmState(null)} />}
+      {confirmState && (
+        <ConfirmModal
+          state={confirmState}
+          pending={!!(confirmState.taskId && pendingTaskActions[confirmState.taskId])}
+          onClose={() => setConfirmState(null)}
+        />
+      )}
 
       {/* ── History Modal ──────────────────────────────────────────── */}
       {historyModal &&

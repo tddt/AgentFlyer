@@ -91,6 +91,7 @@ import {
 } from './metrics-store.js';
 import { SenderRateLimiter } from './rate-limiter.js';
 import type { RpcContext } from './rpc.js';
+import { SchedulerActivityBroadcaster } from './scheduler-activity.js';
 import { type GatewayServer, createGatewayServer } from './server.js';
 
 const logger = createLogger('gateway:lifecycle');
@@ -801,6 +802,7 @@ export async function startGateway(
   }
 
   const inboxBroadcaster = new InboxBroadcaster();
+  const schedulerActivity = new SchedulerActivityBroadcaster();
 
   // RATIONALE: gateway-level MemoryStore so the federation node can answer
   // MEMORY_QUERY messages from remote peers and so RPC memory.search works
@@ -825,6 +827,7 @@ export async function startGateway(
     contentStore: new ContentStore(() => state.config),
     deliverableStore: new DeliverableStore(dataDir),
     inboxBroadcaster,
+    schedulerActivity,
     channels: sharedChannels,
     getMcpStatus: () => state.mcpRegistry?.listServerStatus() ?? [],
     memoryStore: gatewayMemoryStore,
@@ -845,7 +848,7 @@ export async function startGateway(
   const webChannel = new WebChannel();
 
   // RATIONALE: A single queue registry ensures concurrent messages for the same
-  // agent are processed in FIFO order — prevents setThread()+turn() race conditions.
+  // agent are processed in FIFO order — prevents shared-runner thread/lease races.
   const agentQueues = new AgentQueueRegistry();
   rpcContext.agentQueues = agentQueues;
 

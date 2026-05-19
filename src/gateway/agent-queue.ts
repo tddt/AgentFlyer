@@ -24,12 +24,16 @@ export function isAgentQueueCancelledError(error: unknown): error is AgentQueueC
 export class AgentQueue {
   private _busy = false;
   private readonly _pending: Array<QueuedTask<unknown>> = [];
+  private readonly _changeListeners = new Set<(snapshot: AgentQueueSnapshot) => void>();
+
+  constructor(private readonly onChange?: (snapshot: AgentQueueSnapshot) => void) {}
 
   private startTask<T>(task: QueuedTask<T>, wasQueued: boolean): void {
     task.hooks?.onStarted?.({
       wasQueued,
       queueDepth: this._pending.length,
     });
+    this.emitChange();
     void task.run().finally(() => this._drain());
   }
 
@@ -63,8 +67,16 @@ export class AgentQueue {
       } else {
         hooks?.onQueued?.({ position: this._pending.length + 1 });
         this._pending.push(task);
+        this.emitChange();
       }
     });
+  }
+
+  subscribe(listener: (snapshot: AgentQueueSnapshot) => void): () => void {
+    this._changeListeners.add(listener);
+    return () => {
+      this._changeListeners.delete(listener);
+    };
   }
 
   cancelPending(taskKey: string): boolean {
@@ -74,6 +86,7 @@ export class AgentQueue {
     }
     const [task] = this._pending.splice(index, 1);
     task?.cancel();
+    this.emitChange();
     return true;
   }
 
@@ -100,9 +113,18 @@ export class AgentQueue {
     const next = this._pending.shift();
     if (!next) {
       this._busy = false;
+      this.emitChange();
       return;
     }
     this.startTask(next, true);
+  }
+
+  private emitChange(): void {
+    const snapshot = this.snapshot;
+    this.onChange?.(snapshot);
+    for (const listener of this._changeListeners) {
+      listener(snapshot);
+    }
   }
 }
 
@@ -132,15 +154,27 @@ interface QueuedTask<_T> {
  */
 export class AgentQueueRegistry {
   private readonly _queues = new Map<string, AgentQueue>();
+  private readonly _listeners = new Set<(agentId: string, snapshot: AgentQueueSnapshot) => void>();
 
   /** Get (or lazily create) the queue for the given agent. */
   for(agentId: string): AgentQueue {
     let q = this._queues.get(agentId);
     if (!q) {
-      q = new AgentQueue();
+      q = new AgentQueue((snapshot) => {
+        for (const listener of this._listeners) {
+          listener(agentId, snapshot);
+        }
+      });
       this._queues.set(agentId, q);
     }
     return q;
+  }
+
+  subscribe(listener: (agentId: string, snapshot: AgentQueueSnapshot) => void): () => void {
+    this._listeners.add(listener);
+    return () => {
+      this._listeners.delete(listener);
+    };
   }
 
   /** Peek the queue without creating a new one. */

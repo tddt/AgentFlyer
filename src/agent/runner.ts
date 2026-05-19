@@ -250,6 +250,8 @@ export interface RunnerOptions {
   model?: string;
   /** Max tokens per LLM completion. */
   maxTokens?: number;
+  /** Execute this turn on an explicit thread without mutating the runner default thread. */
+  threadKey?: string;
   /** Inject extra task context into layer 4. */
   taskContext?: string;
   /** Pre-built skills text for layer 2. */
@@ -272,9 +274,19 @@ export interface SerializedToolResultCacheEntry {
   value: ToolCallResult;
 }
 
+export interface SerializedPromptLayerHashEntry {
+  index: number;
+  hash: string;
+}
+
 export interface SerializedAgentRunnerState {
-  threadKey: string;
+  activeThreadKey: string;
+  defaultThreadKey?: string;
+  /** Legacy compatibility for checkpoints serialized before active/default thread split. */
+  threadKey?: string;
   toolResultCache: SerializedToolResultCacheEntry[];
+  promptLayerHashes?: SerializedPromptLayerHashEntry[];
+  cachedSystemPrompt?: string | null;
 }
 
 export interface SerializedPendingToolCall {
@@ -328,6 +340,23 @@ export interface SerializedAgentTurnExecutionState {
   recoverableStreamRetries: number;
   toolLoopDetector: SerializedToolLoopDetectorState;
   pendingToolCalls?: SerializedPendingToolCall[];
+}
+
+interface RunnerRuntimeState {
+  defaultThreadKey: ThreadKey;
+  activeThreadKey: ThreadKey | null;
+  toolResultCache: Map<string, ToolCallResult>;
+  promptLayerHashes: Map<number, string>;
+  cachedSystemPrompt: string | null;
+}
+
+type RunnerLeaseMode = 'idle' | 'kernel' | 'direct';
+export type RunnerLeaseSyncMode = Exclude<RunnerLeaseMode, 'direct'>;
+
+interface RunnerLeaseState {
+  mode: RunnerLeaseMode;
+  activeRunId: string | null;
+  pendingCategoryReplacements: Map<string, RegisteredTool[]>;
 }
 
 export interface KernelTurnStepResult {
@@ -448,47 +477,109 @@ import type { AgentFailureClassification } from './llm/error-classification.js';
  */
 export class AgentRunner {
   private agentId: AgentId;
-  private threadKey: ThreadKey;
-  private sessionKey: SessionKey;
-  private pendingCategoryReplacements = new Map<string, RegisteredTool[]>();
-  // RATIONALE: hash each base layer per turn to skip full buildSystemPrompt
-  // when prompts layers are unchanged — avoids string trimming work.
-  private promptLayerHashes = new Map<number, string>();
-  private cachedSystemPrompt: string | null = null;
-  // RATIONALE: cache read-only tool results within a thread to avoid
-  // redundant I/O calls on repeated reads of the same file/query.
-  private toolResultCache = new Map<string, ToolCallResult>();
-  // RATIONALE: prevent concurrent turns from corrupting shared instance state
-  // (threadKey, sessionKey, promptLayerHashes, toolResultCache). A single runner
+  private runtimeState: RunnerRuntimeState;
+  // RATIONALE: keep the transient run lease separate from the serializable runtime snapshot.
+  // This isolates non-checkpoint state (active run and deferred tool mutations) from
+  // default/active thread and prompt/tool caches.
+  private leaseState: RunnerLeaseState;
+  // RATIONALE: prevent concurrent turns from corrupting shared runtime state
+  // (default thread, active run thread, prompt cache, tool cache).
+  // A single runner
   // processes one turn at a time; callers should check isRunning before calling.
-  private _running = false;
-  private activeKernelRunId: string | null = null;
 
   constructor(
     private readonly config: AgentConfig,
     private readonly deps: RunnerDeps,
   ) {
     this.agentId = asAgentId(config.id);
-    this.threadKey = asThreadKey('default');
-    this.sessionKey = makeSessionKey(this.agentId, this.threadKey);
+    this.runtimeState = this.buildRuntimeState({ defaultThreadKey: 'default' });
+    this.leaseState = {
+      mode: 'idle',
+      activeRunId: null,
+      pendingCategoryReplacements: new Map(),
+    };
   }
 
-  /** Change the active thread (creates a new session file). */
-  setThread(threadKey: string): void {
-    if (this.isRunning) {
-      throw new Error(`Agent '${this.agentId}' cannot change thread while a turn is active`);
+  private buildRuntimeState(params: {
+    defaultThreadKey: string;
+    activeThreadKey?: string | null;
+    toolResultCacheEntries?: SerializedToolResultCacheEntry[];
+    promptLayerHashEntries?: SerializedPromptLayerHashEntry[];
+    cachedSystemPrompt?: string | null;
+  }): RunnerRuntimeState {
+    return {
+      defaultThreadKey: asThreadKey(params.defaultThreadKey),
+      activeThreadKey: params.activeThreadKey ? asThreadKey(params.activeThreadKey) : null,
+      toolResultCache: new Map(
+        (params.toolResultCacheEntries ?? []).map(
+          (entry) => [entry.key, entry.value] satisfies [string, ToolCallResult],
+        ),
+      ),
+      promptLayerHashes: new Map(
+        (params.promptLayerHashEntries ?? []).map(
+          (entry) => [entry.index, entry.hash] satisfies [number, string],
+        ),
+      ),
+      cachedSystemPrompt: params.cachedSystemPrompt ?? null,
+    };
+  }
+
+  private deriveSessionKey(threadKey: string): SessionKey {
+    return makeSessionKey(this.agentId, asThreadKey(threadKey));
+  }
+
+  private get currentThreadKey(): ThreadKey {
+    return this.runtimeState.activeThreadKey ?? this.runtimeState.defaultThreadKey;
+  }
+
+  private setLeaseState(mode: RunnerLeaseMode, runId: string | null): void {
+    this.leaseState.mode = mode;
+    this.leaseState.activeRunId = runId;
+  }
+
+  private activateKernelLease(runId: string, threadKey: ThreadKey): void {
+    this.runtimeState.activeThreadKey = threadKey;
+    this.setLeaseState('kernel', runId);
+  }
+
+  private promoteLeaseToDirect(runId: string): void {
+    if (this.leaseState.activeRunId !== runId) {
+      throw new Error(`Agent '${this.agentId}' direct lease mismatch for run '${runId}'`);
     }
-    this.threadKey = asThreadKey(threadKey);
-    this.sessionKey = makeSessionKey(this.agentId, this.threadKey);
-    this.promptLayerHashes.clear();
-    this.cachedSystemPrompt = null;
-    this.toolResultCache.clear();
+    this.leaseState.mode = 'direct';
+  }
+
+  private assertActiveLease(runId: string): void {
+    if (this.leaseState.mode === 'idle' || this.leaseState.activeRunId !== runId) {
+      throw new Error(`Agent '${this.agentId}' kernel lease mismatch for run '${runId}'`);
+    }
+  }
+
+  private releaseActiveLease(): void {
+    this.setLeaseState('idle', null);
+    this.runtimeState.activeThreadKey = null;
+  }
+
+  /** Change the default thread used for non-explicit turns. */
+  setDefaultThread(threadKey: string): void {
+    if (this.isRunning) {
+      throw new Error(
+        `Agent '${this.agentId}' cannot change default thread while a turn is active`,
+      );
+    }
+    this.runtimeState.defaultThreadKey = asThreadKey(threadKey);
+    this.runtimeState.promptLayerHashes.clear();
+    this.runtimeState.cachedSystemPrompt = null;
+    this.runtimeState.toolResultCache.clear();
   }
 
   serializeState(): SerializedAgentRunnerState {
     return {
-      threadKey: this.threadKey,
-      toolResultCache: this.serializeToolResultCache(this.toolResultCache),
+      activeThreadKey: this.currentThreadKey,
+      defaultThreadKey: this.runtimeState.defaultThreadKey,
+      toolResultCache: this.serializeToolResultCache(this.runtimeState.toolResultCache),
+      promptLayerHashes: this.serializePromptLayerHashes(this.runtimeState.promptLayerHashes),
+      cachedSystemPrompt: this.runtimeState.cachedSystemPrompt,
     };
   }
 
@@ -498,9 +589,21 @@ export class AgentRunner {
     return Array.from(toolResultCache.entries()).map(([key, value]) => ({ key, value }));
   }
 
+  private serializePromptLayerHashes(
+    promptLayerHashes: ReadonlyMap<number, string>,
+  ): SerializedPromptLayerHashEntry[] {
+    return Array.from(promptLayerHashes.entries()).map(([index, hash]) => ({ index, hash }));
+  }
+
   private restoreToolResultCache(entries: SerializedToolResultCacheEntry[] | undefined): void {
-    this.toolResultCache = new Map(
+    this.runtimeState.toolResultCache = new Map(
       (entries ?? []).map((entry) => [entry.key, entry.value] satisfies [string, ToolCallResult]),
+    );
+  }
+
+  private restorePromptLayerHashes(entries: SerializedPromptLayerHashEntry[] | undefined): void {
+    this.runtimeState.promptLayerHashes = new Map(
+      (entries ?? []).map((entry) => [entry.index, entry.hash] satisfies [number, string]),
     );
   }
 
@@ -508,27 +611,55 @@ export class AgentRunner {
     threadKey: string,
     runId: string | null,
     toolResultCacheEntries?: SerializedToolResultCacheEntry[],
+    promptLayerHashEntries?: SerializedPromptLayerHashEntry[],
+    cachedSystemPrompt?: string | null,
+    defaultThreadKey?: string,
+    leaseMode?: RunnerLeaseSyncMode,
   ): void {
-    this.threadKey = asThreadKey(threadKey);
-    this.sessionKey = makeSessionKey(this.agentId, this.threadKey);
-    this.promptLayerHashes.clear();
-    this.cachedSystemPrompt = null;
-    this.restoreToolResultCache(toolResultCacheEntries);
-    this.activeKernelRunId = runId;
-    this._running = false;
+    const effectiveLeaseMode = leaseMode ?? (runId ? 'kernel' : 'idle');
+    this.runtimeState = this.buildRuntimeState({
+      defaultThreadKey: defaultThreadKey ?? this.runtimeState.defaultThreadKey,
+      activeThreadKey: effectiveLeaseMode === 'kernel' ? threadKey : null,
+      toolResultCacheEntries,
+      promptLayerHashEntries,
+      cachedSystemPrompt,
+    });
+    this.setLeaseState(effectiveLeaseMode, effectiveLeaseMode === 'kernel' ? runId : null);
   }
 
   restoreState(state: SerializedAgentRunnerState): void {
-    this.syncRuntimeState(state.threadKey, null, state.toolResultCache);
+    this.runtimeState = this.buildRuntimeState({
+      defaultThreadKey:
+        state.defaultThreadKey ?? state.activeThreadKey ?? state.threadKey ?? 'default',
+      activeThreadKey: null,
+      toolResultCacheEntries: state.toolResultCache,
+      promptLayerHashEntries: state.promptLayerHashes,
+      cachedSystemPrompt: state.cachedSystemPrompt,
+    });
+    this.setLeaseState('idle', null);
   }
 
-  get currentSessionKey(): SessionKey {
-    return this.sessionKey;
+  get defaultThreadKey(): ThreadKey {
+    return this.runtimeState.defaultThreadKey;
+  }
+
+  get defaultSessionKey(): SessionKey {
+    return this.deriveSessionKey(this.runtimeState.defaultThreadKey);
+  }
+
+  get activeSessionKey(): SessionKey | null {
+    return this.runtimeState.activeThreadKey
+      ? this.deriveSessionKey(this.runtimeState.activeThreadKey)
+      : null;
+  }
+
+  sessionKeyForThread(threadKey: string): SessionKey {
+    return this.deriveSessionKey(threadKey);
   }
 
   /** True while a `turn()` is actively running. Check this before dispatching a new task. */
   get isRunning(): boolean {
-    return this._running || this.activeKernelRunId !== null;
+    return this.leaseState.mode !== 'idle';
   }
 
   /** Return the current tool catalog registered for this runner. */
@@ -541,22 +672,22 @@ export class AgentRunner {
 
   replaceToolsForCategory(category: string, tools: RegisteredTool[]): void {
     if (this.isRunning) {
-      this.pendingCategoryReplacements.set(category, tools);
+      this.leaseState.pendingCategoryReplacements.set(category, tools);
       return;
     }
     this.deps.toolRegistry.replaceCategory(category, tools);
-    this.toolResultCache.clear();
+    this.runtimeState.toolResultCache.clear();
   }
 
   private flushPendingCategoryReplacements(): void {
-    if (this.isRunning || this.pendingCategoryReplacements.size === 0) {
+    if (this.isRunning || this.leaseState.pendingCategoryReplacements.size === 0) {
       return;
     }
-    for (const [category, tools] of this.pendingCategoryReplacements) {
+    for (const [category, tools] of this.leaseState.pendingCategoryReplacements) {
       this.deps.toolRegistry.replaceCategory(category, tools);
     }
-    this.pendingCategoryReplacements.clear();
-    this.toolResultCache.clear();
+    this.leaseState.pendingCategoryReplacements.clear();
+    this.runtimeState.toolResultCache.clear();
   }
 
   /**
@@ -564,16 +695,15 @@ export class AgentRunner {
    * Only call when you are certain the previous turn will never complete.
    */
   forceReset(expectedRunId?: string): void {
-    if (expectedRunId && this.activeKernelRunId !== expectedRunId) {
+    if (expectedRunId && this.leaseState.activeRunId !== expectedRunId) {
       return;
     }
-    if (this._running || this.activeKernelRunId !== null) {
+    if (this.isRunning) {
       logger.warn('AgentRunner.forceReset(): clearing orphaned running flag', {
         agentId: this.agentId,
         ...(expectedRunId ? { runId: expectedRunId } : {}),
       });
-      this._running = false;
-      this.activeKernelRunId = null;
+      this.releaseActiveLease();
       this.flushPendingCategoryReplacements();
     }
   }
@@ -698,14 +828,16 @@ export class AgentRunner {
     runId: string,
     userMessage: string,
     opts: RunnerOptions = {},
+    threadKey?: string,
   ): Promise<SerializedAgentTurnExecutionState> {
     if (this.isRunning) {
       throw new Error(`Agent '${this.agentId}' is already processing a turn`);
     }
 
-    this.activeKernelRunId = runId;
+    const effectiveThreadKey = asThreadKey(threadKey ?? this.currentThreadKey);
+    this.activateKernelLease(runId, effectiveThreadKey);
     try {
-      const sessionKey = this.sessionKey;
+      const sessionKey = this.deriveSessionKey(effectiveThreadKey);
       const { provider, sessionStore, metaStore } = this.deps;
       const configModel =
         typeof this.config.model === 'object' ? this.config.model.primary : this.config.model;
@@ -736,15 +868,17 @@ export class AgentRunner {
       );
       const allBaseUnchanged =
         !opts.taskContext &&
-        this.cachedSystemPrompt !== null &&
-        newLayerHashes.every((hash, index) => this.promptLayerHashes.get(index) === hash);
+        this.runtimeState.cachedSystemPrompt !== null &&
+        newLayerHashes.every(
+          (hash, index) => this.runtimeState.promptLayerHashes.get(index) === hash,
+        );
 
       let systemPrompt: string;
       if (allBaseUnchanged) {
-        if (this.cachedSystemPrompt === null) {
+        if (this.runtimeState.cachedSystemPrompt === null) {
           throw new Error('cachedSystemPrompt missing while cache reuse is enabled');
         }
-        systemPrompt = this.cachedSystemPrompt;
+        systemPrompt = this.runtimeState.cachedSystemPrompt;
       } else {
         ({ systemPrompt } = buildSystemPrompt(
           [
@@ -764,8 +898,10 @@ export class AgentRunner {
           this.deps.systemPromptMaxTokens,
         ));
         if (!opts.taskContext) {
-          newLayerHashes.forEach((hash, index) => this.promptLayerHashes.set(index, hash));
-          this.cachedSystemPrompt = systemPrompt;
+          newLayerHashes.forEach((hash, index) =>
+            this.runtimeState.promptLayerHashes.set(index, hash),
+          );
+          this.runtimeState.cachedSystemPrompt = systemPrompt;
         }
       }
 
@@ -844,7 +980,7 @@ export class AgentRunner {
         pendingToolCalls: undefined,
       };
     } catch (error) {
-      this.activeKernelRunId = null;
+      this.releaseActiveLease();
       throw error;
     }
   }
@@ -852,9 +988,7 @@ export class AgentRunner {
   async continueKernelTurn(
     state: SerializedAgentTurnExecutionState,
   ): Promise<KernelTurnStepResult> {
-    if (this.activeKernelRunId !== state.runId) {
-      throw new Error(`Agent '${this.agentId}' kernel lease mismatch for run '${state.runId}'`);
-    }
+    this.assertActiveLease(state.runId);
     if ((state.pendingToolCalls?.length ?? 0) > 0) {
       throw new Error(
         `Agent '${this.agentId}' is waiting for tool syscall resolution for run '${state.runId}'`,
@@ -870,9 +1004,7 @@ export class AgentRunner {
   }
 
   async resumeKernelTurn(state: SerializedAgentTurnExecutionState): Promise<KernelTurnStepResult> {
-    if (this.activeKernelRunId !== state.runId) {
-      throw new Error(`Agent '${this.agentId}' kernel lease mismatch for run '${state.runId}'`);
-    }
+    this.assertActiveLease(state.runId);
 
     if ((state.pendingToolCalls?.length ?? 0) > 0) {
       if (this.hasApprovalPending(state.pendingToolCalls ?? [])) {
@@ -1117,9 +1249,9 @@ export class AgentRunner {
     const { toolRegistry } = this.deps;
     const toolResults: SerializedToolSyscallResult[] = [];
     const toolResultCache = new Map(
-      (toolResultCacheEntries ?? this.serializeToolResultCache(this.toolResultCache)).map(
-        (entry) => [entry.key, entry.value] satisfies [string, ToolCallResult],
-      ),
+      (
+        toolResultCacheEntries ?? this.serializeToolResultCache(this.runtimeState.toolResultCache)
+      ).map((entry) => [entry.key, entry.value] satisfies [string, ToolCallResult]),
     );
 
     for (const toolCall of pendingToolCalls) {
@@ -1404,7 +1536,7 @@ export class AgentRunner {
 
     await metaStore.update(state.sessionKey, {
       agentId: this.agentId,
-      threadKey: parseSessionKey(state.sessionKey)?.threadKey ?? this.threadKey,
+      threadKey: parseSessionKey(state.sessionKey)?.threadKey ?? this.runtimeState.defaultThreadKey,
       status: state.finalFailureMessage ? 'error' : 'idle',
       lastActivity: Date.now(),
       contextTokensEstimate: state.totalInputTokens,
@@ -1425,7 +1557,7 @@ export class AgentRunner {
     }
 
     void this.deps.memoryOrganizer?.maybeOrganize();
-    this.activeKernelRunId = null;
+    this.releaseActiveLease();
     this.flushPendingCategoryReplacements();
 
     return {
@@ -1525,15 +1657,21 @@ export class AgentRunner {
     }
     let executionState: SerializedAgentTurnExecutionState | null = null;
     try {
-      executionState = await this.beginKernelTurn(`direct:${ulid()}`, userMessage, opts);
-      this._running = true;
+      executionState = await this.beginKernelTurn(
+        `direct:${ulid()}`,
+        userMessage,
+        opts,
+        opts.threadKey,
+      );
+      this.promoteLeaseToDirect(executionState.runId);
       const initialStep = await this.continueKernelTurn(executionState);
       return yield* this.driveDirectKernelStep(initialStep);
     } catch (err) {
       const failure = classifyAgentFailure(err instanceof Error ? err.message : String(err));
       const failureText = formatFailureReply(failure.summary);
-      const sessionKey = executionState?.sessionKey ?? this.sessionKey;
-      const threadKey = parseSessionKey(sessionKey)?.threadKey ?? this.threadKey;
+      const sessionKey =
+        executionState?.sessionKey ?? this.activeSessionKey ?? this.defaultSessionKey;
+      const threadKey = parseSessionKey(sessionKey)?.threadKey ?? this.currentThreadKey;
       logger.error('Agent turn failed unexpectedly', {
         agentId: this.agentId,
         error: err instanceof Error ? (err.stack ?? err.message) : String(err),
@@ -1562,9 +1700,9 @@ export class AgentRunner {
         outputTokens: executionState?.totalOutputTokens ?? 0,
       };
     } finally {
-      this._running = false;
-      if (this.activeKernelRunId?.startsWith('direct:')) {
-        this.activeKernelRunId = null;
+      const activeRunId = this.leaseState.activeRunId;
+      if (this.leaseState.mode === 'direct' && activeRunId?.startsWith('direct:')) {
+        this.releaseActiveLease();
       }
       this.flushPendingCategoryReplacements();
     }
@@ -1580,13 +1718,14 @@ export class AgentRunner {
     return value.value;
   }
 
-  /** Clear the current thread's conversation history. */
-  async clearHistory(): Promise<void> {
+  /** Clear the specified thread's conversation history. */
+  async clearHistory(threadKey: string): Promise<void> {
     if (this.isRunning) {
       throw new Error(`Agent '${this.agentId}' cannot clear history while a turn is active`);
     }
-    await this.deps.sessionStore.overwrite(this.sessionKey, []);
-    await this.deps.metaStore.update(this.sessionKey, {
+    const sessionKey = this.sessionKeyForThread(threadKey);
+    await this.deps.sessionStore.overwrite(sessionKey, []);
+    await this.deps.metaStore.update(sessionKey, {
       messageCount: 0,
       contextTokensEstimate: 0,
       compactionCount: 0,
@@ -1600,7 +1739,7 @@ export class AgentRunner {
     const suspended = toSuspendedSessionError(error);
     await this.deps.metaStore.update(sessionKey, {
       agentId: this.agentId,
-      threadKey: parseSessionKey(sessionKey)?.threadKey ?? this.threadKey,
+      threadKey: parseSessionKey(sessionKey)?.threadKey ?? this.currentThreadKey,
       status: 'suspended',
       lastActivity: Date.now(),
       error: suspended.error,

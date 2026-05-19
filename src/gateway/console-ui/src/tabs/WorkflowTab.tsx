@@ -8,10 +8,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Badge } from '../components/Badge.js';
 import { Button } from '../components/Button.js';
 import { useLocale } from '../context/i18n.js';
+import { useAgentsWithActivity } from '../hooks/useAgentsWithActivity.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
 import { useToast } from '../hooks/useToast.js';
 import type {
-  AgentListResult,
   ChannelInfo,
   ChannelListResult,
   SchedulerListResult,
@@ -42,11 +42,7 @@ export function WorkflowTab() {
   }>(() => rpc<{ workflows: WorkflowDef[] }>('workflow.list'), []);
   const workflows = workflowsData?.workflows ?? [];
 
-  const { data: agentsData } = useQuery<AgentListResult>(
-    () => rpc<AgentListResult>('agent.list'),
-    [],
-  );
-  const agents = agentsData?.agents ?? [];
+  const { agents } = useAgentsWithActivity();
 
   const { data: schedulerData } = useQuery<SchedulerListResult>(
     () => rpc<SchedulerListResult>('scheduler.list'),

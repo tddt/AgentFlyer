@@ -21,8 +21,8 @@ import {
 } from './workflow-runtime-shared.js';
 import {
   type WorkflowSuperNodeChildLineage,
-  type WorkflowSuperNodeTrace,
   type WorkflowSuperNodeParticipantResult,
+  type WorkflowSuperNodeTrace,
   type WorkflowSuperNodeType,
   buildWorkflowSuperNodeCoordinatorPrompt,
   buildWorkflowSuperNodeParticipantPrompt,
@@ -169,12 +169,11 @@ function buildSuperNodeChildLineage(params: {
 function canReuseParticipantResults(
   trace: WorkflowStepResult['superNodeTrace'] | undefined,
 ): trace is WorkflowSuperNodeTrace {
+  const participantResults = trace?.participantResults;
   return Boolean(
-    trace &&
-      trace.participantResults.every(
-        (item) => item.status === 'done' || item.delegatedRunStatus === 'suspended',
-      ) &&
-      !trace.participantResults.some((item) => item.status === 'error'),
+    participantResults?.every(
+      (item) => item.status === 'done' || item.delegatedRunStatus === 'suspended',
+    ) && !participantResults.some((item) => item.status === 'error'),
   );
 }
 
@@ -468,9 +467,7 @@ export class WorkflowProcessRuntime
       const errorFinishedAt = Date.now();
       if (delegated?.delegatedRunStatus === 'suspended') {
         const retrySuperNodeTrace =
-          error instanceof WorkflowSuperNodeExecutionError
-            ? error.trace
-            : undefined;
+          error instanceof WorkflowSuperNodeExecutionError ? error.trace : undefined;
         return {
           signal: 'SUSPENDED',
           state: {
@@ -768,8 +765,7 @@ export class WorkflowProcessRuntime
           const delegatedMetadata = getDelegatedRunMetadata(error);
           return {
             agentId,
-            status:
-              delegatedMetadata.delegatedRunStatus === 'suspended' ? 'suspended' : 'error',
+            status: delegatedMetadata.delegatedRunStatus === 'suspended' ? 'suspended' : 'error',
             prompt: rolePrompt,
             startedAt: participantStartedAt,
             finishedAt: Date.now(),
@@ -788,7 +784,11 @@ export class WorkflowProcessRuntime
       }),
     );
 
-    const coordinatorThreadKey = workflowThreadKey(state.run.runId, currentStepIndex, 'coordinator');
+    const coordinatorThreadKey = workflowThreadKey(
+      state.run.runId,
+      currentStepIndex,
+      'coordinator',
+    );
     const coordinatorLineage = buildSuperNodeChildLineage({
       parentRunId: state.run.runId,
       parentStepId: step.id,
@@ -803,7 +803,7 @@ export class WorkflowProcessRuntime
       parentStepId: step.id,
       participantExecution: reusableTrace ? 'reused' : 'fresh',
       coordinatorAttempt: hasCoordinatorAttempted(reusableTrace)
-        ? reusableTrace.coordinatorAttempt + 1
+        ? (reusableTrace?.coordinatorAttempt ?? 0) + 1
         : 1,
       coordinatorAgentId,
       coordinatorLineage,

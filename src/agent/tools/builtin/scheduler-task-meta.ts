@@ -1,3 +1,5 @@
+import type { ScheduledAgentRunStatus } from '../../../scheduler/task-history.js';
+
 export interface ScheduledTaskRecord {
   id: string;
   name: string;
@@ -22,7 +24,7 @@ export interface ScheduledTaskExecutionSummary {
   lastRunAt?: number;
   lastResult?: string;
   lastAgentRunId?: string;
-  lastAgentRunStatus?: 'done' | 'error' | 'suspended';
+  lastAgentRunStatus?: ScheduledAgentRunStatus;
   latestDeliverableId?: string;
 }
 

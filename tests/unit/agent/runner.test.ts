@@ -329,7 +329,7 @@ describe('AgentRunner', () => {
     });
 
     await runner.runTurn('persist meta error code');
-    const meta = await metaStore.get(runner.currentSessionKey);
+    const meta = await metaStore.get(runner.defaultSessionKey);
 
     expect(meta?.status).toBe('suspended');
     expect(meta?.errorCode).toBe('rate_limit');
@@ -468,7 +468,7 @@ describe('AgentRunner', () => {
     expect(next.value.text).toBe('chunk1chunk2');
   });
 
-  it('setThread() isolates turns into a new session key', async () => {
+  it('setDefaultThread() isolates turns into a new session key', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'agentflyer-thread-'));
     tempDirs.push(dir);
 
@@ -494,11 +494,11 @@ describe('AgentRunner', () => {
       metaStore: new SessionMetaStore(dir),
     });
 
-    const keyBefore = runner.currentSessionKey;
+    const keyBefore = runner.defaultSessionKey;
     await runner.runTurn('thread 1 message');
 
-    runner.setThread('thread-b');
-    const keyAfter = runner.currentSessionKey;
+    runner.setDefaultThread('thread-b');
+    const keyAfter = runner.defaultSessionKey;
     expect(keyAfter).not.toBe(keyBefore);
 
     await runner.runTurn('thread 2 message');
@@ -537,11 +537,11 @@ describe('AgentRunner', () => {
       metaStore: new SessionMetaStore(dir),
     });
 
-    runner.setThread('custom-thread');
+    runner.setDefaultThread('custom-thread');
     await runner.runTurn('first');
 
     const state = runner.serializeState();
-    expect(state.threadKey).toBe('custom-thread');
+    expect(state.defaultThreadKey).toBe('custom-thread');
 
     // Restore into a fresh runner
     const runner2 = new AgentRunner(createAgentConfig(), {
@@ -552,7 +552,7 @@ describe('AgentRunner', () => {
     });
     runner2.restoreState(state);
 
-    expect(runner2.currentSessionKey).toBe(runner.currentSessionKey);
+    expect(runner2.defaultSessionKey).toBe(runner.defaultSessionKey);
     expect(runner2.isRunning).toBe(false);
   });
 });

@@ -423,13 +423,11 @@ function buildWorkflowRunReadModel(run: WorkflowRunRecord): WorkflowRunRecord {
 function getWorkflowControlTarget(
   run: WorkflowRunRecord,
   childStepId: string,
-):
-  | {
-      scope: 'step' | 'child';
-      status: WorkflowRunRecord['status'] | 'done' | 'error';
-      stepId: string;
-    }
-  | null {
+): {
+  scope: 'step' | 'child';
+  status: WorkflowRunRecord['status'] | 'done' | 'error';
+  stepId: string;
+} | null {
   const readModel = buildWorkflowRunReadModel(run);
   for (const step of readModel.stepResults) {
     if (step.stepId === childStepId) {

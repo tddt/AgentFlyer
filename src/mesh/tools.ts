@@ -8,6 +8,7 @@ import {
   waitForAgentTurnViaKernel,
 } from '../agent/kernel-turn-executor.js';
 import type { AgentRunner } from '../agent/runner.js';
+import { deriveAgentTurnControlState } from '../agent/turn-run-state.js';
 import { createLogger } from '../core/logger.js';
 import { type AgentId, type TaskId, asTaskId } from '../core/types.js';
 import type { MeshBus } from './bus.js';
@@ -190,7 +191,7 @@ export class MeshTaskDispatcher {
         dataDir: this.dataDir,
         runId: record.runId,
       });
-      if (current?.processStatus === 'suspended' || current?.phase === 'suspended') {
+      if (current && deriveAgentTurnControlState(current) === 'suspended') {
         record.status = 'suspended';
         record.error = current.error?.message ?? String(err);
       } else {

@@ -3,6 +3,7 @@ import { Badge } from '../components/Badge.js';
 import { Button } from '../components/Button.js';
 import { StatCard } from '../components/StatCard.js';
 import { useLocale } from '../context/i18n.js';
+import { useAgentsWithActivity } from '../hooks/useAgentsWithActivity.js';
 import { rpc, useQuery } from '../hooks/useRpc.js';
 import { useToast } from '../hooks/useToast.js';
 import { useUptime } from '../hooks/useUptime.js';
@@ -10,7 +11,6 @@ import { formatProblemCode, isSuspendedProblemCode, problemCodeBadgeVariant } fr
 import { getRecoveryHint } from '../recovery-hints.js';
 import type {
   AgentInfo,
-  AgentListResult,
   ErrorStatsSummary,
   GatewayStatus,
   SessionClearResult,
@@ -209,10 +209,7 @@ export function OverviewTab({
     });
   }, []);
 
-  const { data: agentListResult, refetch: refetchAgents } = useQuery<AgentListResult>(
-    () => rpc<AgentListResult>('agent.list'),
-    [],
-  );
+  const { agents, refetch: refetchAgents } = useAgentsWithActivity();
 
   const { data: sessionsData, refetch: refetchSessions } = useQuery<SessionListResult>(
     () => rpc<SessionListResult>('session.list'),
@@ -268,7 +265,6 @@ export function OverviewTab({
   if (loading && !status) return <div className="text-sm p-8" style={{ color: 'var(--af-text-muted)' }}>{t('common.loading')}</div>;
   if (error) return <div className="text-red-400 text-sm p-8">{t('common.error')}{error}</div>;
 
-  const agents: AgentInfo[] = Array.isArray(agentListResult?.agents) ? agentListResult.agents : [];
   const sessions: SessionMetaInfo[] = sessionsData?.sessions ?? [];
   const errorStats: ErrorStatsSummary | null = statsData?.errors ?? null;
   const agentCount = typeof status?.agents === 'number' ? status.agents : agents.length;

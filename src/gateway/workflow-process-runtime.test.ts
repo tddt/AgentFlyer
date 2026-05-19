@@ -595,8 +595,14 @@ describe('WorkflowProcessRuntime', () => {
     expect(calls).toEqual([
       { agentId: 'planner-a', threadKey: 'workflow:run-super-node-retry:step0:participant-1' },
       { agentId: 'planner-b', threadKey: 'workflow:run-super-node-retry:step0:participant-2' },
-      { agentId: 'coordinator-agent', threadKey: 'workflow:run-super-node-retry:step0:coordinator' },
-      { agentId: 'coordinator-agent', threadKey: 'workflow:run-super-node-retry:step0:coordinator' },
+      {
+        agentId: 'coordinator-agent',
+        threadKey: 'workflow:run-super-node-retry:step0:coordinator',
+      },
+      {
+        agentId: 'coordinator-agent',
+        threadKey: 'workflow:run-super-node-retry:step0:coordinator',
+      },
     ]);
   });
 
@@ -755,7 +761,11 @@ describe('WorkflowProcessRuntime', () => {
     });
 
     const suspended = await runtime.step(
-      runtime.createInitialState({ runId: 'run-super-node-participant-suspend', workflow, input: 'ignored' }),
+      runtime.createInitialState({
+        runId: 'run-super-node-participant-suspend',
+        workflow,
+        input: 'ignored',
+      }),
       {
         pid: 'pid-super-node-participant-suspend' as never,
         now: 92,
