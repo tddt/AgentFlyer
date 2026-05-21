@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LLMProvider, RunParams } from '../agent/llm/provider.js';
 import { AgentRunner } from '../agent/runner.js';
 import type { ApprovalHandler } from '../agent/tools/policy.js';
@@ -360,6 +360,41 @@ async function waitForRpcRunPhase(
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   throw new Error(`RPC run ${runId} did not reach phase ${phase}; last=${JSON.stringify(lastRun)}`);
+}
+
+async function waitForAgentActivityState(
+  ctx: RpcContext,
+  agentId: string,
+  expectedState: 'idle' | 'running' | 'suspended',
+): Promise<{
+  state: 'idle' | 'running' | 'suspended';
+  busy: boolean;
+  pendingCount: number;
+  activeRun?: unknown;
+}> {
+  let lastActivity:
+    | {
+        state: 'idle' | 'running' | 'suspended';
+        busy: boolean;
+        pendingCount: number;
+        activeRun?: unknown;
+      }
+    | undefined;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const response = await dispatchRpc(
+      { id: `activity-${attempt}`, method: 'agent.status', params: { agentId } },
+      ctx,
+    );
+    const activity = (response.result as { activity: typeof lastActivity }).activity;
+    lastActivity = activity;
+    if (activity?.state === expectedState) {
+      return activity;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error(
+    `Agent ${agentId} did not reach activity state ${expectedState}; last=${JSON.stringify(lastActivity)}`,
+  );
 }
 
 describe('AgentKernelService', () => {
@@ -800,6 +835,55 @@ describe('AgentKernelService', () => {
     expect((afterResume.result as { processStatus?: string } | null)?.processStatus).toBe('ready');
   });
 
+  it('reports idle agent activity when only older suspended runs remain after a later successful turn', async () => {
+    const dataDir = await createTempDir();
+    let blocked = true;
+    const provider = new FakeRecoverableBlockedLlmProvider(() => blocked);
+    const ctx = createRpcContext(dataDir, createRunner(dataDir, provider));
+    services.push(await getAgentKernelService(ctx));
+
+    const suspendedStart = await dispatchRpc(
+      {
+        id: 1,
+        method: 'agent.run',
+        params: {
+          agentId: 'agent-main',
+          message: 'leave one suspended run behind',
+          thread: 'suspended-thread',
+        },
+      },
+      ctx,
+    );
+    const suspendedRunId = (suspendedStart.result as { runId: string }).runId;
+    const suspended = await waitForRpcRunPhase(ctx, suspendedRunId, 'suspended');
+    expect(suspended.processStatus).toBe('suspended');
+
+    blocked = false;
+    const completedStart = await dispatchRpc(
+      {
+        id: 2,
+        method: 'agent.run',
+        params: {
+          agentId: 'agent-main',
+          message: 'run a fresh successful turn',
+          thread: 'completed-thread',
+        },
+      },
+      ctx,
+    );
+    const completedRunId = (completedStart.result as { runId: string }).runId;
+    const completed = await waitForRpcRunPhase(ctx, completedRunId, 'done');
+    expect(completed.result?.text).toContain('quota recovered');
+
+    const activity = await waitForAgentActivityState(ctx, 'agent-main', 'idle');
+    expect(activity).toMatchObject({
+      state: 'idle',
+      busy: false,
+      pendingCount: 0,
+    });
+    expect(activity.activeRun).toBeUndefined();
+  });
+
   it('returns a 409 rpc error when session.clear targets a runner with an active turn', async () => {
     const dataDir = await createTempDir();
     const runner = createRunner(dataDir);
@@ -1053,6 +1137,88 @@ describe('AgentKernelService', () => {
     releaseFirstRun();
     await firstChat;
     await queuedChat;
+  });
+
+  it('lazy-loads a configured runner for agent.chat when the agent exists in config but is not loaded yet', async () => {
+    const dataDir = await createTempDir();
+    const lazyRunner = createRunner(dataDir);
+    const runners = new Map<string, AgentRunner>();
+    const reload = vi.fn(async (agentId?: string) => {
+      if (agentId === 'agent-5') {
+        runners.set('agent-5', lazyRunner);
+      }
+      return { reloaded: agentId ? [agentId] : [] };
+    });
+    const ctx = createRpcContext(dataDir, lazyRunner, {
+      runners,
+      reload,
+      getConfig: () =>
+        ({
+          agents: [{ id: 'agent-5', name: 'Agent 5' }],
+        }) as never,
+    });
+
+    const response = await dispatchRpc(
+      {
+        id: 88,
+        method: 'agent.chat',
+        params: {
+          agentId: 'agent-5',
+          message: 'hello lazy runner',
+          thread: 'console:agent-5',
+        },
+      },
+      ctx,
+    );
+
+    expect(reload).toHaveBeenCalledWith('agent-5');
+    expect(response).toEqual({
+      id: 88,
+      result: { reply: 'kernel hello' },
+    });
+  });
+
+  it('includes configured agents in agent.list even when no runner is currently loaded', async () => {
+    const dataDir = await createTempDir();
+    const runner = createRunner(dataDir, new FakeProvider());
+    const ctx = createRpcContext(dataDir, runner, {
+      getConfig: () =>
+        ({
+          agents: [
+            { id: 'agent-main', name: 'Main Agent' },
+            {
+              id: 'agent-hidden',
+              name: 'Hidden Agent',
+              mentionAliases: ['hidden'],
+              mesh: { role: 'observer' },
+            },
+          ],
+          defaults: { model: 'gpt-4.1-mini' },
+        }) as never,
+    });
+
+    const response = await dispatchRpc(
+      {
+        id: 5,
+        method: 'agent.list',
+      },
+      ctx,
+    );
+
+    expect(
+      (response.result as { agents: Array<Record<string, unknown>> }).agents,
+    ).toContainEqual(
+      expect.objectContaining({
+        agentId: 'agent-hidden',
+        name: 'Hidden Agent',
+        mentionAliases: ['hidden'],
+        model: 'gpt-4.1-mini',
+        role: 'observer',
+        activity: expect.objectContaining({
+          state: 'idle',
+        }),
+      }),
+    );
   });
 
   it('returns a queued run handle immediately and exposes pending runStatus before kernel start', async () => {

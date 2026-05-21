@@ -1754,7 +1754,12 @@ function AgentPanel({
           if (chunk.type === 'thinking' || chunk.type === 'thinking_delta') {
             setQueuePosition(null);
             setPendingStatus(null);
-            thinkingContent += chunk.text;
+            const thinkingDelta =
+              chunk.type === 'thinking_delta' ? (chunk.thinking ?? chunk.text ?? '') : chunk.text;
+            if (!thinkingDelta) {
+              continue;
+            }
+            thinkingContent += thinkingDelta;
             setMessages((prev) => {
               const next = [...prev];
               const lastIdx = next.length - 1;
@@ -1819,11 +1824,34 @@ function AgentPanel({
           if (chunk.type === 'tool_use_delta') {
             setQueuePosition(null);
             setPendingStatus(null);
-            const tool = pendingTools.get(chunk.id);
-            if (tool) {
-              tool.input += chunk.inputJson;
-              pendingTools.set(chunk.id, tool);
+            const toolId = chunk.id || `${chunk.name || 'tool'}:${pendingTools.size}`;
+            const tool = pendingTools.get(toolId) ?? {
+              id: toolId,
+              name: chunk.name,
+              input: '',
+            };
+            if (chunk.name && !tool.name) {
+              tool.name = chunk.name;
             }
+            tool.input += chunk.inputJson;
+            pendingTools.set(toolId, tool);
+            setMessages((prev) => {
+              const next = [...prev];
+              const last = next[next.length - 1];
+              if (last?.role === 'assistant') {
+                const tools = [...(last.tools ?? [])];
+                const existingIdx = tools.findIndex((t) => t.id === toolId);
+                const nextTool = { id: toolId, name: tool.name, input: tool.input };
+                if (existingIdx >= 0) {
+                  tools[existingIdx] = nextTool;
+                } else {
+                  tools.push(nextTool);
+                }
+                next[next.length - 1] = { ...last, tools };
+              }
+              return next;
+            });
+            shouldYieldToPaint = true;
             continue;
           }
 

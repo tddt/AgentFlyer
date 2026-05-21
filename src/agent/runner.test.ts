@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SessionMetaStore } from '../core/session/meta.js';
 import { SessionStore } from '../core/session/store.js';
+import { asSessionKey } from '../core/types.js';
 import type { StreamChunk } from '../core/types.js';
 import type { LLMProvider, RunParams } from './llm/provider.js';
 import { AgentRunner } from './runner.js';
@@ -34,6 +35,44 @@ class RecoverableRetryProvider implements LLMProvider {
     }
 
     yield { type: 'text_delta', text: 'retry success' };
+    yield {
+      type: 'done',
+      inputTokens: 1,
+      outputTokens: 1,
+      stopReason: 'end_turn',
+    };
+  }
+
+  async countTokens(): Promise<number> {
+    return 0;
+  }
+
+  supports(): boolean {
+    return true;
+  }
+
+  getAttemptCount(): number {
+    return this.attempts;
+  }
+}
+
+class RecoverableThinkingSocketCloseProvider implements LLMProvider {
+  readonly id = 'recoverable-thinking-socket-close';
+  private attempts = 0;
+
+  async *run(_params: RunParams): AsyncIterable<StreamChunk> {
+    this.attempts += 1;
+    if (this.attempts === 1) {
+      yield { type: 'thinking_delta', thinking: '先分析一下...' };
+      yield {
+        type: 'error',
+        message:
+          'Error: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()',
+      };
+      return;
+    }
+
+    yield { type: 'text_delta', text: 'socket retry success' };
     yield {
       type: 'done',
       inputTokens: 1,
@@ -95,6 +134,18 @@ describe('AgentRunner recoverable stream retry', () => {
 
     expect(provider.getAttemptCount()).toBe(2);
     expect(result.text).toContain('retry success');
+    expect(result.text).not.toContain('任务执行失败');
+  });
+
+  it('retries a transient socket-close stream failure even after thinking output', async () => {
+    const dataDir = await createTempDir();
+    const provider = new RecoverableThinkingSocketCloseProvider();
+    const runner = createRunner(dataDir, provider);
+
+    const result = await runner.runTurn('continue thinking');
+
+    expect(provider.getAttemptCount()).toBe(2);
+    expect(result.text).toContain('socket retry success');
     expect(result.text).not.toContain('任务执行失败');
   });
 
@@ -176,6 +227,56 @@ describe('AgentRunner recoverable stream retry', () => {
 
     expect(runner.defaultSessionKey).toContain('operator-default-thread');
     expect(runner.serializeState().defaultThreadKey).toBe('operator-default-thread');
+  });
+
+  it('drops poisoned Gemini thought-signature turns from stored history before a new turn starts', async () => {
+    const dataDir = await createTempDir();
+    const provider = new RecoverableRetryProvider();
+    const runner = createRunner(dataDir, provider);
+    const sessionStore = new SessionStore(join(dataDir, 'sessions'));
+    const sessionKey = asSessionKey('agent:agent-main:default');
+
+    await sessionStore.appendMany(sessionKey, [
+      {
+        id: 'msg-tool-use',
+        sessionKey,
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'tool-1',
+            name: 'bash',
+            input: { command: 'pwd' },
+          },
+        ],
+        timestamp: Date.now() - 3,
+      },
+      {
+        id: 'msg-tool-result',
+        sessionKey,
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'tool-1',
+            content: 'D:/workspace',
+          },
+        ],
+        timestamp: Date.now() - 2,
+      },
+      {
+        id: 'msg-error',
+        sessionKey,
+        role: 'assistant',
+        content:
+          'Error: Error: 429 Function call is missing a thought_signature in functionCall parts.',
+        timestamp: Date.now() - 1,
+      },
+    ]);
+
+    const executionState = await runner.beginKernelTurn('run-drop-poisoned-history', 'fresh turn');
+
+    expect(executionState.messages).toEqual([{ role: 'user', content: 'fresh turn' }]);
   });
 
   it('runs a direct turn on an explicit thread without mutating the default thread', async () => {

@@ -118,6 +118,7 @@ export interface ToolUseContent {
   id: string;
   name: string;
   input: unknown;
+  thoughtSignature?: string;
 }
 
 export interface ToolResultContent {
@@ -148,11 +149,25 @@ export interface ThinkingDelta {
   thinking: string;
 }
 
+export interface ToolUseStart {
+  type: 'tool_use_start';
+  id: string;
+  name: string;
+}
+
 export interface ToolUseDelta {
   type: 'tool_use_delta';
   id: string;
   name: string;
   inputJson: string;
+  thoughtSignature?: string;
+}
+
+export interface ToolResultChunk {
+  type: 'tool_result';
+  id: string;
+  content: string;
+  isError?: boolean;
 }
 
 export interface StreamDone {
@@ -177,7 +192,9 @@ export interface ProgressChunk {
 export type StreamChunk =
   | TextDelta
   | ThinkingDelta
+  | ToolUseStart
   | ToolUseDelta
+  | ToolResultChunk
   | StreamDone
   | StreamError
   | ProgressChunk;

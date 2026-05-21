@@ -8,6 +8,38 @@ const logger = createLogger('llm:anthropic');
 /** Models handled by this provider. */
 const ANTHROPIC_PREFIXES = ['claude-'];
 
+function buildLlmErrorLogContext(error: unknown): Record<string, unknown> {
+  const context: Record<string, unknown> = {
+    error: error instanceof Error ? error.message : String(error),
+  };
+
+  if (!error || typeof error !== 'object') {
+    return context;
+  }
+
+  const record = error as Record<string, unknown>;
+  if (error instanceof Error && error.name && error.name !== 'Error') {
+    context.errorName = error.name;
+  }
+  if (typeof record.status === 'number') {
+    context.status = record.status;
+  }
+  if (typeof record.code === 'string') {
+    context.code = record.code;
+  }
+  if (typeof record.type === 'string') {
+    context.type = record.type;
+  }
+  if (typeof record.message === 'string' && record.message !== context.error) {
+    context.rawMessage = record.message;
+  }
+  const cause = record.cause;
+  if (cause) {
+    context.cause = cause instanceof Error ? cause.message : String(cause);
+  }
+  return context;
+}
+
 function toAnthropicMessages(messages: Message[]): Anthropic.MessageParam[] {
   return messages
     .filter((m) => m.role !== 'system')
@@ -155,7 +187,13 @@ export class AnthropicProvider implements LLMProvider {
         };
       }
     } catch (err) {
-      logger.error('Anthropic stream error', { error: String(err) });
+      logger.error('Anthropic stream error', {
+        providerId: this.id,
+        model,
+        messageCount: anthropicMessages.length,
+        toolCount: anthropicTools.length,
+        ...buildLlmErrorLogContext(err),
+      });
       yield { type: 'error', message: String(err) };
     }
   }

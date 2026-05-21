@@ -91,6 +91,7 @@ function makeCtx(overrides: Partial<RpcContext> = {}): RpcContext {
     channels: new Map(),
     runners: new Map(),
     getConfig: () => ({ agents: [] }),
+    reload: async () => ({ reloaded: [] }),
     memoryStore: {} as never,
     runningTasks: new Map(),
     ...overrides,
@@ -392,6 +393,55 @@ describe('GET /favicon.ico', () => {
 });
 
 describe('POST /chat', () => {
+  it('lazy-loads a configured agent runner before returning Agent not found', async () => {
+    const listeners = new Map<string, (chunk: Record<string, unknown>) => void>();
+    mockedGetAgentKernelService.mockResolvedValue({
+      startTurn: vi.fn(async ({ runId }: { runId: string }) => {
+        listeners.get(runId)?.({ type: 'text_delta', text: 'hello from lazy agent' });
+        return { runId };
+      }),
+      waitForRun: vi.fn(async () => ({ text: 'hello from lazy agent' })),
+      subscribeRun: vi.fn((runId: string, listener: (chunk: Record<string, unknown>) => void) => {
+        listeners.set(runId, listener);
+        return () => {
+          listeners.delete(runId);
+        };
+      }),
+    } as never);
+
+    const runners = new Map<string, unknown>();
+    const reload = vi.fn(async (agentId?: string) => {
+      if (agentId === 'agent-5') {
+        runners.set('agent-5', {});
+      }
+      return { reloaded: agentId ? [agentId] : [] };
+    });
+
+    const req = makeReq(
+      '/chat',
+      'POST',
+      { authorization: 'Bearer test-token', 'content-type': 'application/json' },
+      { agentId: 'agent-5', message: 'hello', thread: 'console:agent-5' },
+    );
+    const res = makeRes();
+    const handled = await routeRequest(
+      req,
+      res as unknown as ServerResponse,
+      makeOpts({
+        runners: runners as never,
+        reload,
+        getConfig: () => ({ agents: [{ id: 'agent-5', name: 'Agent 5' }] }) as never,
+      }),
+    );
+
+    expect(handled).toBe(true);
+    expect(reload).toHaveBeenCalledWith('agent-5');
+    expect(parseSseEvents(res.body())[1]).toMatchObject({
+      type: 'text_delta',
+      text: 'hello from lazy agent',
+    });
+  });
+
   it('emits a runId on started events and captures deliverables after completion', async () => {
     const listeners = new Map<string, (chunk: Record<string, unknown>) => void>();
     mockedGetAgentKernelService.mockResolvedValue({

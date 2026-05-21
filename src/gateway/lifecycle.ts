@@ -140,6 +140,23 @@ function hasUsableApiKey(value: string | undefined): boolean {
   return !['changeme', 'placeholder', 'your-api-key'].includes(trimmed.toLowerCase());
 }
 
+export function hasRunnerAffectingConfigChanges(prevConfig: Config, newConfig: Config): boolean {
+  const pickRunnerConfig = (config: Config) => ({
+    defaults: {
+      model: config.defaults.model,
+      workspace: config.defaults.workspace,
+    },
+    models: config.models,
+    memory: config.memory,
+    search: config.search,
+    sandbox: config.sandbox,
+    skills: config.skills,
+    contextSystemPrompt: config.context?.systemPrompt,
+  });
+
+  return JSON.stringify(pickRunnerConfig(prevConfig)) !== JSON.stringify(pickRunnerConfig(newConfig));
+}
+
 /** Write PID file so CLI can check if gateway is running. */
 async function writePid(dataDir: string, port: number): Promise<void> {
   const pidPath = join(dataDir, 'gateway.pid');
@@ -685,6 +702,7 @@ export async function startGateway(
 
     // ── Config diff detection: only rebuild the subsystems that changed ──
     const mcpChanged = JSON.stringify(prevConfig.mcp) !== JSON.stringify(newConfig.mcp);
+    const runnerGlobalsChanged = hasRunnerAffectingConfigChanges(prevConfig, newConfig);
     const agentChanged = (id: string) => {
       const prev = prevConfig.agents.find((a) => a.id === id);
       const next = newConfig.agents.find((a) => a.id === id);
@@ -695,12 +713,13 @@ export async function startGateway(
       (prevConfig.agents.length !== newConfig.agents.length ||
         newConfig.agents.some((a) => agentChanged(a.id)));
     const shouldRebuildMcp = mcpChanged || agentsChanged || !!agentId;
-    const shouldRebuildAgents = agentsChanged || !!agentId || agentChanged(agentId ?? '');
+    const shouldRebuildAgents =
+      runnerGlobalsChanged || agentsChanged || !!agentId || agentChanged(agentId ?? '');
 
     if (!shouldRebuildMcp && !shouldRebuildAgents) {
       // Non-agent, non-MCP changes (log level, routing, channels…) — update state and return
       state.config = newConfig;
-      logger.info('Config diff: no agent/MCP changes — hot-updating state only');
+      logger.info('Config diff: no runner/MCP changes — hot-updating state only');
       return { reloaded: [] };
     }
 

@@ -184,7 +184,7 @@ export type ChatChunk =
   | { type: 'queued'; position: number; runId?: string }
   | { type: 'started'; queueDepth?: number; runId?: string; resumed?: boolean }
   | { type: 'thinking'; text: string }
-  | { type: 'thinking_delta'; text: string }
+  | { type: 'thinking_delta'; thinking?: string; text?: string }
   | { type: 'tool_use_delta'; id: string; name: string; inputJson: string }
   | { type: 'tool_use_start'; id: string; name: string }
   | { type: 'tool_result'; id: string; content: string; isError?: boolean }

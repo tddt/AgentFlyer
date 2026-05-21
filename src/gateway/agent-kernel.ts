@@ -437,6 +437,7 @@ export class AgentKernelService {
       .listSnapshots()
       .filter((snapshot) => snapshot.processType === this.runtime.type)
       .map((snapshot) => this.snapshotToRunRecord(snapshot))
+      .filter((record) => deriveAgentTurnControlState(record) !== 'suspended')
       .filter((record) => record.agentId === agentId)
       .sort((left, right) => right.updatedAt - left.updatedAt);
     const current = matches[0];

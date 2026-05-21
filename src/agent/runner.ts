@@ -98,6 +98,11 @@ function sanitizeMessages(messages: Message[]): Message[] {
     typeof m.content === 'string' &&
     /reasoning_content.+must be passed back to the api/i.test(m.content);
 
+  const isThoughtSignatureFailure = (m: Message): boolean =>
+    m.role === 'assistant' &&
+    typeof m.content === 'string' &&
+    /function call is missing a thought_signature/i.test(m.content);
+
   const isToolResultMsg = (m: Message): boolean =>
     m.role === 'user' &&
     Array.isArray(m.content) &&
@@ -123,9 +128,9 @@ function sanitizeMessages(messages: Message[]): Message[] {
         continue;
       }
 
-      // ── Case C: previously poisoned turn from missing reasoning_content ───
-      if (isReasoningContentFailure(msg)) {
-        logger.warn('Dropping poisoned reasoning_content failure turn from history');
+      // ── Case C: previously poisoned turn from missing reasoning context ───
+      if (isReasoningContentFailure(msg) || isThoughtSignatureFailure(msg)) {
+        logger.warn('Dropping poisoned reasoning/tool-signature failure turn from history');
         changed = true;
 
         const prev = out[out.length - 1];
@@ -293,6 +298,7 @@ export interface SerializedPendingToolCall {
   id: string;
   name: string;
   inputJson: string;
+  thoughtSignature?: string;
 }
 
 export interface SerializedToolSyscallResult {
@@ -788,7 +794,14 @@ export class AgentRunner {
           sawToolUseDelta = true;
           sawToolCall = true;
         } else if (chunk.type === 'error') {
-          logger.error('LLM error', { message: chunk.message });
+          logger.error('LLM error', {
+            agentId: this.agentId,
+            providerId: provider.id,
+            model: params.model,
+            messageCount: params.messages.length,
+            toolCount: params.tools.length,
+            message: chunk.message,
+          });
           streamErrorMessage = chunk.message;
           break;
         }
@@ -797,6 +810,10 @@ export class AgentRunner {
       streamErrorMessage = error instanceof Error ? error.message : String(error);
       logger.error('LLM stream threw unexpectedly', {
         agentId: this.agentId,
+        providerId: provider.id,
+        model: params.model,
+        messageCount: params.messages.length,
+        toolCount: params.tools.length,
         message: streamErrorMessage,
       });
     }
@@ -1079,7 +1096,8 @@ export class AgentRunner {
   ): Promise<KernelTurnStepResult> {
     const { sessionStore } = this.deps;
     const payload = resolution.payload as SerializedLlmSyscallPayload | undefined;
-    const chunks = payload?.chunks ?? [];
+    const rawChunks = payload?.chunks ?? [];
+    const chunks: StreamChunk[] = [];
 
     if (!resolution.ok) {
       state.finalFailureMessage = resolution.error?.message ?? 'LLM 调用执行失败';
@@ -1087,43 +1105,71 @@ export class AgentRunner {
       return await this.finalizeKernelTurn(state, chunks);
     }
 
-    const toolCallMap = new Map<string, { name: string; inputJson: string }>();
+    const toolCallMap = new Map<
+      string,
+      { name: string; inputJson: string; thoughtSignature?: string }
+    >();
     let accText = '';
     let accThinking = '';
     let stopReason: 'end_turn' | 'tool_use' | 'max_tokens' | 'stop_sequence' = 'end_turn';
     let streamErrorMessage: string | null = null;
     const indexToId = new Map<string, string>();
+    const startedToolCalls = new Set<string>();
 
-    for (const chunk of chunks) {
+    for (const chunk of rawChunks) {
       if (chunk.type === 'text_delta') {
+        chunks.push(chunk);
         accText += chunk.text;
       } else if (chunk.type === 'thinking_delta') {
+        chunks.push(chunk);
         accThinking += chunk.thinking;
+      } else if (chunk.type === 'tool_use_start') {
+        chunks.push(chunk);
+        startedToolCalls.add(chunk.id);
       } else if (chunk.type === 'tool_use_delta') {
         const id = chunk.id || indexToId.get(chunk.name) || chunk.name;
         if (chunk.id) {
           indexToId.set(chunk.name, chunk.id);
         }
-        const existing = toolCallMap.get(id) ?? { name: chunk.name, inputJson: '' };
+        const existing = toolCallMap.get(id) ?? {
+          name: chunk.name,
+          inputJson: '',
+          thoughtSignature: undefined,
+        };
         if (chunk.name && !existing.name) {
           existing.name = chunk.name;
         }
+        if (chunk.thoughtSignature) {
+          existing.thoughtSignature = chunk.thoughtSignature;
+        }
+        if (id && existing.name && !startedToolCalls.has(id)) {
+          chunks.push({ type: 'tool_use_start', id, name: existing.name });
+          startedToolCalls.add(id);
+        }
+        chunks.push({ ...chunk, id, name: existing.name });
         existing.inputJson += chunk.inputJson;
         toolCallMap.set(id, existing);
       } else if (chunk.type === 'done') {
+        chunks.push(chunk);
         state.totalInputTokens += chunk.inputTokens;
         state.totalOutputTokens += chunk.outputTokens;
         state.totalCacheReadTokens += chunk.cacheReadTokens ?? 0;
         stopReason = chunk.stopReason;
       } else if (chunk.type === 'error') {
+        chunks.push(chunk);
         logger.error('LLM error', { message: chunk.message });
         streamErrorMessage = chunk.message;
+      } else if (chunk.type === 'tool_result' || chunk.type === 'progress') {
+        chunks.push(chunk);
       }
     }
 
     state.recoverableStreamRetries =
       payload?.recoverableStreamRetries ?? state.recoverableStreamRetries;
     state.totalText += accText;
+
+    const shouldContinueToolLoop =
+      toolCallMap.size > 0 && (stopReason === 'tool_use' || stopReason === 'end_turn');
 
     const assistantToolUse: ToolUseContent[] = [];
     for (const [id, toolCall] of toolCallMap) {
@@ -1132,6 +1178,7 @@ export class AgentRunner {
         id,
         name: toolCall.name,
         input: parseToolCallInput(toolCall.inputJson),
+        ...(toolCall.thoughtSignature ? { thoughtSignature: toolCall.thoughtSignature } : {}),
       });
     }
 
@@ -1186,7 +1233,7 @@ export class AgentRunner {
       return await this.finalizeKernelTurn(state, chunks);
     }
 
-    if (stopReason !== 'tool_use' || toolCallMap.size === 0) {
+    if (!shouldContinueToolLoop) {
       return await this.finalizeKernelTurn(state, chunks);
     }
 
@@ -1195,6 +1242,7 @@ export class AgentRunner {
       id,
       name: toolCall.name,
       inputJson: toolCall.inputJson,
+      ...(toolCall.thoughtSignature ? { thoughtSignature: toolCall.thoughtSignature } : {}),
     }));
 
     if (this.hasApprovalPending(state.pendingToolCalls)) {
@@ -1429,6 +1477,12 @@ export class AgentRunner {
         tool_use_id: toolCall.id,
         content: resolvedResult.content,
         is_error: resolvedResult.isError,
+      });
+      chunks.push({
+        type: 'tool_result',
+        id: toolCall.id,
+        content: resolvedResult.content,
+        isError: resolvedResult.isError,
       });
 
       if (resolvedResult.isError) {

@@ -116,6 +116,32 @@ interface SchedulerAgentTaskOutcome extends DelegatedAgentRunOutcome {
   runStatus: ScheduledAgentRunStatus;
 }
 
+export async function ensureConfiguredRunnerLoaded(
+  ctx: RpcContext,
+  agentId: string,
+): Promise<boolean> {
+  if (ctx.runners.has(agentId)) {
+    return true;
+  }
+
+  const configured = ctx.getConfig().agents.some((agent) => agent.id === agentId);
+  if (!configured) {
+    return false;
+  }
+
+  logger.info('Runner missing for configured agent; attempting lazy reload', { agentId });
+  try {
+    await ctx.reload(agentId);
+  } catch (error) {
+    logger.error('Lazy agent reload failed', {
+      agentId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  return ctx.runners.has(agentId);
+}
+
 type SchedulerRunReader = Pick<Awaited<ReturnType<typeof getAgentKernelService>>, 'getRun'>;
 
 function buildAgentActivityStatus(
@@ -1139,12 +1165,19 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         };
 
       case 'agent.list': {
-        const cfgAgents = ctx.getConfig().agents ?? [];
+        const currentConfig = ctx.getConfig();
+        const cfgAgents = Array.isArray(currentConfig.agents) ? currentConfig.agents : [];
+        const listedAgentIds = [
+          ...cfgAgents.map((agent) => agent.id),
+          ...Array.from(ctx.runners.keys()).filter(
+            (agentId) => !cfgAgents.some((agent) => agent.id === agentId),
+          ),
+        ];
         const agentKernel = await getAgentKernelService(ctx);
         return {
           id,
           result: {
-            agents: Array.from(ctx.runners.keys()).map((agentId) => {
+            agents: listedAgentIds.map((agentId) => {
               const cfg = cfgAgents.find((a) => a.id === agentId);
               const activity = buildAgentActivityStatus(
                 ctx.agentQueues?.status(agentId) ?? {
@@ -1161,9 +1194,11 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
                 mentionAliases: cfg?.mentionAliases ?? [],
                 sandboxProfile: cfg?.tools?.sandboxProfile,
                 activity,
-                model:
-                  cfg?.model ?? (ctx.getConfig().defaults as Record<string, unknown>)?.model ?? '',
-                role: (cfg as unknown as Record<string, unknown>)?.role ?? 'worker',
+                model: cfg?.model ?? (currentConfig.defaults as Record<string, unknown>)?.model ?? '',
+                role:
+                  typeof (cfg?.mesh as Record<string, unknown> | undefined)?.role === 'string'
+                    ? ((cfg?.mesh as Record<string, unknown>).role as string)
+                    : 'worker',
               };
             }),
           },
@@ -1269,7 +1304,7 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         if (!agentId || !message) {
           return buildErrorResponse(id, -32602, 'agentId and message are required');
         }
-        if (!ctx.runners.has(agentId)) {
+        if (!(await ensureConfiguredRunnerLoaded(ctx, agentId))) {
           return buildErrorResponse(id, 404, `Agent not found: ${agentId}`);
         }
         try {
@@ -1313,7 +1348,7 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
         if (!agentId || !message) {
           return buildErrorResponse(id, -32602, 'agentId and message are required');
         }
-        if (!ctx.runners.has(agentId)) {
+        if (!(await ensureConfiguredRunnerLoaded(ctx, agentId))) {
           return buildErrorResponse(id, 404, `Agent not found: ${agentId}`);
         }
         const agentKernel = await getAgentKernelService(ctx);

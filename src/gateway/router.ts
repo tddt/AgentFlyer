@@ -21,7 +21,7 @@ import type { IntentRouter } from './intent-router.js';
 import type { LogBroadcaster } from './log-buffer.js';
 import { renderPrometheus } from './metrics-store.js';
 import { isMethodAllowed, resolveUser } from './rbac.js';
-import { type RpcContext, dispatchRpc } from './rpc.js';
+import { type RpcContext, dispatchRpc, ensureConfiguredRunnerLoaded } from './rpc.js';
 import { getWorkflowKernelService } from './workflow-backend.js';
 import type { RunStreamEvent } from './workflow-kernel.js';
 
@@ -786,20 +786,18 @@ async function _routeRequest(
     // E6: if agentId omitted, use intent router (falls back to 'main' if no rule matches).
     const mention = resolveMentionedAgent(
       message ?? '',
-      opts.rpcContext
-        .getConfig()
-        .agents.filter((agent) => opts.rpcContext.runners.has(agent.id))
-        .map((agent) => ({
-          id: agent.id,
-          name: agent.name,
-          mentionAliases: agent.mentionAliases,
-        })),
+      opts.rpcContext.getConfig().agents.map((agent) => ({
+        id: agent.id,
+        name: agent.name,
+        mentionAliases: agent.mentionAliases,
+      })),
     );
     const inboundMessage = mention.text;
     agentId = resumeRequested ? agentId : (mention.agentId ?? rawAgentId);
     if (!resumeRequested && !agentId && opts.intentRouter) {
       const routed = opts.intentRouter.routeWithFallback(inboundMessage);
-      agentId = opts.rpcContext.runners.has(routed.agent) ? routed.agent : routed.fallback;
+      const configuredAgents = new Set(opts.rpcContext.getConfig().agents.map((agent) => agent.id));
+      agentId = configuredAgents.has(routed.agent) ? routed.agent : routed.fallback;
       logger.debug('Intent router selected agent', {
         agentId,
         message: inboundMessage.slice(0, 60),
@@ -810,8 +808,7 @@ async function _routeRequest(
       return true;
     }
 
-    const runner = opts.rpcContext.runners.get(agentId);
-    if (!runner) {
+    if (!(await ensureConfiguredRunnerLoaded(opts.rpcContext, agentId))) {
       json(res, 404, { error: `Agent not found: ${agentId}` });
       return true;
     }

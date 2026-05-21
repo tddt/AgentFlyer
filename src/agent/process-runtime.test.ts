@@ -95,6 +95,50 @@ class FakeToolLoopProvider implements LLMProvider {
   }
 }
 
+class FakeCompatToolLoopProvider implements LLMProvider {
+  readonly id = 'fake-compat-tool-loop';
+
+  async *run(params: RunParams): AsyncIterable<StreamChunk> {
+    const hasToolResult = params.messages.some(
+      (message) =>
+        Array.isArray(message.content) &&
+        message.content.some((content) => content.type === 'tool_result'),
+    );
+
+    if (!hasToolResult) {
+      yield {
+        type: 'tool_use_delta',
+        id: 'tool-compat-1',
+        name: 'echo_tool',
+        inputJson: '{"message":"from compat tool"}',
+      };
+      yield {
+        type: 'done',
+        inputTokens: 1,
+        outputTokens: 1,
+        stopReason: 'end_turn',
+      };
+      return;
+    }
+
+    yield { type: 'text_delta', text: 'compat tool loop completed' };
+    yield {
+      type: 'done',
+      inputTokens: 1,
+      outputTokens: 2,
+      stopReason: 'end_turn',
+    };
+  }
+
+  async countTokens(): Promise<number> {
+    return 0;
+  }
+
+  supports(): boolean {
+    return true;
+  }
+}
+
 function createRunner(dataDir: string): AgentRunner {
   return createRunnerWithProvider(dataDir, new FakeProvider());
 }
@@ -1054,6 +1098,7 @@ describe('AgentTurnProcessRuntime', () => {
       throw new Error('expected tool syscall');
     }
     expect(toolSyscall.kind).toBe('tool.call');
+    expect(roundTwo.state.stream.some((chunk) => chunk.type === 'tool_use_start')).toBe(true);
     expect(roundTwo.state.stream.some((chunk) => chunk.type === 'tool_use_delta')).toBe(true);
 
     const toolResolution = await runtime.executePendingSyscall(
@@ -1072,6 +1117,7 @@ describe('AgentTurnProcessRuntime', () => {
     });
     expect(roundThree.signal).toBe('WAITING_SYSCALL');
     expect(roundThree.state.phase).toBe('waiting_llm');
+    expect(roundThree.state.stream.some((chunk) => chunk.type === 'tool_result')).toBe(true);
     const finalLlmSyscall = roundThree.syscall;
     if (!finalLlmSyscall) {
       throw new Error('expected final llm syscall');
@@ -1093,6 +1139,98 @@ describe('AgentTurnProcessRuntime', () => {
     });
     expect(roundFour.signal).toBe('DONE');
     expect(roundFour.state.result?.text).toContain('tool loop completed');
+  });
+
+  it('continues tool handling when a compat model emits tool calls but finishes with end_turn', async () => {
+    const dataDir = await createTempDir();
+    const runner = createRunnerWithProvider(dataDir, new FakeCompatToolLoopProvider());
+    const runtime = new AgentTurnProcessRuntime(new Map([['agent-main', runner]]));
+
+    const initialState = runtime.createInitialState({
+      agentId: 'agent-main',
+      runId: 'run-compat-tool-loop',
+      userMessage: 'use compat tool',
+      threadKey: 'compat-tool-thread',
+    });
+
+    const prepared = await runtime.step(initialState, {
+      pid: 'pid-compat' as never,
+      now: Date.now(),
+      runCount: 0,
+      retryCount: 0,
+      metadata: {},
+    });
+    expect(prepared.signal).toBe('YIELD');
+
+    const waitLlm = await runtime.step(prepared.state, {
+      pid: 'pid-compat' as never,
+      now: Date.now(),
+      runCount: 1,
+      retryCount: 0,
+      metadata: {},
+    });
+    expect(waitLlm.signal).toBe('WAITING_SYSCALL');
+    const llmSyscall = waitLlm.syscall;
+    if (!llmSyscall) {
+      throw new Error('expected compat llm syscall');
+    }
+
+    const llmResolution = await runtime.executePendingSyscall(waitLlm.state, llmSyscall, Date.now());
+
+    const waitTool = await runtime.step(waitLlm.state, {
+      pid: 'pid-compat' as never,
+      now: Date.now(),
+      runCount: 2,
+      retryCount: 0,
+      lastSyscallResult: llmResolution,
+      metadata: {},
+    });
+    expect(waitTool.signal).toBe('WAITING_SYSCALL');
+    expect(waitTool.state.phase).toBe('waiting_tool');
+    expect(waitTool.state.stream.some((chunk) => chunk.type === 'tool_use_start')).toBe(true);
+
+    const toolSyscall = waitTool.syscall;
+    if (!toolSyscall) {
+      throw new Error('expected compat tool syscall');
+    }
+
+    const toolResolution = await runtime.executePendingSyscall(
+      waitTool.state,
+      toolSyscall,
+      Date.now(),
+    );
+
+    const waitFinalLlm = await runtime.step(waitTool.state, {
+      pid: 'pid-compat' as never,
+      now: Date.now(),
+      runCount: 3,
+      retryCount: 0,
+      lastSyscallResult: toolResolution,
+      metadata: {},
+    });
+    expect(waitFinalLlm.signal).toBe('WAITING_SYSCALL');
+
+    const finalLlmSyscall = waitFinalLlm.syscall;
+    if (!finalLlmSyscall) {
+      throw new Error('expected compat final llm syscall');
+    }
+
+    const finalLlmResolution = await runtime.executePendingSyscall(
+      waitFinalLlm.state,
+      finalLlmSyscall,
+      Date.now(),
+    );
+
+    const completed = await runtime.step(waitFinalLlm.state, {
+      pid: 'pid-compat' as never,
+      now: Date.now(),
+      runCount: 4,
+      retryCount: 0,
+      lastSyscallResult: finalLlmResolution,
+      metadata: {},
+    });
+    expect(completed.signal).toBe('DONE');
+    expect(completed.state.result?.text).toContain('compat tool loop completed');
   });
 
   it('fails the process step when a runner emits an unsupported custom syscall operation', async () => {

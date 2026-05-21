@@ -50,6 +50,8 @@ const TRANSIENT_HTTP_PATTERNS = [
   /timed out/i,
   /network error/i,
   /fetch failed/i,
+  /socket connection was closed unexpectedly/i,
+  /connection was closed unexpectedly/i,
   /ECONNRESET/i,
   /ECONNREFUSED/i,
   /ECONNABORTED/i,
