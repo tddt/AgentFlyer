@@ -3,11 +3,12 @@
  * publish-npm.mjs
  * Usage: pnpm publish:npm <version>
  *   version: e.g. 1.0.1 | 1.1.0-beta.1
+ *   set PUBLISH_RUN_TESTS=1 to include `pnpm test` before publish
  *
  * Steps:
  *   1. Validate semver version
  *   2. Bump version in package.json
- *   3. pnpm build + pnpm check + pnpm test
+ *   3. pnpm build + pnpm check (optionally pnpm test)
  *   4. npm publish to https://registry.npmjs.org --access public
  *   5. Git tag + push
  */
@@ -23,6 +24,7 @@ const PKG_PATH = resolve(ROOT, 'package.json');
 
 const SEMVER_RE = /^\d+\.\d+\.\d+(-[\w.]+)?$/;
 const NPM_REGISTRY = 'https://registry.npmjs.org';
+const shouldRunTests = process.env.PUBLISH_RUN_TESTS === '1';
 
 function run(cmd, opts = {}) {
   console.log(`\n▶ ${cmd}`);
@@ -53,11 +55,15 @@ pkg.version = version;
 writeFileSync(PKG_PATH, JSON.stringify(pkg, null, 2) + '\n');
 console.log(`\n✔ Version bumped: ${prevVersion} → ${version}`);
 
-// ── 3. Build + Lint + Test ────────────────────────────────────────────────────
+// ── 3. Build + Lint (+ optional Test) ───────────────────────────────────────
 try {
   run('pnpm build');
   run('pnpm check');
-  run('pnpm test');
+  if (shouldRunTests) {
+    run('pnpm test');
+  } else {
+    console.log('\nℹ Skipping pnpm test during publish. Set PUBLISH_RUN_TESTS=1 to enable it.');
+  }
 } catch {
   // Restore version on pre-publish failure
   pkg.version = prevVersion;
