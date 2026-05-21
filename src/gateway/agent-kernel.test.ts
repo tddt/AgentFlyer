@@ -1205,9 +1205,7 @@ describe('AgentKernelService', () => {
       ctx,
     );
 
-    expect(
-      (response.result as { agents: Array<Record<string, unknown>> }).agents,
-    ).toContainEqual(
+    expect((response.result as { agents: Array<Record<string, unknown>> }).agents).toContainEqual(
       expect.objectContaining({
         agentId: 'agent-hidden',
         name: 'Hidden Agent',

@@ -124,7 +124,8 @@ export async function ensureConfiguredRunnerLoaded(
     return true;
   }
 
-  const configured = ctx.getConfig().agents.some((agent) => agent.id === agentId);
+  const configuredAgents = Array.isArray(ctx.getConfig().agents) ? ctx.getConfig().agents : [];
+  const configured = configuredAgents.some((agent) => agent.id === agentId);
   if (!configured) {
     return false;
   }
@@ -1194,7 +1195,8 @@ export async function dispatchRpc(req: RpcRequest, ctx: RpcContext): Promise<Rpc
                 mentionAliases: cfg?.mentionAliases ?? [],
                 sandboxProfile: cfg?.tools?.sandboxProfile,
                 activity,
-                model: cfg?.model ?? (currentConfig.defaults as Record<string, unknown>)?.model ?? '',
+                model:
+                  cfg?.model ?? (currentConfig.defaults as Record<string, unknown>)?.model ?? '',
                 role:
                   typeof (cfg?.mesh as Record<string, unknown> | undefined)?.role === 'string'
                     ? ((cfg?.mesh as Record<string, unknown>).role as string)

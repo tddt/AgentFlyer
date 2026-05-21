@@ -1175,7 +1175,11 @@ describe('AgentTurnProcessRuntime', () => {
       throw new Error('expected compat llm syscall');
     }
 
-    const llmResolution = await runtime.executePendingSyscall(waitLlm.state, llmSyscall, Date.now());
+    const llmResolution = await runtime.executePendingSyscall(
+      waitLlm.state,
+      llmSyscall,
+      Date.now(),
+    );
 
     const waitTool = await runtime.step(waitLlm.state, {
       pid: 'pid-compat' as never,

@@ -125,7 +125,10 @@ function stringifyToolResultContent(content: string | MessageContent[]): string 
     .join('\n');
 }
 
-function flattenGeminiToolHistory(messages: Message[]): { messages: Message[]; flattenedTurns: number } {
+function flattenGeminiToolHistory(messages: Message[]): {
+  messages: Message[];
+  flattenedTurns: number;
+} {
   const flattened: Message[] = [];
   let flattenedTurns = 0;
 
@@ -152,11 +155,7 @@ function flattenGeminiToolHistory(messages: Message[]): { messages: Message[]; f
     }
 
     const nextMessage = messages[index + 1];
-    if (
-      !nextMessage ||
-      nextMessage.role !== 'user' ||
-      typeof nextMessage.content === 'string'
-    ) {
+    if (!nextMessage || nextMessage.role !== 'user' || typeof nextMessage.content === 'string') {
       flattened.push(message);
       continue;
     }

@@ -154,7 +154,9 @@ export function hasRunnerAffectingConfigChanges(prevConfig: Config, newConfig: C
     contextSystemPrompt: config.context?.systemPrompt,
   });
 
-  return JSON.stringify(pickRunnerConfig(prevConfig)) !== JSON.stringify(pickRunnerConfig(newConfig));
+  return (
+    JSON.stringify(pickRunnerConfig(prevConfig)) !== JSON.stringify(pickRunnerConfig(newConfig))
+  );
 }
 
 /** Write PID file so CLI can check if gateway is running. */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { StreamChunk } from '../../core/types.js';
-import { createCompatProvider, OpenAIProvider, serializeOpenAIMessages } from './openai.js';
+import { OpenAIProvider, createCompatProvider, serializeOpenAIMessages } from './openai.js';
 
 describe('serializeOpenAIMessages', () => {
   it('preserves Gemini thought signatures on assistant tool calls', () => {
@@ -54,8 +54,8 @@ describe('serializeOpenAIMessages', () => {
     expect(assistantMessage.content).toBe('先检查磁盘。');
     expect(assistantMessage.tool_calls?.[0]?.thought_signature).toBe('sig-mixed-456');
     expect(
-      ((assistantMessage.tool_calls?.[0]?.function as Record<string, unknown> | undefined) ?? {})
-        .thought_signature,
+      (assistantMessage.tool_calls?.[0]?.function as Record<string, unknown> | undefined)
+        ?.thought_signature,
     ).toBe('sig-mixed-456');
   });
 });
@@ -111,12 +111,14 @@ describe('OpenAIProvider', () => {
       };
     };
 
-    (provider as unknown as {
-      client: { chat: { completions: { create: () => AsyncIterable<Record<string, unknown>> } } };
-    }).client = {
+    (
+      provider as unknown as {
+        client: { chat: { completions: { create: () => AsyncIterable<Record<string, unknown>> } } };
+      }
+    ).client = {
       chat: {
         completions: {
-          create: async () => stream(),
+          create: () => stream(),
         },
       },
     };
@@ -158,9 +160,17 @@ describe('OpenAIProvider', () => {
     const provider = new OpenAIProvider();
     let capturedRequest: Record<string, unknown> | undefined;
 
-    (provider as unknown as {
-      client: { chat: { completions: { create: (request: Record<string, unknown>) => Promise<Record<string, unknown>> } } };
-    }).client = {
+    (
+      provider as unknown as {
+        client: {
+          chat: {
+            completions: {
+              create: (request: Record<string, unknown>) => Promise<Record<string, unknown>>;
+            };
+          };
+        };
+      }
+    ).client = {
       chat: {
         completions: {
           create: async (request) => {
@@ -233,9 +243,17 @@ describe('OpenAIProvider', () => {
     const provider = new OpenAIProvider();
     let capturedRequest: Record<string, unknown> | undefined;
 
-    (provider as unknown as {
-      client: { chat: { completions: { create: (request: Record<string, unknown>) => Promise<Record<string, unknown>> } } };
-    }).client = {
+    (
+      provider as unknown as {
+        client: {
+          chat: {
+            completions: {
+              create: (request: Record<string, unknown>) => Promise<Record<string, unknown>>;
+            };
+          };
+        };
+      }
+    ).client = {
       chat: {
         completions: {
           create: async (request) => {
