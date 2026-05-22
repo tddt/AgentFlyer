@@ -7,83 +7,77 @@
 
 <div align="center">
 
-### Run agents like a system, not like a script.
+### Run agents like a runtime system, not a pile of scripts.
 
 **Agent mesh · Workflow runtime · Deliverables · MCP · Sandbox · Multi-channel control plane**
 
 </div>
 
-Distributed AgentOS for multi-agent orchestration, workflows, memory, deliverables, and multi-channel AI runtimes.
+Distributed AgentOS for multi-agent orchestration, workflows, memory, deliverables, and operator-facing AI runtimes.
 
 [中文说明](README_CN.md)
 
-AgentFlyer is built for people who want to operate agents as a system, not just chat with a model in a box.
+AgentFlyer is for teams and builders who want more than a chat wrapper. It brings agent execution, workflow coordination, memory retrieval, tool access, operator control, and multi-channel delivery into one runtime that already works on a single machine and is being shaped toward cross-host collaboration.
 
-It combines agent collaboration, workflow execution, memory retrieval, operator control, sandboxed execution, MCP tools, and multi-channel delivery into one runtime that can grow from a single machine to a federation-ready architecture.
+## What It Is
 
-## Launch An AgentOS, Not Just A Bot
+AgentFlyer is aiming at a practical AgentOS shape:
 
-AgentFlyer is designed around five product-level ideas:
+- Multiple agents can coexist inside one runtime, discover each other, delegate work, and coordinate through mesh-style collaboration.
+- Operators get a real control surface instead of a hidden prompt chain: Console UI, CLI, approvals, sessions, scheduler, workflows, and deliverables are already part of the system.
+- Outputs are treated as stateful assets, not disposable chat bubbles: sessions, memories, deliverables, and artifacts all have explicit places in the runtime.
+- Tool execution has clearer boundaries through approval policies, MCP integration, and Docker-backed sandbox profiles.
+- Federation is part of the architecture now, but still an actively evolving layer rather than a finished multi-host product story.
 
-- Mesh-native collaboration: agents can discover, delegate, and coordinate with other agents inside the same runtime.
-- Operator-first control plane: Console UI, approvals, sessions, scheduler, workflow designer, and deliverables are part of the product, not afterthoughts.
-- Memory and artifacts as first-class primitives: results are not just tokens on a screen; they become sessions, memories, deliverables, and files.
-- Safe execution boundaries: sandbox profiles and tool approval policies give you a safer runtime than handing raw host access to every agent.
-- Federation-ready direction: peer identity, transport seams, and decentralized trust are already part of the architecture.
+## Current Progress
 
-## Why It Has Pull
+The project is no longer just a concept repo. The main system surfaces already exist in the codebase today:
 
-- More ambitious than a single chatbot runtime.
-- More operational than a prompt wrapper.
-- More integrated than stitching together workflow, memory, UI, and tool layers by hand.
-- More practical than a research demo with no operator surface.
-
-If you want a repo that feels like the early shape of an actual Agent Operating System, this is the bet.
-
-## At A Glance
-
-| Layer | What you get |
+| Area | Current state |
 |---|---|
-| Collaboration | Mesh-native agents that can discover, delegate, and coordinate |
-| Orchestration | Workflow engine, scheduler, super nodes, execution history |
-| State | Sessions, hybrid memory, deliverables, artifacts |
-| Safety | Tool approval policy, sandbox profiles, controlled execution |
-| Operations | Console UI, CLI, routing, stats, multi-channel entry points |
-| Expansion | MCP tools today, federation-ready architecture for tomorrow |
+| Runtime | Multi-model agent runtime, tool-call loop, resumable session state, context compaction, usage stats |
+| Control plane | Console UI, CLI, approvals, config, sessions, inbox-style operator views, metrics |
+| Orchestration | Workflow runtime, super-node patterns, scheduler, execution history, deliverables |
+| Tooling | MCP registry and transport layer, approval-aware tool exposure, Docker sandbox runtime |
+| Channels | Web, CLI, Telegram, Discord, Feishu, and QQ entry points |
+| Federation | Node, peer, discovery, transport, and memory-sync foundations are present, but still expanding |
+
+That matters because AgentFlyer is already useful as a local or single-host operator runtime, while the federation story is being built on top of real running surfaces instead of empty architecture slides.
 
 ## Core Capabilities
 
 ### Runtime
 
 - Unified model registry for Anthropic, OpenAI, Google-compatible, Ollama, and OpenAI-compatible providers.
-- Agent execution engine with tool-call loops, queueing, failover, and context compaction.
-- JSONL session persistence with resumable runtime state.
-- Skill system based on SKILL.md with on-demand prompt injection.
-- Hybrid memory with SQLite, BM25 search, and vector embeddings.
-- Token usage tracking and runtime stats.
+- Agent execution engine with queueing, tool-call loops, failover paths, and context compaction.
+- JSONL-backed sessions and resumable runtime state.
+- Skill injection based on SKILL.md.
+- Hybrid memory built around SQLite, BM25 search, and vector embeddings.
+- Token usage and runtime metrics tracking.
 
 ### Control Plane
 
-- Built-in Console UI for overview, agents, chat, inbox, sessions, config, memory, scheduler, workflows, deliverables, federation, and docs-like guidance inside the app.
-- Full CLI for gateway lifecycle, messaging, config, skills, memory, stats, and sessions.
-- Intent-aware routing and per-agent tool approval policy.
-- Deliverable tracking so workflow outputs and chat-turn artifacts become first-class results.
+- Built-in Console UI with overview, agents, chat, inbox, sessions, config, memory, scheduler, workflows, deliverables, federation, and operator guidance surfaces.
+- Full CLI for gateway lifecycle, chat, messaging, config, skills, memory, stats, and session workflows.
+- Intent-aware routing and per-agent approval policy.
+- Deliverable tracking so workflow outputs and chat artifacts remain visible and publishable.
 
 ### Orchestration
 
-- Workflow engine with agent steps, conditions, transforms, branching, and execution history.
-- Super-node workflows for higher-order coordination patterns such as multi-source collection, debate, decision, risk review, and adjudication.
-- Scheduler with cron-based task execution and workflow-triggered runs.
+- Workflow runtime with agent steps, conditions, transforms, branching, and execution history.
+- Super-node workflow patterns for higher-order coordination such as collection, debate, decision, review, and adjudication.
+- Cron-based scheduler for tasks and workflow-triggered runs.
 
 ### Tooling And Execution
 
-- MCP registry with server config, prefixed tools, runtime status, refresh path, and approval integration.
-- Sandbox runtime with Docker-backed execution profiles, mount policy, diagnostics, and artifact mirroring.
+- MCP registry with server config, prefixed tools, runtime status, reconnect handling, and approval integration.
+- Docker-backed sandbox runtime with execution profiles, mount policy, diagnostics, and artifact mirroring.
 
 ### Channels
 
-- Web channel with WebSocket, SSE chat streaming, and OpenAI-compatible chat endpoint surface.
+- Web channel with WebSocket, SSE streaming chat, and OpenAI-compatible chat surface.
 - Telegram, Discord, Feishu, and QQ adapters.
+- CLI chat path for local operator workflows.
 
 ## Architecture
 
@@ -136,7 +130,7 @@ If you want a repo that feels like the early shape of an actual Agent Operating 
 
 ```text
 Channels -> Gateway -> Agent Runtime -> Skills / Memory / Tools / Scheduler
-                      |                
+                      |
                       +-> Mesh collaboration
                       +-> Workflow and deliverables
                       +-> Sandbox and MCP
@@ -157,15 +151,15 @@ flowchart LR
   A --> F[Federation-ready Peer Layer]
 ```
 
-The project is structured as a layered system, not a monolithic chat app:
+The codebase is structured as a layered runtime rather than a monolithic chat app:
 
 - core: config, types, session, logger, crypto, runtime compatibility
 - skills and memory: reusable lower-level services
-- agent: prompt building, runner, compaction, tools, LLM calls
+- agent: prompt building, runners, compaction, tools, model calls
 - mesh: in-process collaboration bus and registry
-- gateway: HTTP, RPC, Console UI, workflow backend, deliverables, operator surface
+- gateway: HTTP, RPC, Console UI, workflow backend, deliverables, control plane
 - sandbox and mcp: controlled execution and external tool ecosystem
-- federation: peer identity and transport seams for cross-host collaboration
+- federation: peer identity, discovery, transport, and cross-host seams
 
 ## Quick Start
 
@@ -249,36 +243,36 @@ pnpm check
 pnpm test
 ```
 
-## Use Cases
+## Where It Fits Best
 
-- Run a personal or team AgentOS with multiple specialist agents.
-- Route conversations from Web, Telegram, Discord, Feishu, or QQ into the same runtime.
-- Build operator-facing workflows that collect information, debate options, review risk, and publish deliverables.
-- Connect external tools through MCP without turning your runtime into a pile of one-off integrations.
-- Execute restricted commands through sandbox profiles instead of giving every agent raw host access.
-- Prepare for cross-host collaboration where different machines contribute agents, memory, or compute.
+- Run a personal or team AgentOS with multiple specialist agents in one runtime.
+- Expose the same runtime through Web, CLI, Telegram, Discord, Feishu, or QQ.
+- Build operator-facing workflows for collection, debate, review, and publishable outputs.
+- Connect external tools through MCP instead of accumulating one-off integrations.
+- Use sandbox profiles and approvals to keep execution boundaries tighter than raw host access.
+- Grow toward cross-host collaboration as federation capabilities mature.
 
-## Why Developers Star Projects Like This
+## Why The Repo Is Interesting
 
-- It points at a bigger category than “AI chat app”.
-- It already has real runtime surfaces: UI, CLI, workflows, sessions, routing, channels.
-- It is opinionated enough to feel like a product, but open enough to extend.
-- It makes the repo easy to understand in one glance: agents, memory, workflows, tools, delivery.
+- It targets a bigger category than a single chat app.
+- It already has real operator surfaces, not just prompt demos.
+- It combines runtime, workflow, memory, tooling, and delivery in one system.
+- It is opinionated enough to operate today and open enough to extend.
 
 ## Project Status
 
-AgentFlyer is already useful today as a local or single-host AgentOS.
+AgentFlyer is already usable as a local or single-host AgentOS.
 
-Current state:
+Today:
 
-- Core runtime, Console UI, workflow engine, scheduler, memory, channels, CLI, and deliverables are implemented and usable.
-- Sandbox and MCP are implemented and under active iteration.
-- Federation is already present in the architecture and config surface, while practical multi-host capabilities are still expanding.
-- The decentralized economy model is a direction, not a finished production feature.
+- Core runtime, Console UI, workflow backend, scheduler, memory, channels, CLI, and deliverables are implemented and in active use.
+- MCP and sandbox are implemented and still being refined at the runtime and operator-experience level.
+- Federation already has architectural seams and early modules in the tree, but practical multi-host operations are still an expansion area.
+- The decentralized economy model remains directional, not a finished product feature.
 
 ## Contributing
 
-The codebase uses strict TypeScript, ESM, Bun-first runtime compatibility, and layered module boundaries.
+The project uses strict TypeScript, ESM, Bun-first compatibility, and explicit dependency boundaries between layers.
 
 Start here:
 
@@ -295,11 +289,11 @@ pnpm test
 
 ## Roadmap Direction
 
-- strengthen federation from architectural foundation to practical multi-host workflows
-- deepen MCP transport and server lifecycle management
-- improve sandbox policy and safer execution defaults
-- keep pushing workflow super nodes and deliverable-based operator flows
-- continue reducing token overhead while improving agent coordination quality
+- turn federation foundations into practical multi-host workflows
+- improve MCP transport, reliability, and server lifecycle management
+- keep tightening sandbox policy and safer execution defaults
+- deepen workflow super-node patterns and deliverable-driven operator flows
+- continue reducing token overhead while improving coordination quality
 
 ## License
 
