@@ -1,62 +1,203 @@
 import { defineConfig } from 'vitepress';
 
-export default defineConfig({
-  title: 'AgentFlyer',
-  description: 'Decentralized, cross-platform, multi-host federated AI Agent framework',
-  base: '/',
-  head: [['link', { rel: 'icon', href: '/favicon.ico' }]],
-  themeConfig: {
+function getThemeConfig(locale: 'en' | 'zh') {
+  const prefix = locale === 'zh' ? '/zh' : '';
+  const guidePrefix = `${prefix}/guide`;
+  const apiPrefix = `${prefix}/api`;
+  const pluginsPrefix = `${prefix}/plugins`;
+
+  if (locale === 'zh') {
+    return {
+      nav: [
+        { text: '为什么是 AgentFlyer', link: '/zh/#why-agentflyer' },
+        { text: '适用场景', link: '/zh/use-cases' },
+        { text: '指南', link: '/zh/guide/getting-started' },
+        { text: '架构', link: '/zh/guide/architecture' },
+        { text: '路线图', link: '/zh/roadmap' },
+        { text: '常见问题', link: '/zh/faq' },
+        { text: 'GitHub', link: 'https://github.com/tddt/AgentFlyer' },
+      ],
+      sidebar: {
+        '/zh/guide/': [
+          {
+            text: '指南',
+            items: [
+              { text: '快速开始', link: `${guidePrefix}/getting-started` },
+              { text: '架构', link: `${guidePrefix}/architecture` },
+              { text: '配置', link: `${guidePrefix}/configuration` },
+              { text: 'Agents', link: `${guidePrefix}/agents` },
+              { text: 'Workflows', link: `${guidePrefix}/workflows` },
+              { text: 'Channels', link: `${guidePrefix}/channels` },
+              { text: 'Skills 与 Tools', link: `${guidePrefix}/skills` },
+              { text: 'Memory', link: `${guidePrefix}/memory` },
+              { text: 'Federation', link: `${guidePrefix}/federation` },
+              { text: '部署', link: `${guidePrefix}/deployment` },
+            ],
+          },
+        ],
+        '/zh/api/': [
+          {
+            text: '参考',
+            items: [
+              { text: 'RPC 参考', link: `${apiPrefix}/rpc-reference` },
+              { text: '事件与流式接口', link: `${apiPrefix}/events` },
+              { text: '扩展入口', link: `${apiPrefix}/plugin-sdk` },
+            ],
+          },
+        ],
+        '/zh/plugins/': [
+          {
+            text: '扩展',
+            items: [
+              { text: '概览', link: `${pluginsPrefix}/overview` },
+              { text: '发布插件包', link: `${pluginsPrefix}/writing` },
+              { text: '市场', link: `${pluginsPrefix}/marketplace` },
+            ],
+          },
+        ],
+      },
+      socialLinks: [{ icon: 'github', link: 'https://github.com/tddt/AgentFlyer' }],
+      footer: {
+        message: 'MIT License。Bun 优先，兼容 Node。为操作者而不是 Demo 设计。',
+        copyright: 'Copyright © AgentFlyer Contributors',
+      },
+      docFooter: {
+        prev: '上一页',
+        next: '下一页',
+      },
+      outline: {
+        label: '本页内容',
+      },
+      search: {
+        provider: 'local',
+        options: {
+          locales: {
+            root: {
+              translations: {
+                button: {
+                  buttonText: '搜索',
+                  buttonAriaLabel: '搜索',
+                },
+                modal: {
+                  noResultsText: '没有结果',
+                  resetButtonTitle: '清空查询',
+                  footer: {
+                    selectText: '选择',
+                    navigateText: '切换',
+                    closeText: '关闭',
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+  }
+
+  return {
     nav: [
+      { text: 'Why AgentFlyer', link: '/#why-agentflyer' },
+      { text: 'Use Cases', link: '/use-cases' },
       { text: 'Guide', link: '/guide/getting-started' },
-      { text: 'API', link: '/api/rpc-reference' },
-      { text: 'Plugins', link: '/plugins/overview' },
-      { text: 'Changelog', link: '/changelog' },
+      { text: 'Architecture', link: '/guide/architecture' },
+      { text: 'Roadmap', link: '/roadmap' },
+      { text: 'FAQ', link: '/faq' },
+      { text: 'Reference', link: '/api/rpc-reference' },
+      { text: 'GitHub', link: 'https://github.com/tddt/AgentFlyer' },
     ],
     sidebar: {
       '/guide/': [
         {
           text: 'Guide',
           items: [
-            { text: 'Getting Started', link: '/guide/getting-started' },
-            { text: 'Configuration', link: '/guide/configuration' },
-            { text: 'Agents', link: '/guide/agents' },
-            { text: 'Skills (tools)', link: '/guide/skills' },
-            { text: 'Memory', link: '/guide/memory' },
-            { text: 'Federation', link: '/guide/federation' },
-            { text: 'Deployment', link: '/guide/deployment' },
+            { text: 'Getting Started', link: `${guidePrefix}/getting-started` },
+            { text: 'Architecture', link: `${guidePrefix}/architecture` },
+            { text: 'Configuration', link: `${guidePrefix}/configuration` },
+            { text: 'Agents', link: `${guidePrefix}/agents` },
+            { text: 'Workflows', link: `${guidePrefix}/workflows` },
+            { text: 'Channels', link: `${guidePrefix}/channels` },
+            { text: 'Skills And Tools', link: `${guidePrefix}/skills` },
+            { text: 'Memory', link: `${guidePrefix}/memory` },
+            { text: 'Federation', link: `${guidePrefix}/federation` },
+            { text: 'Deployment', link: `${guidePrefix}/deployment` },
           ],
         },
       ],
       '/api/': [
         {
-          text: 'API Reference',
+          text: 'Reference',
           items: [
-            { text: 'RPC Reference', link: '/api/rpc-reference' },
-            { text: 'Events', link: '/api/events' },
-            { text: 'Plugin SDK', link: '/api/plugin-sdk' },
+            { text: 'RPC Reference', link: `${apiPrefix}/rpc-reference` },
+            { text: 'Events', link: `${apiPrefix}/events` },
+            { text: 'Extension Surfaces', link: `${apiPrefix}/plugin-sdk` },
           ],
         },
       ],
       '/plugins/': [
         {
-          text: 'Plugins',
+          text: 'Extensibility',
           items: [
-            { text: 'Overview', link: '/plugins/overview' },
-            { text: 'Writing a Plugin', link: '/plugins/writing' },
-            { text: 'Marketplace', link: '/plugins/marketplace' },
+            { text: 'Overview', link: `${pluginsPrefix}/overview` },
+            { text: 'Publishing Packages', link: `${pluginsPrefix}/writing` },
+            { text: 'Marketplace', link: `${pluginsPrefix}/marketplace` },
           ],
         },
       ],
     },
-    socialLinks: [
-      { icon: 'github', link: 'https://github.com/agentflyer/agentflyer' },
-    ],
+    socialLinks: [{ icon: 'github', link: 'https://github.com/tddt/AgentFlyer' }],
     footer: {
-      message: 'Released under the Apache 2.0 License.',
+      message: 'MIT licensed. Bun-first. Node-compatible. Built for operators, not demos.',
       copyright: 'Copyright © AgentFlyer Contributors',
     },
     search: {
       provider: 'local',
+    },
+  };
+}
+
+export default defineConfig({
+  title: 'AgentFlyer',
+  description: 'AgentOS runtime for multi-agent orchestration, workflows, memory, MCP, sandboxed execution, and multi-channel operations.',
+  base: '/',
+  head: [
+    ['meta', { name: 'theme-color', content: '#0d3b36' }],
+    ['meta', { property: 'og:title', content: 'AgentFlyer' }],
+    [
+      'meta',
+      {
+        property: 'og:description',
+        content:
+          'A practical AgentOS runtime with workflows, memory, MCP, sandboxing, multi-agent mesh, and operator-facing control surfaces.',
+      },
+    ],
+    ['link', { rel: 'icon', href: '/favicon.ico' }],
+    ['link', { rel: 'preconnect', href: 'https://fonts.googleapis.com' }],
+    ['link', { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: '' }],
+    [
+      'link',
+      {
+        rel: 'stylesheet',
+        href: 'https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap',
+      },
+    ],
+  ],
+  locales: {
+    root: {
+      label: 'English',
+      lang: 'en-US',
+      title: 'AgentFlyer',
+      description:
+        'AgentOS runtime for multi-agent orchestration, workflows, memory, MCP, sandboxed execution, and multi-channel operations.',
+      themeConfig: getThemeConfig('en'),
+    },
+    zh: {
+      label: '中文',
+      lang: 'zh-CN',
+      link: '/zh/',
+      title: 'AgentFlyer',
+      description: '用于多 Agent 协作、工作流、记忆、MCP、受控执行与多通道运营的 AgentOS 运行时。',
+      themeConfig: getThemeConfig('zh'),
     },
   },
 });

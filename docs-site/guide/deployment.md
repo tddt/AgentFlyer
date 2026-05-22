@@ -1,59 +1,79 @@
 # Deployment
 
-## Docker Compose
+AgentFlyer can start as a local operator runtime and later move into a containerized or managed environment without changing its core operating model.
+
+## Local single-host deployment
+
+This is the fastest way to run the system for internal operations, prototyping, or a small team.
 
 ```bash
-# Clone the repo or copy docker-compose.yml
-docker compose up -d
-
-# Tail logs
-docker compose logs -f
+agentflyer start
+agentflyer status
 ```
 
-The compose file mounts a named volume `agentflyer_data` at `/data`. Place your `agentflyer.json` inside that volume or bind-mount it read-only.
+Recommended setup:
 
-## Kubernetes / Helm
+- Keep the runtime bound to loopback unless you intentionally expose it.
+- Put credentials in environment variables or an external secret store.
+- Keep your configuration under source control if it contains only non-secret structure.
+- Store secrets separately from the committed config template.
+
+## Source deployment
+
+Useful when you want direct control of the codebase, UI assets, or integration changes.
 
 ```bash
-helm install agentflyer ./charts/agentflyer \
-  --set env.OPENAI_API_KEY=sk-... \
-  --set config.content='{"gateway":{"adminToken":"secret"},"agents":[]}'
+pnpm install
+pnpm build
+pnpm start
 ```
 
-### Custom values
-
-```yaml
-# my-values.yaml
-replicaCount: 1
-
-image:
-  tag: "0.9.0"
-
-persistence:
-  size: 5Gi
-
-ingress:
-  enabled: true
-  className: nginx
-  hosts:
-    - host: agents.example.com
-      paths:
-        - path: /
-          pathType: Prefix
-  tls:
-    - secretName: agents-tls
-      hosts:
-        - agents.example.com
-```
+For active development:
 
 ```bash
-helm install agentflyer ./charts/agentflyer -f my-values.yaml
+pnpm dev:start
+pnpm console:build
 ```
+
+## Container deployment
+
+The repository already includes container-related assets, which makes Docker-based rollout a natural next step when local process management stops being enough.
+
+Typical goals for a container deployment:
+
+- stable runtime startup
+- explicit mounted config and data directories
+- clean separation of image, config, and secrets
+- predictable reverse-proxy ingress in front of the gateway
+
+## Helm and cluster-oriented rollout
+
+The repo includes a chart path under `charts/agentflyer`, which is the natural place to package a Kubernetes deployment when AgentFlyer becomes a shared internal control plane.
+
+Use a chart-backed deployment when you need:
+
+- managed persistent storage for runtime data
+- secret injection through cluster primitives
+- ingress and TLS management
+- replicated operational tooling around the runtime
 
 ## Production checklist
 
-- Set a strong `adminToken` and rotate it via RBAC user `apiKey` instead
-- Use TLS termination at the ingress / reverse-proxy layer
-- Mount secrets via Kubernetes Secrets or your vault solution — never hard-code keys in `agentflyer.json`
-- Enable structured log shipping (the gateway emits JSON to stdout)
-- Scrape `/metrics` with Prometheus; alert on `agentflyer_agent_runs_total{status="error"}`
+- Use strong bearer tokens and move ongoing access toward explicit `users` roles.
+- Terminate TLS in a reverse proxy or ingress layer.
+- Keep model credentials out of plain committed config.
+- Monitor process health, agent backlog, workflow failures, and MCP connectivity.
+- Treat sandbox and tool policies as deployment-time controls, not just developer conveniences.
+
+## Suggested progression
+
+1. Local runtime on one machine.
+2. Reverse-proxied internal service with persistent data.
+3. Containerized deployment with externalized secrets.
+4. Cluster-managed rollout when the runtime becomes shared infrastructure.
+
+## Related guides
+
+- [Architecture](./architecture)
+- [Configuration](./configuration)
+- [Federation](./federation)

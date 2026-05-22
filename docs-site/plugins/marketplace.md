@@ -1,24 +1,23 @@
 # Plugin Marketplace
 
-## Browse & Install
+The plugin marketplace path is built around installable npm packages managed by the AgentFlyer CLI.
+
+## Search, install, list, remove
 
 ```bash
-# Search npm for agentflyer plugins
 agentflyer plugin search <keyword>
-
-# Install a plugin
-agentflyer plugin install agentflyer-plugin-<name>
-
-# List installed plugins
+agentflyer plugin install <name>
 agentflyer plugin list
-
-# Remove a plugin
-agentflyer plugin remove agentflyer-plugin-<name>
+agentflyer plugin remove <name>
 ```
 
-After installing, add the entry point to `agentflyer.json`:
+The CLI stores plugin installation records in the AgentFlyer data directory and keeps a plugin manifest there so operators can see what is installed.
 
-```json
+## Enabling an installed plugin
+
+After install, add the plugin entry point to the `plugins` array in your AgentFlyer config, then reload the runtime.
+
+```jsonc
 {
   "plugins": [
     "~/.agentflyer/plugins/agentflyer-plugin-name/node_modules/agentflyer-plugin-name/dist/index.js"
@@ -26,14 +25,20 @@ After installing, add the entry point to `agentflyer.json`:
 }
 ```
 
-Then reload: `agentflyer reload`.
-
-## Building & publishing a plugin
-
-See [Writing a Plugin](./writing) for the full guide. Once ready:
-
 ```bash
-npm publish --access public
+agentflyer reload
 ```
 
-Tag your package with the `agentflyer-plugin` keyword in `package.json` so it appears in search results.
+## When to use marketplace plugins
+
+Choose a plugin package when you want:
+
+- an installable extension artifact that operators can manage with CLI commands
+- repeatable deployment of runtime hooks or packaged behaviors
+- a distribution path through npm instead of direct repository edits
+
+If you only need prompt composition, use [skills](../guide/skills). If you need external tool execution, prefer MCP first.
+
+## Publishing guidance
+
+See [Publishing Packages](./writing) for package metadata and release guidance.

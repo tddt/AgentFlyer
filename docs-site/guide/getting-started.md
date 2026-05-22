@@ -1,60 +1,126 @@
 # Getting Started
 
-## Prerequisites
+AgentFlyer is quickest to understand when you launch one model, one agent, and one runtime surface, then grow from there.
 
-- [Bun](https://bun.sh) ≥ 1.2  (or Node.js ≥ 22 with pnpm)
-- An OpenAI **or** Anthropic API key
+## What you need
 
-## Installation
+- Bun 1.2 or newer is recommended.
+- Node.js 22 or newer is supported.
+- pnpm 9 or newer is recommended for source installs.
+- At least one model provider credential.
 
-### npm / pnpm / bun (global)
+## Install
+
+### Global package
 
 ```bash
-# with pnpm
-pnpm add -g agentflyer
-
-# or with npm
 npm install -g agentflyer
-
-# or with bun
-bun add -g agentflyer
 ```
+
+You can also use pnpm or Bun if that matches your machine setup.
 
 ### From source
 
 ```bash
-git clone https://github.com/agentflyer/agentflyer
+git clone https://github.com/tddt/AgentFlyer.git
 cd AgentFlyer
 pnpm install
 pnpm build
 ```
 
-## Quick start
+## Create or find your config file
+
+Ask AgentFlyer where it expects the configuration file:
 
 ```bash
-# 1 — Initialise a config file in the current directory
-agentflyer config init
+agentflyer config path
+```
 
-# 2 — Edit agentflyer.json to add your API key and define an agent
+Then create or edit that file with a minimal runtime definition:
 
-# 3 — Start the gateway (default port 19789)
+```jsonc
+{
+  "gateway": {
+    "port": 19789,
+    "auth": { "mode": "token", "token": "change-me" }
+  },
+  "models": {
+    "main": {
+      "provider": "openai-compat",
+      "apiBaseUrl": "https://api.openai.com/v1",
+      "apiKey": "sk-...",
+      "models": {
+        "chat": { "id": "gpt-4.1", "maxTokens": 8192 }
+      }
+    }
+  },
+  "defaults": {
+    "model": "main/chat"
+  },
+  "agents": [
+    {
+      "id": "main",
+      "name": "Main Agent",
+      "skills": ["base"],
+      "mesh": {
+        "role": "coordinator",
+        "capabilities": ["general"],
+        "visibility": "public"
+      }
+    }
+  ],
+  "channels": {
+    "web": { "enabled": true },
+    "cli": { "enabled": true }
+  }
+}
+```
+
+Validate before starting:
+
+```bash
+agentflyer config validate
+agentflyer config doctor
+```
+
+## Start the runtime
+
+```bash
 agentflyer start
-
-# 4 — Open the web console
-agentflyer web
-
-# 5 — Chat interactively
-agentflyer chat
 ```
 
-## Docker
+Then use whichever operator surface fits the task:
+
+- Open the Console UI at `http://localhost:19789`
+- Open the browser directly with `agentflyer web`
+- Start local chat with `agentflyer chat`
+- Send a directed request with `agentflyer message send`
+
+## Useful first commands
 
 ```bash
-docker run -d \
-  -p 19789:19789 \
-  -v agentflyer_data:/data \
-  -e OPENAI_API_KEY=sk-... \
-  agentflyer/agentflyer:latest
+agentflyer status
+agentflyer agent list
+agentflyer sessions list
+agentflyer skills list
+agentflyer stats
 ```
 
-See [Deployment](./deployment) for Docker Compose and Kubernetes instructions.
+## Development loop
+
+If you are running from source:
+
+```bash
+pnpm dev:start
+pnpm dev:chat
+pnpm typecheck
+pnpm check
+pnpm test
+```
+
+## Next steps
+
+1. Read [Architecture](./architecture) to understand the runtime layers.
+2. Read [Configuration](./configuration) to structure models, agents, channels, and tools.
+3. Read [Workflows](./workflows) when a task should become repeatable instead of staying inside chat.
+4. Read [Deployment](./deployment) when you are ready to run the gateway in a more durable environment.

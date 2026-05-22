@@ -1,108 +1,109 @@
 # RPC Reference
 
-All RPC calls use JSON-RPC 2.0 format. Send a `POST /rpc` with:
+AgentFlyer exposes a JSON-RPC surface at `POST /rpc` for operator tooling, Console UI actions, and automation.
+
+## Request format
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": 1,
   "method": "agent.run",
-  "params": { ... }
+  "params": {
+    "agentId": "main",
+    "input": "Summarize today's queue"
+  }
 }
 ```
 
-Include your API key in the `Authorization` header:
+Include a bearer token in the header:
 
+```text
+Authorization: Bearer <token>
 ```
-Authorization: Bearer <apiKey>
+
+## Permission model
+
+When `users` are configured, AgentFlyer checks method access against the caller role. The practical split is:
+
+| Role | Typical scope |
+|---|---|
+| `admin` | Full control, including configuration changes |
+| `operator` | Day-to-day runtime operations, agent runs, memory, workflows, scheduler, deliverables |
+| `viewer` | Read-only visibility into status, sessions, and operational state |
+
+## Major method families
+
+The RPC layer is broad, so the most useful way to navigate it is by method family.
+
+| Family | Examples |
+|---|---|
+| Agent execution | `agent.list`, `agent.chat`, `agent.run`, `agent.cancel`, `agent.resume`, `agent.reload`, `agent.status` |
+| Sessions | `session.list`, `session.messages`, `session.clear` |
+| Configuration | `config.get`, `config.save` |
+| MCP runtime | `mcp.status`, `mcp.history`, `mcp.refresh` |
+| Scheduler | `scheduler.list`, `scheduler.create`, `scheduler.update`, `scheduler.preview`, `scheduler.runNow`, `scheduler.resume`, `scheduler.cancel`, `scheduler.running`, `scheduler.history` |
+| Workflows | `workflow.list`, `workflow.save`, `workflow.delete`, `workflow.run`, `workflow.runStatus`, `workflow.cancel`, `workflow.resume`, `workflow.history` |
+| Deliverables | `deliverable.list`, `deliverable.get`, `deliverable.publish`, `deliverable.update`, `deliverable.attachArtifact`, `deliverable.batchPublish`, `deliverable.delete`, `deliverable.merge`, `deliverable.setCategory` |
+| Memory | `memory.search`, `memory.delete`, `memory.federated` |
+| Stats | `stats.get` |
+
+## Common examples
+
+### List active agents
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "agent.list",
+  "params": {}
+}
 ```
 
-## Roles
+### Run an agent turn
 
-| Role | Can call |
-|------|----------|
-| `admin` | All methods |
-| `operator` | agent.*, session.*, memory.*, skills.*, config.get, reload |
-| `viewer` | session.list, session.history, agent.status, metrics.get |
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "agent.run",
+  "params": {
+    "agentId": "main",
+    "input": "Review today's inbound requests"
+  }
+}
+```
 
-## Methods
+### Read scheduler state
 
-### agent.run
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "scheduler.list",
+  "params": {}
+}
+```
 
-Start an agent conversation turn.
+### Search memory
 
-**Params**: `{ agentId: string; input: string; sessionId?: string }`  
-**Result**: `{ output: string; sessionId: string; usage?: TokenUsage }`  
-**Min role**: `operator`
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "method": "memory.search",
+  "params": {
+    "agentId": "main",
+    "query": "quarterly pricing decisions"
+  }
+}
+```
 
-### agent.list
+## How to choose between RPC and streaming surfaces
 
-**Params**: none  
-**Result**: `{ agents: AgentInfo[] }`  
-**Min role**: `viewer`
+- Use RPC when the caller needs structured control or structured results.
+- Use `POST /chat` when the caller needs SSE streaming and human-facing turn output.
+- Use `/ws/chat` when a connected client should stay attached to a live chat stream.
 
-### agent.status
-
-**Params**: `{ agentId: string }`  
-**Result**: `{ status: "idle" | "running" | "error"; lastRun?: number }`  
-**Min role**: `viewer`
-
-### session.list
-
-**Params**: `{ agentId?: string }`  
-**Result**: `{ sessions: SessionSummary[] }`  
-**Min role**: `viewer`
-
-### session.history
-
-**Params**: `{ sessionId: string }`  
-**Result**: `{ messages: Message[] }`  
-**Min role**: `viewer`
-
-### session.clear
-
-**Params**: `{ sessionId: string }`  
-**Result**: `{ ok: true }`  
-**Min role**: `operator`
-
-### config.get
-
-**Params**: none  
-**Result**: current config object (sensitive fields redacted)  
-**Min role**: `admin`
-
-### config.save
-
-**Params**: partial config object  
-**Result**: `{ ok: true }`  
-**Min role**: `admin`
-
-### config.reload
-
-**Params**: none  
-**Result**: `{ reloaded: string[] }` — list of restarted agent ids  
-**Min role**: `admin`
-
-### memory.get
-
-**Params**: `{ agentId: string; key?: string }`  
-**Result**: `{ entries: MemoryEntry[] }`  
-**Min role**: `operator`
-
-### memory.set
-
-**Params**: `{ agentId: string; key: string; value: unknown }`  
-**Result**: `{ ok: true }`  
-**Min role**: `operator`
-
-### memory.delete
-
-**Params**: `{ agentId: string; key: string }`  
-**Result**: `{ ok: true }`  
-**Min role**: `operator`
-
-### skills.list
-
-**Params**: `{ agentId?: string }`  
-**Result**: `{ skills: SkillInfo[] }`  
-**Min role**: `operator`
+See [Events](./events) for the streaming layer.

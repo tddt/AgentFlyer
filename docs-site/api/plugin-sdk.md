@@ -1,86 +1,72 @@
-# Plugin SDK
+# Extension Surfaces
 
-## Overview
+AgentFlyer is extensible in more than one way. The right surface depends on what you are trying to extend.
 
-Plugins are plain npm packages that export an `AgentFlyerPlugin` object.
+## Choose the right seam
 
-```typescript
-import type { AgentFlyerPlugin } from 'agentflyer/plugin-sdk';
+| Goal | Best fit |
+|---|---|
+| Inject domain knowledge into prompts | Skills |
+| Expose external tools or services | MCP servers |
+| Add runtime hooks or installable packages | Marketplace plugins |
+| Add a delivery surface | Channel adapter work in the core runtime |
 
-const plugin: AgentFlyerPlugin = {
-  name: 'my-plugin',
-  version: '1.0.0',
+## Skills
 
-  // Called once when the gateway loads the plugin
-  async setup(ctx) {
-    ctx.logger.info('my-plugin loaded');
-  },
+Skills are the lightest-weight extension path. They are ideal when you want to shape agent behavior, prompt context, or reusable operator instructions without introducing a new execution runtime.
 
-  // Lifecycle hooks (all optional)
-  async onAgentStart({ agentId, config, logger }) {
-    logger.info(`Agent ${agentId} starting`);
-  },
+Use skills when you need:
 
-  async onToolCall(ctx) {
-    ctx.logger.debug(`Tool call: ${ctx.toolName}`);
-    // Deny the call:
-    // ctx.deny('Blocked by policy');
-  },
+- domain-specific prompting
+- reusable operating procedures
+- lightweight behavioral composition
 
-  async onMessageReceive(ctx) {
-    // Mutate message in place
-    ctx.message.content = ctx.message.content.replace(/badword/gi, '***');
-  },
-};
+## MCP servers
 
-export default plugin;
+MCP is the right fit when AgentFlyer should call tools that live outside the core process. MCP keeps tool execution explicit and makes approval-aware operator flows easier to reason about.
+
+Use MCP when you need:
+
+- external APIs or local service bridges
+- tool catalogs with explicit naming and descriptions
+- stronger separation between model reasoning and tool execution
+
+## Marketplace plugins
+
+Plugins are installable npm packages managed through the AgentFlyer CLI:
+
+```bash
+agentflyer plugin search <keyword>
+agentflyer plugin install <name>
+agentflyer plugin list
+agentflyer plugin remove <name>
 ```
 
-## package.json: declare entry point
+The current CLI expects plugin packages to expose an `agentflyer.plugin` entry in `package.json`, and installed packages are tracked in the runtime data directory.
+
+Minimal package metadata:
 
 ```json
 {
   "name": "agentflyer-plugin-example",
   "version": "1.0.0",
+  "main": "dist/index.js",
   "agentflyer": {
-    "plugin": "dist/index.js",
-    "requires": ">=0.9.0"
-  },
-  "main": "dist/index.js"
+    "plugin": "dist/index.js"
+  }
 }
 ```
 
-The `agentflyer.requires` field is a semver range checked against the gateway version before loading.
+## Practical recommendation
 
-## Installing
+Start with the smallest seam that solves the problem:
 
-```bash
-agentflyer plugin install agentflyer-plugin-example
-```
+1. Use a skill if the change is mostly behavioral.
+2. Use MCP if the change is mostly about external tools.
+3. Use a plugin package when the runtime needs an installable extension artifact.
 
-This installs the package and records it in `~/.agentflyer/plugins.json`. Then add the `entryPoint` path to `plugins` in `agentflyer.json`.
+## Related pages
 
-## API Reference
-
-### `AgentFlyerPlugin`
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `name` | `string` | Plugin name |
-| `version` | `string` | Plugin semver |
-| `setup(ctx)` | `async fn` | Called once on load; `ctx.logger` available |
-| `onAgentStart(ctx)` | `async fn` | Fires before an agent run starts |
-| `onToolCall(ctx)` | `async fn` | Fires for every tool call; call `ctx.deny(reason)` to block |
-| `onMessageReceive(ctx)` | `async fn` | Fires on incoming message; mutate `ctx.message` to transform |
-
-### `ToolCallContext`
-
-```typescript
-interface ToolCallContext {
-  agentId: string;
-  toolName: string;
-  args: Record<string, unknown>;
-  logger: Logger;
-  deny(reason: string): void;
-}
-```
+- [Skills And Tools](../guide/skills)
+- [Plugins Overview](../plugins/overview)
+- [Publishing Packages](../plugins/writing)

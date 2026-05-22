@@ -1,0 +1,82 @@
+<svg width="1200" height="900" viewBox="0 0 1200 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="120" y1="80" x2="1080" y2="820" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#17312E"/>
+      <stop offset="1" stop-color="#101716"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="170" y1="150" x2="1030" y2="700" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F6B61"/>
+      <stop offset="1" stop-color="#CA6B2C"/>
+    </linearGradient>
+    <filter id="shadow" x="70" y="50" width="1060" height="800" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="26" stdDeviation="28" flood-color="#09100F" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="900" rx="40" fill="#F5F0E8"/>
+  <circle cx="975" cy="200" r="160" fill="#CA6B2C" fill-opacity="0.12"/>
+  <circle cx="230" cy="140" r="130" fill="#0F6B61" fill-opacity="0.12"/>
+
+  <g filter="url(#shadow)">
+    <rect x="118" y="90" width="964" height="708" rx="34" fill="url(#bg)"/>
+  </g>
+
+  <rect x="118" y="90" width="964" height="78" rx="34" fill="#1B2321"/>
+  <rect x="118" y="132" width="964" height="666" rx="0" fill="#121917"/>
+  <circle cx="168" cy="129" r="10" fill="#D76E47"/>
+  <circle cx="200" cy="129" r="10" fill="#D9A548"/>
+  <circle cx="232" cy="129" r="10" fill="#4BA983"/>
+  <text x="820" y="135" fill="#F9EFE3" fill-opacity="0.9" font-family="IBM Plex Mono, monospace" font-size="18" letter-spacing="0.12em">AGENTFLYER CONSOLE</text>
+
+  <rect x="142" y="186" width="220" height="588" rx="22" fill="#19201E" stroke="#FFFFFF" stroke-opacity="0.06"/>
+  <text x="170" y="226" fill="#FFF6EC" font-family="Fraunces, Georgia, serif" font-size="28">Surfaces</text>
+
+  <g font-family="IBM Plex Sans, sans-serif" font-size="19">
+    <rect x="166" y="252" width="172" height="42" rx="14" fill="#20302E"/>
+    <text x="188" y="279" fill="#EDE4D7">Overview</text>
+    <rect x="166" y="306" width="172" height="42" rx="14" fill="#20302E"/>
+    <text x="188" y="333" fill="#EDE4D7">Agents</text>
+    <rect x="166" y="360" width="172" height="42" rx="14" fill="#1F302E"/>
+    <text x="188" y="387" fill="#EDE4D7">Inbox</text>
+    <rect x="166" y="414" width="172" height="46" rx="14" fill="url(#accent)"/>
+    <text x="188" y="443" fill="#FFF6EC">Scheduler</text>
+    <rect x="166" y="472" width="172" height="42" rx="14" fill="#20302E"/>
+    <text x="188" y="499" fill="#EDE4D7">Workflow</text>
+    <rect x="166" y="526" width="172" height="42" rx="14" fill="#20302E"/>
+    <text x="188" y="553" fill="#EDE4D7">Deliverables</text>
+    <rect x="166" y="580" width="172" height="42" rx="14" fill="#20302E"/>
+    <text x="188" y="607" fill="#EDE4D7">Federation</text>
+  </g>
+
+  <text x="402" y="225" fill="#FFF6EC" font-family="Fraunces, Georgia, serif" font-size="34">Runtime Snapshot</text>
+
+  <rect x="402" y="248" width="204" height="112" rx="20" fill="#1E2927" stroke="#FFFFFF" stroke-opacity="0.06"/>
+  <rect x="624" y="248" width="204" height="112" rx="20" fill="#1E2927" stroke="#FFFFFF" stroke-opacity="0.06"/>
+  <rect x="846" y="248" width="204" height="112" rx="20" fill="#1E2927" stroke="#FFFFFF" stroke-opacity="0.06"/>
+
+  <text x="430" y="300" fill="#FFF6EC" font-family="Fraunces, Georgia, serif" font-size="40">12</text>
+  <text x="430" y="328" fill="#DBCFC1" font-family="IBM Plex Sans, sans-serif" font-size="18">scheduled runs today</text>
+  <text x="652" y="300" fill="#FFF6EC" font-family="Fraunces, Georgia, serif" font-size="40">3</text>
+  <text x="652" y="328" fill="#DBCFC1" font-family="IBM Plex Sans, sans-serif" font-size="18">approvals waiting</text>
+  <text x="874" y="300" fill="#FFF6EC" font-family="Fraunces, Georgia, serif" font-size="40">8</text>
+  <text x="874" y="328" fill="#DBCFC1" font-family="IBM Plex Sans, sans-serif" font-size="18">deliverables published</text>
+
+  <rect x="402" y="392" width="648" height="108" rx="22" fill="#1E2927" stroke="#FFFFFF" stroke-opacity="0.06"/>
+  <rect x="402" y="518" width="648" height="108" rx="22" fill="#1E2927" stroke="#FFFFFF" stroke-opacity="0.06"/>
+  <rect x="402" y="644" width="648" height="108" rx="22" fill="#1E2927" stroke="#FFFFFF" stroke-opacity="0.06"/>
+
+  <text x="430" y="433" fill="#FFF6EC" font-family="IBM Plex Sans, sans-serif" font-size="22" font-weight="600">weekly-market-brief</text>
+  <rect x="892" y="410" width="124" height="34" rx="17" fill="#CA6B2C" fill-opacity="0.24"/>
+  <text x="925" y="432" fill="#FFD6B8" font-family="IBM Plex Mono, monospace" font-size="16">running</text>
+  <text x="430" y="468" fill="#DBCFC1" font-family="IBM Plex Sans, sans-serif" font-size="18">Research completed. Review agent is validating contradictory signals before publication.</text>
+
+  <text x="430" y="559" fill="#FFF6EC" font-family="IBM Plex Sans, sans-serif" font-size="22" font-weight="600">mcp/content-indexer</text>
+  <rect x="870" y="536" width="146" height="34" rx="17" fill="#0F6B61" fill-opacity="0.24"/>
+  <text x="904" y="558" fill="#C9FFF2" font-family="IBM Plex Mono, monospace" font-size="16">connected</text>
+  <text x="430" y="594" fill="#DBCFC1" font-family="IBM Plex Sans, sans-serif" font-size="18">Registry refreshed. Indexed search and export are available under the active sandbox profile.</text>
+
+  <text x="430" y="685" fill="#FFF6EC" font-family="IBM Plex Sans, sans-serif" font-size="22" font-weight="600">policy-review-run</text>
+  <rect x="882" y="662" width="134" height="34" rx="17" fill="#CA6B2C" fill-opacity="0.24"/>
+  <text x="913" y="684" fill="#FFD6B8" font-family="IBM Plex Mono, monospace" font-size="16">approval</text>
+  <text x="430" y="720" fill="#DBCFC1" font-family="IBM Plex Sans, sans-serif" font-size="18">One tool call is paused for approval. Session context and next action remain recoverable.</text>
+</svg>
