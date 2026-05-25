@@ -110,7 +110,9 @@ body {
 }
 
 .marketing-shell {
-  margin: 48px 0 0;
+  margin: 56px 0 0;
+  display: grid;
+  gap: 24px;
 }
 
 .marketing-grid,
@@ -122,7 +124,7 @@ body {
 .marketing-decisions,
 .marketing-links {
   display: grid;
-  gap: 18px;
+  gap: 16px;
 }
 
 .marketing-panel {
@@ -146,7 +148,13 @@ body {
 
 .marketing-panel-inner {
   position: relative;
-  padding: 28px;
+  padding: 32px 36px;
+}
+
+@media (max-width: 960px) {
+  .marketing-panel-inner {
+    padding: 26px;
+  }
 }
 
 .marketing-eyebrow {
@@ -161,28 +169,29 @@ body {
 .marketing-title {
   margin: 0;
   font-family: var(--af-display-font);
-  font-size: clamp(1.9rem, 3vw, 3rem);
-  line-height: 1;
-  letter-spacing: -0.04em;
+  font-size: clamp(1.8rem, 2.6vw, 2.8rem);
+  line-height: 1.05;
+  letter-spacing: -0.035em;
 }
 
 .marketing-lead {
-  margin: 14px 0 0;
+  margin: 16px 0 0;
   max-width: 52rem;
   color: var(--vp-c-text-2);
   font-size: 1.05rem;
-  line-height: 1.8;
+  line-height: 1.82;
 }
 
 .marketing-stats {
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  margin-top: 18px;
+  margin-top: 24px;
 }
 
 .marketing-stat {
-  padding: 20px 18px;
+  padding: 22px 20px;
   border-radius: 20px;
-  background: rgba(13, 59, 54, 0.04);
+  background: rgba(13, 59, 54, 0.05);
+  border: 1px solid rgba(13, 59, 54, 0.06);
 }
 
 .marketing-stat strong {
@@ -200,12 +209,12 @@ body {
 
 .marketing-grid {
   grid-template-columns: 1.2fr 0.8fr;
-  margin-top: 18px;
+  margin-top: 0;
 }
 
 .marketing-showcase {
   grid-template-columns: 1.05fr 0.95fr;
-  margin-top: 18px;
+  margin-top: 0;
 }
 
 .marketing-showcase-copy {
@@ -442,14 +451,15 @@ body {
 
 .marketing-proof {
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin-top: 18px;
+  margin-top: 0;
 }
 
 .marketing-proof-card {
-  padding: 22px;
+  padding: 26px;
   border-radius: 24px;
-  background: linear-gradient(180deg, rgba(13, 59, 54, 0.9), rgba(27, 32, 29, 0.92));
+  background: linear-gradient(160deg, rgba(13, 59, 54, 0.88), rgba(22, 30, 27, 0.94));
   color: rgba(255, 247, 239, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.07);
 }
 
 .marketing-proof-card h3 {
@@ -471,14 +481,20 @@ body {
 
 .marketing-cases {
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin-top: 18px;
+  margin-top: 20px;
 }
 
 .marketing-case {
-  padding: 22px;
+  padding: 24px;
   border-radius: 24px;
-  background: rgba(255, 255, 255, 0.64);
-  border: 1px solid rgba(13, 59, 54, 0.08);
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid rgba(13, 59, 54, 0.09);
+  transition: box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.marketing-case:hover {
+  border-color: rgba(13, 107, 97, 0.18);
+  box-shadow: 0 12px 28px rgba(55, 46, 34, 0.08);
 }
 
 .marketing-case h3 {
@@ -498,7 +514,7 @@ body {
 
 .marketing-decisions {
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin-top: 18px;
+  margin-top: 20px;
 }
 
 .marketing-decision-card {
@@ -522,7 +538,7 @@ body {
 
 .marketing-links {
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  margin-top: 18px;
+  margin-top: 20px;
 }
 
 .marketing-link-card {
@@ -558,7 +574,7 @@ body {
 .marketing-cta {
   grid-template-columns: 1fr auto;
   align-items: center;
-  margin-top: 18px;
+  margin-top: 0;
 }
 
 .marketing-cta-actions {
@@ -1911,4 +1927,192 @@ body {
   .kp-section-hl { font-size: clamp(1.5rem, 5.5vw, 2rem); }
   .kp-pain-grid, .kp-gov-grid { grid-template-columns: 1fr; gap: 10px; }
   .kp-scen-grid { grid-template-columns: 1fr; }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   MISSING MAIN-PAGE COMPONENT STYLES
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── Blueprint section (2-col grid inside marketing-shell) ── */
+.marketing-blueprint {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-top: 18px;
+}
+
+@media (max-width: 960px) {
+  .marketing-blueprint {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Runtime topology diagram ── */
+.marketing-diagram {
+  display: block;
+  width: 100%;
+  max-height: 340px;
+  object-fit: contain;
+  margin-top: 24px;
+  border-radius: 16px;
+  opacity: 0.92;
+}
+
+/* ── Deployment steps ── */
+.deployment-steps {
+  display: grid;
+  gap: 14px;
+  margin-top: 22px;
+}
+
+.deployment-step {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  padding: 16px 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(13, 59, 54, 0.1);
+  background: rgba(13, 107, 97, 0.04);
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+.deployment-step:hover {
+  border-color: rgba(13, 107, 97, 0.18);
+  background: rgba(13, 107, 97, 0.07);
+}
+
+.deployment-step > strong {
+  flex: 0 0 auto;
+  font-family: var(--af-display-font);
+  font-size: 1.6rem;
+  line-height: 1;
+  color: rgba(13, 107, 97, 0.35);
+  letter-spacing: -0.04em;
+  min-width: 36px;
+}
+
+.deployment-step > div h3 {
+  margin: 0 0 6px;
+  font-family: var(--af-display-font);
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+}
+
+.deployment-step > div p {
+  margin: 0;
+  color: var(--vp-c-text-2);
+  line-height: 1.7;
+  font-size: 0.95rem;
+}
+
+/* ── Marketing visual panel (for blueprint section) ── */
+.marketing-visual-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   DARK MODE OVERRIDES  (VitePress adds .dark to <html>)
+   ═══════════════════════════════════════════════════════════ */
+
+html.dark {
+  --vp-c-bg: #0c1210;
+  --vp-c-bg-soft: #111a17;
+  --vp-c-bg-alt: #0f1714;
+  --vp-c-text-1: #e8f0ec;
+  --vp-c-text-2: #9db5ac;
+  --vp-c-text-3: #6e8c82;
+  --vp-c-brand-soft: rgba(13, 107, 97, 0.22);
+  --vp-c-divider: rgba(255, 255, 255, 0.09);
+  --vp-c-border: rgba(255, 255, 255, 0.09);
+  --vp-c-gutter: rgba(255, 255, 255, 0.04);
+}
+
+html.dark body {
+  background:
+    radial-gradient(circle at top left, rgba(13, 107, 97, 0.13), transparent 30%),
+    radial-gradient(circle at top right, rgba(202, 107, 44, 0.07), transparent 26%),
+    linear-gradient(180deg, #090e0d 0%, #0c1210 55%, #0e1512 100%);
+}
+
+html.dark .VPNavBar {
+  background: rgba(9, 14, 13, 0.9);
+  border-bottom-color: rgba(255, 255, 255, 0.06);
+}
+
+html.dark .VPButton.alt {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--vp-c-text-1);
+}
+
+html.dark .VPFeature {
+  border-color: rgba(255, 255, 255, 0.07);
+  background: linear-gradient(180deg, rgba(20, 30, 26, 0.88), rgba(16, 24, 21, 0.94));
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.3);
+}
+
+/* ── Dark: main-page marketing panels ── */
+html.dark .marketing-panel {
+  background: rgba(14, 21, 19, 0.88);
+  border-color: rgba(255, 255, 255, 0.07);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.32);
+}
+
+html.dark .marketing-panel::before {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+}
+
+html.dark .marketing-stat {
+  background: rgba(13, 107, 97, 0.1);
+}
+
+html.dark .marketing-case {
+  background: rgba(18, 26, 23, 0.84);
+  border-color: rgba(255, 255, 255, 0.07);
+}
+
+html.dark .marketing-decision-card {
+  background: rgba(18, 26, 23, 0.84);
+  border-color: rgba(255, 255, 255, 0.07);
+}
+
+html.dark .marketing-link-card {
+  background: rgba(18, 26, 23, 0.78);
+  border-color: rgba(255, 255, 255, 0.07);
+  color: var(--vp-c-text-1);
+}
+
+html.dark .marketing-link-card:hover {
+  border-color: rgba(13, 107, 97, 0.32);
+  box-shadow: 0 18px 34px rgba(0, 0, 0, 0.3);
+}
+
+html.dark .marketing-pill {
+  background: rgba(18, 26, 23, 0.72);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+html.dark .marketing-checks li {
+  border-top-color: rgba(255, 255, 255, 0.07);
+}
+
+html.dark .marketing-list li {
+  border-top-color: rgba(255, 255, 255, 0.07);
+}
+
+html.dark .deployment-step {
+  border-color: rgba(255, 255, 255, 0.07);
+  background: rgba(13, 107, 97, 0.06);
+}
+
+html.dark .deployment-step:hover {
+  border-color: rgba(13, 107, 97, 0.22);
+  background: rgba(13, 107, 97, 0.1);
+}
+
+html.dark .deployment-step > strong {
+  color: rgba(13, 180, 160, 0.45);
 }
