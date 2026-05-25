@@ -10,6 +10,7 @@ function getThemeConfig(locale: 'en' | 'zh') {
     return {
       nav: [
         { text: '为什么是 AgentFlyer', link: '/zh/#why-agentflyer' },
+        { text: 'H5 介绍', link: '/zh/h5-intro' },
         { text: '适用场景', link: '/zh/use-cases' },
         { text: '指南', link: '/zh/guide/getting-started' },
         { text: '架构', link: '/zh/guide/architecture' },
