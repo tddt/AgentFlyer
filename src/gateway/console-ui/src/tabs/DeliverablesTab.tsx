@@ -482,11 +482,11 @@ export function DeliverablesTab() {
         </div>
       </div>
 
-      {/* ── Main workspace: sidebar (groups + diagnostics) | list | detail ── */}
-      <div className="grid gap-4 xl:grid-cols-[240px_minmax(0,1fr)]">
+      {/* ── Main workspace: preview-first on smaller screens, multi-column on wide screens ── */}
+      <div className="grid gap-4 min-[1680px]:grid-cols-[240px_minmax(0,1fr)]">
 
         {/* Left sidebar — bounded height, never pushes the list+detail section */}
-        <div className="flex flex-col gap-4">
+        <div className="order-3 flex flex-col gap-4 min-[1680px]:order-1">
 
           {/* Category tree — file-manager style */}
           <div className="rounded-lg border border-white/8 p-4 backdrop-blur-xl" style={{ background: 'var(--af-card-bg)' }}>
@@ -582,8 +582,8 @@ export function DeliverablesTab() {
         </div>
 
         {/* Right area: list + detail always visible alongside the sidebar */}
-        <div className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
-          <div className="rounded-xl border border-white/8 p-4 backdrop-blur-xl" style={{ background: 'var(--af-card-bg)' }}>
+        <div className="order-1 grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)] min-[1680px]:order-2">
+          <div className="order-2 rounded-xl border border-white/8 p-4 backdrop-blur-xl xl:order-1" style={{ background: 'var(--af-card-bg)' }}>
             <div className="mb-3 flex items-center justify-between gap-2">
               <Badge variant="gray">{filteredItems.length}</Badge>
               <button
@@ -650,7 +650,7 @@ export function DeliverablesTab() {
               </div>
             </div>
 
-            <div className="flex max-h-[860px] flex-col gap-2 overflow-auto pr-1">
+            <div className="flex max-h-[420px] flex-col gap-2 overflow-auto pr-1 xl:max-h-[860px]">
               {filteredItems.map((item) => {
                 const active = item.id === selected?.id;
                 const checked = selectedIds.has(item.id);
@@ -731,14 +731,16 @@ export function DeliverablesTab() {
             </div>
           </div>
 
-          <DeliverableDetailView
-            deliverable={selected}
-            loading={loading && !selected}
-            onOpenFiles={(artifact) => {
-              if (!selected) return;
-              openInFiles(selected, artifact ? { id: artifact.id, name: artifact.name } : undefined);
-            }}
-          />
+          <div className="order-1 min-w-0 xl:order-2">
+            <DeliverableDetailView
+              deliverable={selected}
+              loading={loading && !selected}
+              onOpenFiles={(artifact) => {
+                if (!selected) return;
+                openInFiles(selected, artifact ? { id: artifact.id, name: artifact.name } : undefined);
+              }}
+            />
+          </div>
         </div>
       </div>
 

@@ -19,6 +19,8 @@ import type {
 const CONTENT_BASE = window.location.origin;
 const CONTENT_TOKEN = encodeURIComponent(window.__AF_TOKEN__);
 const MAX_TEXT_PREVIEW_BYTES = 1024 * 1024;
+const PREVIEW_SCROLL_CLASS = 'min-h-[360px] max-h-[72vh] lg:min-h-[520px]';
+const EMBED_PREVIEW_CLASS = 'h-[60vh] min-h-[420px] max-h-[78vh]';
 type OfficePreviewKind = 'docx' | 'xlsx' | 'pptx';
 
 const OFFICE_MIME_KINDS: Record<string, OfficePreviewKind> = {
@@ -107,7 +109,7 @@ function primaryArtifact(deliverable: DeliverableRecord): ArtifactRef | undefine
 function renderArtifactTextContent(artifact: ArtifactRef, textContent: string): ReactElement {
   if (artifact.format === 'json' || artifact.format === 'csv') {
     return (
-      <pre className="max-h-[680px] overflow-auto rounded-2xl bg-slate-950/70 p-5 text-xs leading-6 text-slate-300">
+      <pre className={`${PREVIEW_SCROLL_CLASS} overflow-auto rounded-2xl bg-slate-950/70 p-5 text-xs leading-6 text-slate-300`}>
         {textContent}
       </pre>
     );
@@ -115,14 +117,14 @@ function renderArtifactTextContent(artifact: ArtifactRef, textContent: string): 
 
   if (artifact.format === 'markdown' || artifact.mimeType === 'text/markdown') {
     return (
-      <div className="max-h-[680px] overflow-auto rounded-2xl bg-slate-950/70 p-5">
+      <div className={`${PREVIEW_SCROLL_CLASS} overflow-auto rounded-2xl bg-slate-950/70 p-5`}>
         <MarkdownView content={textContent} />
       </div>
     );
   }
 
   return (
-    <pre className="max-h-[680px] overflow-auto rounded-2xl bg-slate-950/70 p-5 text-xs leading-6 whitespace-pre-wrap break-words text-slate-300">
+    <pre className={`${PREVIEW_SCROLL_CLASS} overflow-auto rounded-2xl bg-slate-950/70 p-5 text-xs leading-6 whitespace-pre-wrap break-words text-slate-300`}>
       {textContent}
     </pre>
   );
@@ -173,16 +175,16 @@ function renderMediaPreview(
 
   if (artifact.mimeType.startsWith('image/')) {
     return (
-      <div className="overflow-hidden rounded-2xl border border-white/8 bg-slate-950/70">
-        <img src={url} alt={artifact.name} className="max-h-[720px] w-full object-contain" />
+      <div className={`${PREVIEW_SCROLL_CLASS} flex items-center justify-center overflow-hidden rounded-2xl border border-white/8 bg-slate-950/70`}>
+        <img src={url} alt={artifact.name} className="max-h-[72vh] w-full object-contain" />
       </div>
     );
   }
 
   if (artifact.mimeType.startsWith('video/')) {
     return (
-      <div className="overflow-hidden rounded-2xl border border-white/8 bg-slate-950/70 p-2">
-        <video controls preload="metadata" className="max-h-[720px] w-full rounded-xl" src={url} />
+      <div className={`${PREVIEW_SCROLL_CLASS} overflow-hidden rounded-2xl border border-white/8 bg-slate-950/70 p-2`}>
+        <video controls preload="metadata" className="h-full w-full rounded-xl" src={url} />
       </div>
     );
   }
@@ -805,7 +807,7 @@ function OfficePreviewContent({
       {kind === 'docx' && (
         <div
           ref={docContainerRef}
-          className="max-h-[720px] overflow-auto bg-white p-4"
+          className={`${EMBED_PREVIEW_CLASS} overflow-auto bg-white p-4`}
           style={{ display: status === 'done' ? 'block' : 'none' }}
         />
       )}
@@ -815,7 +817,7 @@ function OfficePreviewContent({
           srcDoc={activeHtml}
           sandbox=""
           title={artifact.name}
-          className="h-[720px] w-full bg-white"
+          className={`${EMBED_PREVIEW_CLASS} w-full bg-white`}
         />
       )}
     </div>
@@ -901,7 +903,7 @@ function ArtifactPreviewContent({
           title={artifact.name}
           src={url}
           sandbox={artifact.mimeType === 'text/html' ? '' : undefined}
-          className="h-[720px] w-full bg-white"
+          className={`${EMBED_PREVIEW_CLASS} w-full bg-white`}
         />
       </div>
     );
@@ -1305,166 +1307,8 @@ export function DeliverableDetailView({
         </div>
       </div>
 
-      <div className="mt-4 grid gap-6 xl:grid-cols-[300px_minmax(0,1fr)]">
-        <div className="xl:sticky xl:top-6 xl:self-start">
-          <section className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">
-                {t('deliverables.detail.artifacts')}
-              </div>
-              <div className="flex items-center gap-2">
-                {artifacts.length > 1 && (
-                  <button
-                    type="button"
-                    className="rounded-full border border-cyan-400/20 bg-cyan-500/10 px-2.5 py-1 text-[10px] text-cyan-200 hover:bg-cyan-500/18"
-                    onClick={() => downloadAllArtifacts(artifacts)}
-                    title={t('deliverables.artifact.downloadAll')}
-                  >
-                    ↓ {t('deliverables.artifact.downloadAll')}
-                  </button>
-                )}
-                <Badge variant="gray">{artifacts.length}</Badge>
-              </div>
-            </div>
-            <div className="mb-3 rounded-xl border border-cyan-400/10 bg-cyan-500/[0.06] px-3 py-2 text-[11px] leading-5 text-cyan-100/80">
-              {t('deliverables.artifact.keyboardHint')}
-            </div>
-            <div className="flex max-h-[760px] flex-col gap-2 overflow-auto pr-1">
-              {artifacts.map((artifact, index) => {
-                const active = artifact.id === activeArtifact?.id;
-                const sizeLabel = formatBytes(artifact.size);
-                return (
-                  <button
-                    id={`deliverable-artifact-${artifact.id}`}
-                    key={artifact.id}
-                    type="button"
-                    onClick={() => setSelectedArtifactId(artifact.id)}
-                    onKeyDown={(event) => handleArtifactKeyDown(event, index)}
-                    className={`relative rounded-2xl border px-4 py-3 pl-5 text-left transition-all ${
-                      active
-                        ? 'border-cyan-300/45 bg-cyan-500/12 ring-1 ring-cyan-300/30 shadow-[0_18px_36px_rgba(6,182,212,0.12)]'
-                        : 'border-white/8 bg-slate-950/55 hover:border-white/15 hover:bg-white/[0.03] focus:border-cyan-300/35'
-                    }`}
-                    aria-pressed={active}
-                  >
-                    <span
-                      className={`absolute inset-y-3 left-2 w-1 rounded-full ${
-                        active ? 'bg-cyan-300 shadow-[0_0_18px_rgba(103,232,249,0.85)]' : 'bg-white/8'
-                      }`}
-                    />
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="truncate text-sm font-medium text-slate-100">{artifact.name}</div>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <div className="rounded-full border border-white/8 bg-slate-900/80 px-2 py-0.5 text-[10px] text-slate-400">
-                          {index + 1}/{artifacts.length}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="mt-2 flex items-center justify-end gap-1.5">
-                      <button
-                        type="button"
-                        className="rounded-full border border-slate-600/40 bg-slate-800/60 px-2 py-0.5 text-[10px] text-slate-300 hover:bg-slate-700/70"
-                        onClick={(e) => { e.stopPropagation(); downloadArtifact(artifact); }}
-                        title={t('deliverables.artifact.download')}
-                      >
-                        ↓
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-full border border-slate-600/40 bg-slate-800/60 px-2 py-0.5 text-[10px] text-slate-300 hover:bg-slate-700/70"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setRenameTarget(artifact);
-                          setRenameValue(artifact.name);
-                        }}
-                        title={t('files.artifact.rename')}
-                      >
-                        ✎
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-full border border-slate-600/40 bg-slate-800/60 px-2 py-0.5 text-[10px] text-slate-300 hover:bg-slate-700/70"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setCategoryTarget(artifact);
-                          setCategoryValue(artifact.category ?? '');
-                        }}
-                        title={t('files.category.set')}
-                      >
-                        📁
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-full border border-rose-400/30 bg-rose-500/12 px-2 py-0.5 text-[10px] text-rose-200 hover:bg-rose-500/22"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setDeleteTarget(artifact);
-                        }}
-                        title={t('files.artifact.delete')}
-                      >
-                        🗑
-                      </button>
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <Badge variant={artifact.role === 'primary' ? 'blue' : 'purple'}>
-                        {artifact.role}
-                      </Badge>
-                      <Badge variant="gray">{artifact.format}</Badge>
-                      {sizeLabel && <Badge variant="gray">{sizeLabel}</Badge>}
-                      {artifact.category && <Badge variant="blue">{artifact.category}</Badge>}
-                    </div>
-                    <div className="mt-2 line-clamp-2 text-xs leading-5 text-slate-400">
-                      {artifact.mimeType ?? artifact.filePath ?? ''}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-            {/* B3: Attach file */}
-            {!showAttach ? (
-              <button
-                type="button"
-                className="mt-3 w-full rounded-xl border border-dashed border-slate-600/50 py-2 text-[11px] text-slate-500 hover:border-cyan-400/30 hover:text-cyan-300"
-                onClick={() => setShowAttach(true)}
-              >
-                {t('deliverables.attach.action')}
-              </button>
-            ) : (
-              <div className="mt-3 flex flex-col gap-2">
-                <input
-                  autoFocus
-                  className="w-full rounded-lg bg-slate-800/70 px-3 py-2 text-xs text-slate-200 ring-1 ring-slate-600/60 outline-none focus:ring-cyan-400/40"
-                  placeholder={t('deliverables.attach.placeholder')}
-                  value={attachPath}
-                  onChange={(e) => setAttachPath(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') void attachFile();
-                    if (e.key === 'Escape') { setShowAttach(false); setAttachPath(''); }
-                  }}
-                />
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    disabled={attaching || !attachPath.trim()}
-                    className="flex-1 rounded-lg bg-cyan-600/30 py-1.5 text-xs text-cyan-100 hover:bg-cyan-600/45 disabled:cursor-not-allowed disabled:opacity-50"
-                    onClick={() => void attachFile()}
-                  >
-                    {attaching ? '…' : t('deliverables.attach.confirm')}
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded-lg border border-slate-600/40 px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200"
-                    onClick={() => { setShowAttach(false); setAttachPath(''); }}
-                  >
-                    ✕
-                  </button>
-                </div>
-              </div>
-            )}
-          </section>
-        </div>
-
-        <div className="flex flex-col gap-4">
+      <div className="mt-4 grid gap-6 min-[1520px]:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="min-w-0 flex flex-col gap-4">
           <section className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
             <div className="mb-4 flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
@@ -1680,7 +1524,6 @@ export function DeliverableDetailView({
             </div>
           </section>
 
-          {/* B5: Workflow execution trace panel */}
           {deliverable.source.kind === 'workflow_run' && (
             <section className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
               <button
@@ -1762,6 +1605,164 @@ export function DeliverableDetailView({
               )}
             </section>
           )}
+        </div>
+
+        <div className="min-w-0 min-[1520px]:sticky min-[1520px]:top-6 min-[1520px]:self-start">
+          <section className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">
+                {t('deliverables.detail.artifacts')}
+              </div>
+              <div className="flex items-center gap-2">
+                {artifacts.length > 1 && (
+                  <button
+                    type="button"
+                    className="rounded-full border border-cyan-400/20 bg-cyan-500/10 px-2.5 py-1 text-[10px] text-cyan-200 hover:bg-cyan-500/18"
+                    onClick={() => downloadAllArtifacts(artifacts)}
+                    title={t('deliverables.artifact.downloadAll')}
+                  >
+                    ↓ {t('deliverables.artifact.downloadAll')}
+                  </button>
+                )}
+                <Badge variant="gray">{artifacts.length}</Badge>
+              </div>
+            </div>
+            <div className="mb-3 rounded-xl border border-cyan-400/10 bg-cyan-500/[0.06] px-3 py-2 text-[11px] leading-5 text-cyan-100/80">
+              {t('deliverables.artifact.keyboardHint')}
+            </div>
+            <div className="flex max-h-[760px] flex-col gap-2 overflow-auto pr-1">
+              {artifacts.map((artifact, index) => {
+                const active = artifact.id === activeArtifact?.id;
+                const sizeLabel = formatBytes(artifact.size);
+                return (
+                  <button
+                    id={`deliverable-artifact-${artifact.id}`}
+                    key={artifact.id}
+                    type="button"
+                    onClick={() => setSelectedArtifactId(artifact.id)}
+                    onKeyDown={(event) => handleArtifactKeyDown(event, index)}
+                    className={`relative rounded-2xl border px-4 py-3 pl-5 text-left transition-all ${
+                      active
+                        ? 'border-cyan-300/45 bg-cyan-500/12 ring-1 ring-cyan-300/30 shadow-[0_18px_36px_rgba(6,182,212,0.12)]'
+                        : 'border-white/8 bg-slate-950/55 hover:border-white/15 hover:bg-white/[0.03] focus:border-cyan-300/35'
+                    }`}
+                    aria-pressed={active}
+                  >
+                    <span
+                      className={`absolute inset-y-3 left-2 w-1 rounded-full ${
+                        active ? 'bg-cyan-300 shadow-[0_0_18px_rgba(103,232,249,0.85)]' : 'bg-white/8'
+                      }`}
+                    />
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="truncate text-sm font-medium text-slate-100">{artifact.name}</div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <div className="rounded-full border border-white/8 bg-slate-900/80 px-2 py-0.5 text-[10px] text-slate-400">
+                          {index + 1}/{artifacts.length}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-2 flex items-center justify-end gap-1.5">
+                      <button
+                        type="button"
+                        className="rounded-full border border-slate-600/40 bg-slate-800/60 px-2 py-0.5 text-[10px] text-slate-300 hover:bg-slate-700/70"
+                        onClick={(e) => { e.stopPropagation(); downloadArtifact(artifact); }}
+                        title={t('deliverables.artifact.download')}
+                      >
+                        ↓
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-full border border-slate-600/40 bg-slate-800/60 px-2 py-0.5 text-[10px] text-slate-300 hover:bg-slate-700/70"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setRenameTarget(artifact);
+                          setRenameValue(artifact.name);
+                        }}
+                        title={t('files.artifact.rename')}
+                      >
+                        ✎
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-full border border-slate-600/40 bg-slate-800/60 px-2 py-0.5 text-[10px] text-slate-300 hover:bg-slate-700/70"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setCategoryTarget(artifact);
+                          setCategoryValue(artifact.category ?? '');
+                        }}
+                        title={t('files.category.set')}
+                      >
+                        📁
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-full border border-rose-400/30 bg-rose-500/12 px-2 py-0.5 text-[10px] text-rose-200 hover:bg-rose-500/22"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDeleteTarget(artifact);
+                        }}
+                        title={t('files.artifact.delete')}
+                      >
+                        🗑
+                      </button>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Badge variant={artifact.role === 'primary' ? 'blue' : 'purple'}>
+                        {artifact.role}
+                      </Badge>
+                      <Badge variant="gray">{artifact.format}</Badge>
+                      {sizeLabel && <Badge variant="gray">{sizeLabel}</Badge>}
+                      {artifact.category && <Badge variant="blue">{artifact.category}</Badge>}
+                    </div>
+                    <div className="mt-2 line-clamp-2 text-xs leading-5 text-slate-400">
+                      {artifact.mimeType ?? artifact.filePath ?? ''}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+            {/* B3: Attach file */}
+            {!showAttach ? (
+              <button
+                type="button"
+                className="mt-3 w-full rounded-xl border border-dashed border-slate-600/50 py-2 text-[11px] text-slate-500 hover:border-cyan-400/30 hover:text-cyan-300"
+                onClick={() => setShowAttach(true)}
+              >
+                {t('deliverables.attach.action')}
+              </button>
+            ) : (
+              <div className="mt-3 flex flex-col gap-2">
+                <input
+                  autoFocus
+                  className="w-full rounded-lg bg-slate-800/70 px-3 py-2 text-xs text-slate-200 ring-1 ring-slate-600/60 outline-none focus:ring-cyan-400/40"
+                  placeholder={t('deliverables.attach.placeholder')}
+                  value={attachPath}
+                  onChange={(e) => setAttachPath(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void attachFile();
+                    if (e.key === 'Escape') { setShowAttach(false); setAttachPath(''); }
+                  }}
+                />
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={attaching || !attachPath.trim()}
+                    className="flex-1 rounded-lg bg-cyan-600/30 py-1.5 text-xs text-cyan-100 hover:bg-cyan-600/45 disabled:cursor-not-allowed disabled:opacity-50"
+                    onClick={() => void attachFile()}
+                  >
+                    {attaching ? '…' : t('deliverables.attach.confirm')}
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-lg border border-slate-600/40 px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200"
+                    onClick={() => { setShowAttach(false); setAttachPath(''); }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
         </div>
       </div>
 
