@@ -160,7 +160,7 @@ function getThemeConfig(locale: 'en' | 'zh') {
 export default defineConfig({
   title: 'AgentFlyer',
   description: 'AgentOS runtime for multi-agent orchestration, workflows, memory, MCP, sandboxed execution, and multi-channel operations.',
-  base: '/',
+  base: '/AgentFlyer/',
   head: [
     ['meta', { name: 'theme-color', content: '#0d3b36' }],
     ['meta', { property: 'og:title', content: 'AgentFlyer' }],

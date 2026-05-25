@@ -25,7 +25,7 @@ gateway.pid
 .idea/
 
 # Copilot / IDE skills (local only, not for version control)
-.github/
+.github/skills/
 *.swp
 *.swo
 .DS_Store
