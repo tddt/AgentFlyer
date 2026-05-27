@@ -9,7 +9,7 @@
 AgentFlyer 是一个**去中心化、跨平台、多主机联邦**的 AI Agent 框架。
 目标：比 OpenClaw 更轻量、更快、更省 Token、支持多主机协作。
 
-- 设计文档：`docs/01-05`（阅读后再编码）
+- 设计文档：`docs-files/01-05`（阅读后再编码）
 - 代码根目录：`src/`
 - 测试根目录：`tests/`
 - 运行时数据：`~/.agentflyer/`
@@ -41,6 +41,8 @@ channels/       ← 依赖 core/, agent/ 接口
 gateway/        ← 顶层，依赖所有
 scheduler/      ← 依赖 core/, agent/ 接口
 cli/            ← 通过 RPC 调用 gateway 或直接创建 Gateway 实例
+docs/           ← 静态文档站点
+docs-files/     ← 项目开发文档
 ```
 
 **违反依赖方向的 PR 一律拒绝。**
@@ -167,4 +169,4 @@ pnpm build
 
 ---
 
-*更新：2026-03-15*
+*更新：2026-05-27*
