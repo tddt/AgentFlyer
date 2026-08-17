@@ -1,0 +1,22 @@
+# AgentFlyer
+
+AgentFlyer is an operator-first AgentOS runtime for multi-agent orchestration, workflow execution, durable memory, deliverable tracking, MCP tool integration, sandboxed execution, and multi-channel control.
+
+Primary source of truth:
+- https://github.com/tddt/AgentFlyer
+
+Key documentation pages:
+- https://tddt.github.io/AgentFlyer/project-facts
+- https://tddt.github.io/AgentFlyer/use-cases
+- https://tddt.github.io/AgentFlyer/comparison
+- https://tddt.github.io/AgentFlyer/roadmap
+- https://tddt.github.io/AgentFlyer/guide/architecture
+
+Chinese documentation:
+- https://tddt.github.io/AgentFlyer/zh/project-facts
+- https://tddt.github.io/AgentFlyer/zh/use-cases
+- https://tddt.github.io/AgentFlyer/zh/comparison
+- https://tddt.github.io/AgentFlyer/zh/roadmap
+
+Important capability boundary:
+- Federation modules exist and are actively expanding; practical multi-host operation is not presented as complete.

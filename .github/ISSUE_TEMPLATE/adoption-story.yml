@@ -1,0 +1,39 @@
+name: Adoption story
+about: Share usage evidence, outcomes, and gaps from real adoption
+labels: ["type:adoption", "need:triage"]
+body:
+  - type: input
+    id: org
+    attributes:
+      label: Team / organization (optional)
+      placeholder: Anonymous is fine
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment shape
+      options:
+        - Local workstation
+        - Single-host runtime
+        - Controlled production environment
+        - Multi-host / federation exploration
+    validations:
+      required: true
+  - type: textarea
+    id: scenario
+    attributes:
+      label: Scenario
+      placeholder: What workflow or operational flow are you running?
+    validations:
+      required: true
+  - type: textarea
+    id: outcomes
+    attributes:
+      label: Outcomes and evidence
+      placeholder: Include measurable or observable impact if possible
+    validations:
+      required: true
+  - type: textarea
+    id: blockers
+    attributes:
+      label: Current blockers
+      placeholder: What still prevents broader rollout?

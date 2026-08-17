@@ -1,15 +1,47 @@
 import { defineConfig } from 'vitepress';
 
+const SITE_ORIGIN = 'https://tddt.github.io';
+const SITE_BASE_PATH = '/AgentFlyer';
+const SITE_URL = `${SITE_ORIGIN}${SITE_BASE_PATH}`;
+const SOCIAL_IMAGE = `${SITE_URL}/console-runtime.svg`;
+
+function normalizeRoute(path: string): string {
+  const cleaned = path
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '')
+    .replace(/index$/, '')
+    .replace(/\/+$/, '');
+
+  return cleaned.length > 0 ? `/${cleaned}` : '/';
+}
+
+function buildLocalizedRoute(relativePath: string, locale: 'en' | 'zh'): string {
+  const contentPath = relativePath.startsWith('zh/') ? relativePath.slice(3) : relativePath;
+
+  if (locale === 'zh') {
+    return normalizeRoute(contentPath.length > 0 ? `zh/${contentPath}` : 'zh');
+  }
+
+  return normalizeRoute(contentPath);
+}
+
+function toAbsoluteUrl(route: string): string {
+  return `${SITE_URL}${route === '/' ? '' : route}`;
+}
+
 function getThemeConfig(locale: 'en' | 'zh') {
   const prefix = locale === 'zh' ? '/zh' : '';
   const guidePrefix = `${prefix}/guide`;
   const apiPrefix = `${prefix}/api`;
   const pluginsPrefix = `${prefix}/plugins`;
+  const audiencesPrefix = `${prefix}/audiences`;
 
   if (locale === 'zh') {
     return {
       nav: [
         { text: '为什么是 AgentFlyer', link: '/zh/#why-agentflyer' },
+        { text: '按角色选择', link: '/zh/audiences/developers' },
+        { text: '项目事实', link: '/zh/project-facts' },
         { text: 'H5 介绍', link: '/zh/h5-intro' },
         { text: '适用场景', link: '/zh/use-cases' },
         { text: '指南', link: '/zh/guide/getting-started' },
@@ -33,6 +65,17 @@ function getThemeConfig(locale: 'en' | 'zh') {
               { text: 'Memory', link: `${guidePrefix}/memory` },
               { text: 'Federation', link: `${guidePrefix}/federation` },
               { text: '部署', link: `${guidePrefix}/deployment` },
+            ],
+          },
+        ],
+        '/zh/audiences/': [
+          {
+            text: '按角色选择',
+            items: [
+              { text: '开发者与技术团队', link: `${audiencesPrefix}/developers` },
+              { text: 'AI 产品与运营团队', link: `${audiencesPrefix}/operators` },
+              { text: '企业技术决策者', link: `${audiencesPrefix}/enterprise` },
+              { text: '插件作者与开源贡献者', link: `${audiencesPrefix}/plugin-authors` },
             ],
           },
         ],
@@ -99,6 +142,8 @@ function getThemeConfig(locale: 'en' | 'zh') {
   return {
     nav: [
       { text: 'Why AgentFlyer', link: '/#why-agentflyer' },
+      { text: 'By Role', link: '/audiences/developers' },
+      { text: 'Project Facts', link: '/project-facts' },
       { text: 'Use Cases', link: '/use-cases' },
       { text: 'Guide', link: '/guide/getting-started' },
       { text: 'Architecture', link: '/guide/architecture' },
@@ -122,6 +167,17 @@ function getThemeConfig(locale: 'en' | 'zh') {
             { text: 'Memory', link: `${guidePrefix}/memory` },
             { text: 'Federation', link: `${guidePrefix}/federation` },
             { text: 'Deployment', link: `${guidePrefix}/deployment` },
+          ],
+        },
+      ],
+      '/audiences/': [
+        {
+          text: 'By Role',
+          items: [
+            { text: 'Developers & Engineering Teams', link: `${audiencesPrefix}/developers` },
+            { text: 'AI Product & Operations Teams', link: `${audiencesPrefix}/operators` },
+            { text: 'Enterprise Technology Leaders', link: `${audiencesPrefix}/enterprise` },
+            { text: 'Plugin Authors & OSS Contributors', link: `${audiencesPrefix}/plugin-authors` },
           ],
         },
       ],
@@ -162,8 +218,38 @@ export default defineConfig({
   description: 'AgentOS runtime for multi-agent orchestration, workflows, memory, MCP, sandboxed execution, and multi-channel operations.',
   appearance: false,
   base: '/AgentFlyer/',
+  sitemap: {
+    hostname: SITE_URL,
+  },
+  transformHead: ({ pageData }) => {
+    const relativePath = pageData.relativePath
+      .replace(/\.md$/, '')
+      .replace(/\/index$/, '')
+      .replace(/^index$/, '');
+    const isZhPage = relativePath.startsWith('zh/');
+
+    const currentLocale = isZhPage ? 'zh' : 'en';
+    const canonicalRoute = buildLocalizedRoute(relativePath, currentLocale);
+    const englishRoute = buildLocalizedRoute(relativePath, 'en');
+    const chineseRoute = buildLocalizedRoute(relativePath, 'zh');
+    const canonicalUrl = toAbsoluteUrl(canonicalRoute);
+
+    return [
+      ['link', { rel: 'canonical', href: canonicalUrl }],
+      ['link', { rel: 'alternate', hreflang: 'en', href: toAbsoluteUrl(englishRoute) }],
+      ['link', { rel: 'alternate', hreflang: 'zh-CN', href: toAbsoluteUrl(chineseRoute) }],
+      ['link', { rel: 'alternate', hreflang: 'x-default', href: toAbsoluteUrl(englishRoute) }],
+      ['meta', { property: 'og:url', content: canonicalUrl }],
+      ['meta', { property: 'og:locale', content: isZhPage ? 'zh_CN' : 'en_US' }],
+      ['meta', { property: 'og:locale:alternate', content: isZhPage ? 'en_US' : 'zh_CN' }],
+    ];
+  },
   head: [
     ['meta', { name: 'theme-color', content: '#0d3b36' }],
+    ['meta', { name: 'keywords', content: 'AgentFlyer, AgentOS, multi-agent runtime, agent orchestration, workflow runtime, MCP, sandboxed AI tools, operator control plane, federation-ready' }],
+    ['meta', { name: 'robots', content: 'index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1' }],
+    ['meta', { property: 'og:type', content: 'website' }],
+    ['meta', { property: 'og:site_name', content: 'AgentFlyer' }],
     ['meta', { property: 'og:title', content: 'AgentFlyer' }],
     [
       'meta',
@@ -173,9 +259,62 @@ export default defineConfig({
           'A practical AgentOS runtime with workflows, memory, MCP, sandboxing, multi-agent mesh, and operator-facing control surfaces.',
       },
     ],
+    ['meta', { property: 'og:image', content: SOCIAL_IMAGE }],
+    ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
+    ['meta', { name: 'twitter:title', content: 'AgentFlyer' }],
+    ['meta', { name: 'twitter:description', content: 'A practical AgentOS runtime for multi-agent orchestration, operator workflows, and controlled tool execution.' }],
+    ['meta', { name: 'twitter:image', content: SOCIAL_IMAGE }],
     ['link', { rel: 'icon', href: '/favicon.ico' }],
     ['link', { rel: 'preconnect', href: 'https://fonts.googleapis.com' }],
     ['link', { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: '' }],
+    [
+      'script',
+      { type: 'application/ld+json' },
+      JSON.stringify({
+        '@context': 'https://schema.org',
+        '@graph': [
+          {
+            '@type': 'Organization',
+            name: 'AgentFlyer Contributors',
+            url: SITE_URL,
+            sameAs: ['https://github.com/tddt/AgentFlyer'],
+          },
+          {
+            '@type': 'SoftwareApplication',
+            name: 'AgentFlyer',
+            applicationCategory: 'DeveloperApplication',
+            operatingSystem: 'Linux, macOS, Windows',
+            softwareVersion: '1.2.x',
+            license: 'https://github.com/tddt/AgentFlyer/blob/main/LICENSE',
+            codeRepository: 'https://github.com/tddt/AgentFlyer',
+            url: SITE_URL,
+            description:
+              'AgentOS runtime for multi-agent orchestration, workflows, memory, deliverables, MCP, sandboxed execution, and multi-channel operations.',
+            offers: {
+              '@type': 'Offer',
+              price: '0',
+              priceCurrency: 'USD',
+            },
+          },
+          {
+            '@type': 'TechArticle',
+            headline: 'AgentFlyer Documentation',
+            description:
+              'Operator-first documentation for AgentFlyer covering architecture, workflows, memory, channels, deployment, and capability boundaries.',
+            inLanguage: ['en-US', 'zh-CN'],
+            mainEntityOfPage: `${SITE_URL}/project-facts`,
+            author: {
+              '@type': 'Organization',
+              name: 'AgentFlyer Contributors',
+            },
+            publisher: {
+              '@type': 'Organization',
+              name: 'AgentFlyer Contributors',
+            },
+          },
+        ],
+      }),
+    ],
     [
       'link',
       {

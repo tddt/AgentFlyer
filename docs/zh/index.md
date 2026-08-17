@@ -208,6 +208,37 @@ features:
   </section>
 
   <section class="marketing-panel">
+    <div class="marketing-panel-inner">
+      <p class="marketing-eyebrow">转化路径</p>
+      <h2 class="marketing-title">先判断谁该用、何时不用，再立即开始试用。</h2>
+      <div class="marketing-decisions">
+        <article class="marketing-decision-card">
+          <h3>谁适合用</h3>
+          <p>需要可持续 workflow、操作者可见性、审批感知工具执行、并希望多通道共享同一 runtime 的团队。</p>
+        </article>
+        <article class="marketing-decision-card">
+          <h3>何时不建议用</h3>
+          <p>如果只是单助手或一次性聊天任务，不需要工作流状态、控制面和策略边界，这套系统可能偏重。</p>
+        </article>
+      </div>
+      <div class="marketing-links">
+        <a class="marketing-link-card" href="/zh/audiences/developers">
+          <strong>按角色选择</strong>
+          <span>给开发者、运营团队、企业和插件作者的最短落地路径。</span>
+        </a>
+        <a class="marketing-link-card" href="/zh/project-facts">
+          <strong>项目事实</strong>
+          <span>在一页内快速核对定位、能力边界与评估清单。</span>
+        </a>
+        <a class="marketing-link-card" href="/zh/guide/getting-started">
+          <strong>立即试用</strong>
+          <span>先拉起一个 runtime，再用首个流程验证匹配度。</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <section class="marketing-panel">
     <div class="marketing-panel-inner marketing-cta">
       <div>
         <p class="marketing-eyebrow">快速启动</p>

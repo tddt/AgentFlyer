@@ -252,6 +252,33 @@ pnpm test
 - Use sandbox profiles and approvals to keep execution boundaries tighter than raw host access.
 - Grow toward cross-host collaboration as federation capabilities mature.
 
+## Quick Value Proof
+
+### Typical workflow shape
+
+- Intake → research → review → publish can run as repeatable workflows with deliverables and execution history.
+
+### Observable operations
+
+- Operators can inspect sessions, approvals, scheduler activity, and workflow status through one control plane.
+
+### Security and execution boundaries
+
+- External tools are integrated through MCP and bounded via approval policy + Docker-backed sandbox profiles.
+
+### Fit boundaries
+
+- Strong fit for teams that need coordination, memory, control, and durable outputs.
+- Weaker fit for single-assistant or disposable chat-only automation.
+
+### Role-based entry points
+
+- Developers: https://tddt.github.io/AgentFlyer/audiences/developers
+- Operators: https://tddt.github.io/AgentFlyer/audiences/operators
+- Enterprise: https://tddt.github.io/AgentFlyer/audiences/enterprise
+- Plugin authors: https://tddt.github.io/AgentFlyer/audiences/plugin-authors
+- Project facts: https://tddt.github.io/AgentFlyer/project-facts
+
 ## Why The Repo Is Interesting
 
 - It targets a bigger category than a single chat app.
