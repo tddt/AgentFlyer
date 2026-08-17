@@ -68,7 +68,10 @@ function buildWindowsCmdCommand(command: string): { file: string; args: string[]
   };
 }
 
-function buildWindowsCommand(command: string): { file: string; args: string[] } {
+function buildPowerShellCommand(
+  command: string,
+  file: string,
+): { file: string; args: string[] } {
   const script = [
     '[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)',
     '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
@@ -78,7 +81,7 @@ function buildWindowsCommand(command: string): { file: string; args: string[] } 
   ].join('\n');
   const encoded = Buffer.from(script, 'utf16le').toString('base64');
   return {
-    file: 'powershell.exe',
+    file,
     args: [
       '-NoLogo',
       '-NoProfile',
@@ -95,9 +98,16 @@ function buildWindowsCommand(command: string): { file: string; args: string[] } 
 
 function buildWindowsExecution(command: string): { file: string; args: string[] } {
   if (looksLikePowerShellCommand(command)) {
-    return buildWindowsCommand(command);
+    return buildPowerShellCommand(command, 'powershell.exe');
   }
   return buildWindowsCmdCommand(command);
+}
+
+function buildUnixExecution(command: string): { file: string; args: string[] } | undefined {
+  if (!looksLikePowerShellCommand(command)) {
+    return undefined;
+  }
+  return buildPowerShellCommand(command, 'pwsh');
 }
 
 export function createHostSandboxRuntime(options: HostSandboxRuntimeOptions = {}): SandboxRuntime {
@@ -139,7 +149,12 @@ export function createHostSandboxRuntime(options: HostSandboxRuntimeOptions = {}
                   return [win.file, win.args, execOptions] as const;
                 })(),
               )
-            : await execAsync(request.command, execOptions);
+            : (() => {
+                const unix = buildUnixExecution(request.command);
+                return unix
+                  ? execFileAsync(unix.file, unix.args, execOptions)
+                  : execAsync(request.command, execOptions);
+              })();
 
         stdout = stripPowerShellCliXml(decodeOutput(result.stdout));
         stderr = stripPowerShellCliXml(decodeOutput(result.stderr));
