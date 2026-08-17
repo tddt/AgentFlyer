@@ -354,6 +354,10 @@ function humanizeSegment(segment: string): string {
     .join(' ');
 }
 
+function isLocalizedHomeRoute(route: string): boolean {
+  return route === '/' || route === '/zh';
+}
+
 function buildBreadcrumbs(route: string, locale: Locale): Array<{ name: string; item: string }> {
   const rootRoute = locale === 'zh' ? '/zh' : '/';
   const rootLabel = locale === 'zh' ? 'AgentFlyer 文档' : 'AgentFlyer Docs';
@@ -431,7 +435,7 @@ function buildStructuredData(route: string, locale: Locale, entry: PageSeoEntry)
       description: DEFAULT_DESCRIPTION,
     },
     {
-      '@type': route === '/' || route === '/zh' ? 'WebPage' : 'TechArticle',
+      '@type': isLocalizedHomeRoute(route) ? 'WebPage' : 'TechArticle',
       headline: entry.title,
       name: entry.title,
       description: entry.description,
@@ -690,7 +694,7 @@ export default defineConfig({
     const chineseRoute = buildLocalizedRoute(relativePath, 'zh');
     const canonicalUrl = toAbsoluteUrl(canonicalRoute);
     const entry = resolveSeoEntry(canonicalRoute, currentLocale, pageData.title);
-    const ogType = canonicalRoute === '/' || canonicalRoute === '/zh' ? 'website' : 'article';
+    const ogType = isLocalizedHomeRoute(canonicalRoute) ? 'website' : 'article';
 
     return [
       ['meta', { name: 'description', content: entry.description }],
