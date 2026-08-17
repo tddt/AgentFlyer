@@ -17,6 +17,7 @@ Chinese documentation:
 - https://tddt.github.io/AgentFlyer/zh/use-cases
 - https://tddt.github.io/AgentFlyer/zh/comparison
 - https://tddt.github.io/AgentFlyer/zh/roadmap
+- https://tddt.github.io/AgentFlyer/zh/guide/architecture
 
 Important capability boundary:
 - Federation modules exist and are actively expanding; practical multi-host operation is not presented as complete.

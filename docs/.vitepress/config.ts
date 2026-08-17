@@ -16,7 +16,11 @@ function normalizeRoute(path: string): string {
 }
 
 function buildLocalizedRoute(relativePath: string, locale: 'en' | 'zh'): string {
-  const contentPath = relativePath.startsWith('zh/') ? relativePath.slice(3) : relativePath;
+  // RATIONALE: VitePress uses `zh/index.md` for the Chinese root page, which normalizes to `zh`.
+  // We map that sentinel route to zh root for canonical/hreflang generation.
+  // RATIONALE: `zh/*` is a reserved locale namespace in this docs tree.
+  const contentPath =
+    relativePath === 'zh' ? '' : relativePath.startsWith('zh/') ? relativePath.slice(3) : relativePath;
 
   if (locale === 'zh') {
     return normalizeRoute(contentPath.length > 0 ? `zh/${contentPath}` : 'zh');
@@ -226,7 +230,7 @@ export default defineConfig({
       .replace(/\.md$/, '')
       .replace(/\/index$/, '')
       .replace(/^index$/, '');
-    const isZhPage = relativePath.startsWith('zh/');
+    const isZhPage = relativePath === 'zh' || relativePath.startsWith('zh/');
 
     const currentLocale = isZhPage ? 'zh' : 'en';
     const canonicalRoute = buildLocalizedRoute(relativePath, currentLocale);
@@ -264,7 +268,7 @@ export default defineConfig({
     ['meta', { name: 'twitter:title', content: 'AgentFlyer' }],
     ['meta', { name: 'twitter:description', content: 'A practical AgentOS runtime for multi-agent orchestration, operator workflows, and controlled tool execution.' }],
     ['meta', { name: 'twitter:image', content: SOCIAL_IMAGE }],
-    ['link', { rel: 'icon', href: '/favicon.ico' }],
+    ['link', { rel: 'icon', href: `${SITE_BASE_PATH}/favicon.ico` }],
     ['link', { rel: 'preconnect', href: 'https://fonts.googleapis.com' }],
     ['link', { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: '' }],
     [
@@ -284,7 +288,6 @@ export default defineConfig({
             name: 'AgentFlyer',
             applicationCategory: 'DeveloperApplication',
             operatingSystem: 'Linux, macOS, Windows',
-            softwareVersion: '1.2.x',
             license: 'https://github.com/tddt/AgentFlyer/blob/main/LICENSE',
             codeRepository: 'https://github.com/tddt/AgentFlyer',
             url: SITE_URL,
@@ -302,7 +305,6 @@ export default defineConfig({
             description:
               'Operator-first documentation for AgentFlyer covering architecture, workflows, memory, channels, deployment, and capability boundaries.',
             inLanguage: ['en-US', 'zh-CN'],
-            mainEntityOfPage: `${SITE_URL}/project-facts`,
             author: {
               '@type': 'Organization',
               name: 'AgentFlyer Contributors',
