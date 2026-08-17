@@ -68,10 +68,7 @@ function buildWindowsCmdCommand(command: string): { file: string; args: string[]
   };
 }
 
-function buildPowerShellCommand(
-  command: string,
-  file: string,
-): { file: string; args: string[] } {
+function buildPowerShellCommand(command: string, file: string): { file: string; args: string[] } {
   const script = [
     '[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)',
     '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
@@ -149,7 +146,7 @@ export function createHostSandboxRuntime(options: HostSandboxRuntimeOptions = {}
                   return [win.file, win.args, execOptions] as const;
                 })(),
               )
-            : (() => {
+            : await (() => {
                 const unix = buildUnixExecution(request.command);
                 return unix
                   ? execFileAsync(unix.file, unix.args, execOptions)
