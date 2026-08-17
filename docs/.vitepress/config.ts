@@ -294,7 +294,6 @@ const SEGMENT_LABELS: Readonly<Record<string, Readonly<Record<Locale, string>>>>
   guide: { en: 'Guide', zh: '指南' },
   api: { en: 'API Reference', zh: 'API 参考' },
   plugins: { en: 'Plugins', zh: '插件' },
-  zh: { en: 'Chinese', zh: '中文' },
 };
 
 function normalizeRoute(path: string): string {
@@ -350,7 +349,7 @@ function humanizeSegment(segment: string): string {
   return segment
     .split('-')
     .filter((part) => part.length > 0)
-    .map((part) => part[0].toUpperCase() + part.slice(1))
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ');
 }
 
