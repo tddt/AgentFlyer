@@ -156,19 +156,19 @@ function getThemeConfig(locale: 'en' | 'zh') {
           items: [
             { text: 'Overview', link: `${pluginsPrefix}/overview` },
             { text: 'Publishing Packages', link: `${pluginsPrefix}/writing` },
-            { text: 'Marketplace', link: `${pluginsPrefix}/marketplace`             },
+            { text: 'Marketplace', link: `${pluginsPrefix}/marketplace` },
           ],
-          '/growth/': [
-            {
-              text: 'Growth',
-              items: [
-                { text: '30-Day Launch Playbook', link: `${growthPrefix}/launch-playbook` },
-                { text: 'Intro Post Template', link: `${growthPrefix}/intro-post-template` },
-                { text: 'Channel Post Templates', link: `${growthPrefix}/channel-post-templates` },
-                { text: 'Analytics Baseline', link: `${growthPrefix}/analytics-baseline` },
-                { text: 'Weekly Retro Template', link: `${growthPrefix}/weekly-retro-template` },
-              ],
-            },
+        },
+      ],
+      '/growth/': [
+        {
+          text: 'Growth',
+          items: [
+            { text: '30-Day Launch Playbook', link: `${growthPrefix}/launch-playbook` },
+            { text: 'Intro Post Template', link: `${growthPrefix}/intro-post-template` },
+            { text: 'Channel Post Templates', link: `${growthPrefix}/channel-post-templates` },
+            { text: 'Analytics Baseline', link: `${growthPrefix}/analytics-baseline` },
+            { text: 'Weekly Retro Template', link: `${growthPrefix}/weekly-retro-template` },
           ],
         },
       ],
