@@ -77,7 +77,27 @@ class FakeRecoverableBlockedProvider implements LLMProvider {
   }
 }
 
-function createRunner(dataDir: string, agentId = 'agent-main'): AgentRunner {
+class HangingProvider implements LLMProvider {
+  readonly id = 'fake-hanging';
+
+  async *run(_params: RunParams): AsyncIterable<StreamChunk> {
+    await new Promise<void>(() => undefined);
+  }
+
+  async countTokens(): Promise<number> {
+    return 0;
+  }
+
+  supports(): boolean {
+    return true;
+  }
+}
+
+function createRunner(
+  dataDir: string,
+  agentId = 'agent-main',
+  provider: LLMProvider = new FakeProvider(),
+): AgentRunner {
   return new AgentRunner(
     {
       id: agentId,
@@ -98,7 +118,7 @@ function createRunner(dataDir: string, agentId = 'agent-main'): AgentRunner {
       persona: { language: 'zh-CN', outputDir: 'output' },
     },
     {
-      provider: new FakeProvider(),
+      provider,
       toolRegistry: new ToolRegistry(),
       sessionStore: new SessionStore(join(dataDir, 'sessions')),
       metaStore: new SessionMetaStore(join(dataDir, 'sessions')),
@@ -186,6 +206,33 @@ describe('createMeshTools persistence', () => {
     expect(entry?.status).toBe('error');
     expect(entry?.error).toContain('gateway restart');
     expect(typeof entry?.doneAt).toBe('number');
+  });
+
+  it('aborts an expired spawned task and releases its agent runner', async () => {
+    const dataDir = await createTempDir();
+    const hangingRunner = createRunner(dataDir, 'agent-main', new HangingProvider());
+    const runners = new Map([['agent-main', hangingRunner]]);
+    const spawn = await getToolHandler('mesh_spawn', dataDir, runners);
+    const status = await getToolHandler('mesh_status', dataDir, runners);
+
+    const spawned = await spawn({ agent_id: 'agent-main', message: 'never returns', timeout_s: 0.01 });
+    const taskId = /ID: (.+)\n/u.exec(spawned.content)?.[1];
+    expect(taskId).toBeTruthy();
+
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if (!hangingRunner.isRunning) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    expect(hangingRunner.isRunning).toBe(false);
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const current = await status({ task_id: taskId });
+      if (current.content.includes('Status: error')) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    const current = await status({ task_id: taskId });
+    expect(current.content).toContain('Status: error');
   });
 
   it('surfaces suspended mesh tasks with runId and resumes them', async () => {

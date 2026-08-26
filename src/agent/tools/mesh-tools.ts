@@ -43,6 +43,7 @@ async function runMeshTurn(options: {
   const turnPromise = executeAgentTurnViaKernel({
     runners: new Map([[options.agentId, options.runner]]),
     dataDir: options.dataDir,
+    timeoutMs: options.timeoutMs,
     input: {
       agentId: options.agentId,
       userMessage: options.message,
@@ -50,7 +51,7 @@ async function runMeshTurn(options: {
     },
   }).then((result) => result.text || '(no output)');
 
-  return await withTimeout(turnPromise, options.timeoutMs, options.label);
+  return await turnPromise;
 }
 
 /**
@@ -286,6 +287,15 @@ export function createMeshTools(
         }
       } catch (err) {
         const durationMs = Date.now() - startedAt;
+        const errorMessage = String(err);
+        if (/timed out after \d+s/u.test(errorMessage)) {
+          await abortAgentTurnViaKernel({
+            runners: new Map([[agentId, runner]]),
+            dataDir,
+            runId,
+            message: `Mesh task '${taskId}' timed out after ${Math.round(timeoutMs / 1000)}s.`,
+          });
+        }
         const current = await getAgentTurnRunViaKernel({
           runners: new Map([[agentId, runner]]),
           dataDir,
@@ -579,6 +589,15 @@ export function createMeshTools(
             error: `Task timed out after ${Math.round(elapsed / 1000)}s (limit: ${Math.round(entry.timeoutMs / 1000)}s). The agent may still be processing in the background.`,
             doneAt: Date.now(),
           });
+          const runner = runners.get(entry.agentId);
+          if (runner && entry.runId) {
+            await abortAgentTurnViaKernel({
+              runners: new Map([[entry.agentId, runner]]),
+              dataDir,
+              runId: entry.runId,
+              message: `Mesh task '${task_id}' timed out after ${Math.round(entry.timeoutMs / 1000)}s.`,
+            });
+          }
           logger.warn('mesh_status: auto-expired stuck task', { task_id, elapsed });
         }
       }
