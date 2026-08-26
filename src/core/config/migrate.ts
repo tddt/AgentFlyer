@@ -216,7 +216,7 @@ export function migrateFromOpenclaw(openclawPath: string): Config {
     tools: {
       deny: a.toolPolicy?.denylist ?? [],
       approval: a.toolPolicy?.requireApproval ?? ['bash'],
-      maxRounds: 60,
+      maxRounds: 240,
     },
     persona: { language: 'zh-CN', outputDir: 'output' },
   }));
@@ -234,7 +234,7 @@ export function migrateFromOpenclaw(openclawPath: string): Config {
         triggers: [],
       },
       owners: [],
-      tools: { deny: [], approval: ['bash'], maxRounds: 60 },
+      tools: { deny: [], approval: ['bash'], maxRounds: 240 },
       persona: { language: 'zh-CN', outputDir: 'output' },
     });
   }

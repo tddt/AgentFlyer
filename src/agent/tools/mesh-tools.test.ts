@@ -215,7 +215,11 @@ describe('createMeshTools persistence', () => {
     const spawn = await getToolHandler('mesh_spawn', dataDir, runners);
     const status = await getToolHandler('mesh_status', dataDir, runners);
 
-    const spawned = await spawn({ agent_id: 'agent-main', message: 'never returns', timeout_s: 0.01 });
+    const spawned = await spawn({
+      agent_id: 'agent-main',
+      message: 'never returns',
+      timeout_s: 0.01,
+    });
     const taskId = /ID: (.+)\n/u.exec(spawned.content)?.[1];
     expect(taskId).toBeTruthy();
 

@@ -11,7 +11,7 @@ const AuthSchema = z.object({
 
 const WorkflowGatewaySchema = z.object({
   /** Timeout budget for one delegated workflow agent step. */
-  agentStepTimeoutMs: z.number().int().positive().default(300_000),
+  agentStepTimeoutMs: z.number().int().positive().default(30 * 60_000),
 });
 
 const GatewaySchema = z.object({
@@ -121,7 +121,7 @@ const ToolsConfigSchema = z.object({
   /** Tools that require interactive user approval before execution. */
   approval: z.array(z.string()).default(['bash']),
   /** Safety cap for the number of tool-invoking rounds in a single turn. */
-  maxRounds: z.number().int().positive().default(60),
+  maxRounds: z.number().int().positive().default(240),
   /** Optional sandbox profile override for execution tools such as bash. */
   sandboxProfile: z.string().optional(),
 });

@@ -94,6 +94,40 @@ class RecoverableThinkingSocketCloseProvider implements LLMProvider {
   }
 }
 
+class LongRunningToolProvider implements LLMProvider {
+  readonly id = 'long-running-tool';
+  private round = 0;
+
+  constructor(private readonly toolRounds: number) {}
+
+  async *run(_params: RunParams): AsyncIterable<StreamChunk> {
+    this.round += 1;
+    if (this.round > this.toolRounds) {
+      yield { type: 'text_delta', text: 'long task complete' };
+      yield { type: 'done', inputTokens: 1, outputTokens: 1, stopReason: 'end_turn' };
+      return;
+    }
+
+    const id = `tool-${this.round}`;
+    yield { type: 'tool_use_start', id, name: 'progress_step' };
+    yield {
+      type: 'tool_use_delta',
+      id,
+      name: 'progress_step',
+      inputJson: JSON.stringify({ step: this.round }),
+    };
+    yield { type: 'done', inputTokens: 1, outputTokens: 1, stopReason: 'tool_use' };
+  }
+
+  async countTokens(): Promise<number> {
+    return 0;
+  }
+
+  supports(): boolean {
+    return true;
+  }
+}
+
 function createRunner(dataDir: string, provider: LLMProvider): AgentRunner {
   return new AgentRunner(
     {
@@ -147,6 +181,55 @@ describe('AgentRunner recoverable stream retry', () => {
     expect(provider.getAttemptCount()).toBe(2);
     expect(result.text).toContain('socket retry success');
     expect(result.text).not.toContain('任务执行失败');
+  });
+
+  it('allows a progressing task to complete beyond 60 tool rounds', async () => {
+    const dataDir = await createTempDir();
+    const provider = new LongRunningToolProvider(61);
+    const registry = new ToolRegistry();
+    registry.register({
+      category: 'builtin',
+      definition: {
+        name: 'progress_step',
+        description: 'record one completed task step',
+        inputSchema: { type: 'object', properties: { step: { type: 'number' } } },
+      },
+      async handler(input) {
+        return { isError: false, content: `completed ${(input as { step: number }).step}` };
+      },
+    });
+    const runner = new AgentRunner(
+      {
+        id: 'agent-main',
+        name: 'Agent Main',
+        mentionAliases: [],
+        workspace: dataDir,
+        skills: [],
+        model: 'fake-model',
+        mesh: {
+          role: 'worker',
+          capabilities: [],
+          accepts: ['task', 'query', 'notification'],
+          visibility: 'public',
+          triggers: [],
+        },
+        owners: [],
+        tools: { allow: [], deny: [], approval: [], maxRounds: 240 },
+        persona: { language: 'zh-CN', outputDir: 'output' },
+      },
+      {
+        provider,
+        toolRegistry: registry,
+        sessionStore: new SessionStore(join(dataDir, 'sessions')),
+        metaStore: new SessionMetaStore(join(dataDir, 'sessions')),
+        skillsText: '',
+      },
+    );
+
+    const result = await runner.runTurn('complete all planned steps');
+
+    expect(result.text).toContain('long task complete');
+    expect(result.text).not.toContain('工具调用轮次已达到上限');
   });
 
   it('does not reuse a task-scoped system prompt for a later turn without taskContext', async () => {

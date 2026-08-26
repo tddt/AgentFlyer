@@ -24,7 +24,7 @@ import {
 } from './workflow-process-runtime.js';
 
 const logger = createLogger('gateway:workflow-kernel');
-const DEFAULT_WORKFLOW_AGENT_STEP_TIMEOUT_MS = 300_000;
+const DEFAULT_WORKFLOW_AGENT_STEP_TIMEOUT_MS = 30 * 60_000;
 
 /** Structured event pushed over the SSE stream for a running workflow step. */
 export type RunStreamEvent =

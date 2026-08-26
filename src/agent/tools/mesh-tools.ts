@@ -22,9 +22,9 @@ import type { RegisteredTool } from './registry.js';
 const logger = createLogger('tools:mesh');
 
 // RATIONALE: default per-turn timeout caps how long a caller blocks waiting for
-// a remote agent turn. 5 min is generous for agentic tasks; callers may pass
+// a remote agent turn. 30 min accommodates multi-step agentic tasks; callers may pass
 // timeout_s to mesh_send/mesh_spawn to override.
-const DEFAULT_TASK_TIMEOUT_MS = 5 * 60 * 1_000; // 5 minutes
+const DEFAULT_TASK_TIMEOUT_MS = 30 * 60 * 1_000; // 30 minutes
 
 // RATIONALE: cap concurrent background tasks per target agent to prevent a single
 // coordinator from queuing an unbounded workload on one worker. Callers that need

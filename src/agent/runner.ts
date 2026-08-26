@@ -1439,7 +1439,7 @@ export class AgentRunner {
   ): Promise<KernelTurnStepResult> {
     const { sessionStore } = this.deps;
     const chunks: StreamChunk[] = [];
-    const maxToolRounds = this.config.tools.maxRounds ?? 60;
+    const maxToolRounds = this.config.tools.maxRounds ?? 240;
     const pendingToolCalls = state.pendingToolCalls ?? [];
     if (pendingToolCalls.length === 0) {
       throw new Error(
