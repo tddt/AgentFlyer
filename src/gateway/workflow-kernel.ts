@@ -65,6 +65,8 @@ export interface WorkflowKernelServiceOptions {
   runners: Map<string, AgentRunner>;
   callbacks: WorkflowKernelCallbacks;
   workflowAgentStepTimeoutMs?: number;
+  /** Reuse the gateway queue so workflow and foreground turns share agent serialization. */
+  agentQueues?: AgentQueueRegistry;
 }
 
 function cloneStepResults(stepResults: WorkflowStepResult[]): WorkflowStepResult[] {
@@ -96,7 +98,7 @@ export class WorkflowKernelService {
   private readonly runtime: WorkflowProcessRuntime;
   private readonly callbacks: WorkflowKernelCallbacks;
   private readonly liveRunners: Map<string, AgentRunner>;
-  private readonly workflowAgentQueues = new AgentQueueRegistry();
+  private readonly workflowAgentQueues: AgentQueueRegistry;
   private readonly cancelRequested = new Set<string>();
   private readonly forcedRunStates = new Map<string, WorkflowRunRecord>();
   private readonly runnerSnapshots = new Map<string, Map<string, AgentRunner>>();
@@ -113,6 +115,7 @@ export class WorkflowKernelService {
   constructor(options: WorkflowKernelServiceOptions) {
     this.callbacks = options.callbacks;
     this.liveRunners = options.runners;
+    this.workflowAgentQueues = options.agentQueues ?? new AgentQueueRegistry();
     const workflowAgentStepTimeoutMs =
       options.workflowAgentStepTimeoutMs ?? DEFAULT_WORKFLOW_AGENT_STEP_TIMEOUT_MS;
     const service = this;

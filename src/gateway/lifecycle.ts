@@ -103,6 +103,7 @@ export const GATEWAY_VERSION: string = _gw_pkg.version;
 
 export interface GatewayState {
   runners: Map<string, AgentRunner>;
+  agentQueues: AgentQueueRegistry;
   config: Config;
   startedAt: number;
   authToken: string;
@@ -423,7 +424,9 @@ function buildRunner(
   }
   // RATIONALE: Both runners and agentConfigs are passed by reference/value respectively.
   // The runners Map is fully populated before any tool is invoked at runtime.
-  tools.registerMany(createMeshTools(state.runners, state.dataDir, state.config.agents));
+  tools.registerMany(
+    createMeshTools(state.runners, state.dataDir, state.config.agents, state.agentQueues),
+  );
   // Scheduler tools share the same CronScheduler singleton across all agents.
   tools.registerMany(createSchedulerTools(state.runners, state.scheduler, state.dataDir));
   // Channel tools — let the agent send text/files to any registered channel.
@@ -544,6 +547,7 @@ export async function startGateway(
   const authToken = config.gateway.auth.token ?? process.env.AGENTFLYER_TOKEN ?? generateToken();
 
   const runners = new Map<string, AgentRunner>();
+  const agentQueues = new AgentQueueRegistry();
   const scheduler = new CronScheduler();
   const mcpReconnectPolicy = resolveGatewayMcpReconnectPolicy(config);
   const mcpHistoryRecorder = createMcpHistoryRecorder(dataDir);
@@ -554,6 +558,7 @@ export async function startGateway(
   });
   const state: GatewayState = {
     runners,
+    agentQueues,
     config,
     startedAt: Date.now(),
     authToken,
@@ -852,7 +857,7 @@ export async function startGateway(
 
   const rpcContext: RpcContext = {
     runners,
-    agentQueues: undefined,
+    agentQueues: state.agentQueues,
     gatewayVersion: GATEWAY_VERSION,
     startedAt: state.startedAt,
     dataDir,
@@ -890,9 +895,6 @@ export async function startGateway(
 
   // RATIONALE: A single queue registry ensures concurrent messages for the same
   // agent are processed in FIFO order — prevents shared-runner thread/lease races.
-  const agentQueues = new AgentQueueRegistry();
-  rpcContext.agentQueues = agentQueues;
-
   // RATIONALE: one rate limiter shared across all channels so a sender cannot
   // circumvent limits by alternating between Telegram and Discord (same identity
   // key is used — username / userId / senderId per channel).

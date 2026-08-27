@@ -5,10 +5,11 @@ import { ulid } from 'ulid';
 import type { AgentConfig } from '../../core/config/schema.js';
 import { createLogger } from '../../core/logger.js';
 import { asAgentId } from '../../core/types.js';
+import type { AgentQueueRegistry } from '../../gateway/agent-queue.js';
 import { getGlobalBus } from '../../mesh/bus.js';
 import { buildEnvelope } from '../../mesh/protocol.js';
 import {
-  abortAgentTurnViaKernel,
+  cancelAgentTurnViaKernel,
   executeAgentTurnViaKernel,
   getAgentTurnRunViaKernel,
   resumeAgentTurnViaKernel,
@@ -17,9 +18,9 @@ import {
 } from '../kernel-turn-executor.js';
 import type { AgentRunner } from '../runner.js';
 import {
+  type TaskRunState,
   createTaskRunState,
   transitionTaskRun,
-  type TaskRunState,
 } from '../task/task-run-state.js';
 import { isSuspendedAgentTurnRun } from '../turn-run-state.js';
 import type { RegisteredTool } from './registry.js';
@@ -44,19 +45,22 @@ async function runMeshTurn(options: {
   dataDir: string;
   timeoutMs: number;
   label: string;
+  agentQueues?: AgentQueueRegistry;
 }): Promise<string> {
-  const turnPromise = executeAgentTurnViaKernel({
-    runners: new Map([[options.agentId, options.runner]]),
-    dataDir: options.dataDir,
-    timeoutMs: options.timeoutMs,
-    input: {
-      agentId: options.agentId,
-      userMessage: options.message,
-      threadKey: options.threadKey,
-    },
-  }).then((result) => result.text || '(no output)');
-
-  return await turnPromise;
+  const execute = async (): Promise<string> => {
+    const result = await executeAgentTurnViaKernel({
+      runners: new Map([[options.agentId, options.runner]]),
+      dataDir: options.dataDir,
+      timeoutMs: options.timeoutMs,
+      input: {
+        agentId: options.agentId,
+        userMessage: options.message,
+        threadKey: options.threadKey,
+      },
+    });
+    return result.text || '(no output)';
+  };
+  return await (options.agentQueues?.for(options.agentId).enqueue(execute) ?? execute());
 }
 
 /**
@@ -232,6 +236,7 @@ export function createMeshTools(
   runners: Map<string, AgentRunner>,
   dataDir: string,
   agentConfigs: AgentConfig[] = [],
+  agentQueues?: AgentQueueRegistry,
 ): RegisteredTool[] {
   let store = sharedTaskStores.get(dataDir);
   if (!store) {
@@ -298,7 +303,7 @@ export function createMeshTools(
         const durationMs = Date.now() - startedAt;
         const errorMessage = String(err);
         if (/timed out after \d+s/u.test(errorMessage)) {
-          await abortAgentTurnViaKernel({
+          await cancelAgentTurnViaKernel({
             runners: new Map([[agentId, runner]]),
             dataDir,
             runId,
@@ -458,6 +463,7 @@ export function createMeshTools(
           dataDir,
           timeoutMs,
           label: `mesh_send to ${agent_id}`,
+          agentQueues,
         });
         logger.info('mesh_send: task complete', { agent_id });
         return { isError: false, content: output || '(agent returned no output)' };
@@ -628,7 +634,7 @@ export function createMeshTools(
           });
           const runner = runners.get(entry.agentId);
           if (runner && entry.runId) {
-            await abortAgentTurnViaKernel({
+            await cancelAgentTurnViaKernel({
               runners: new Map([[entry.agentId, runner]]),
               dataDir,
               runId: entry.runId,
@@ -715,12 +721,56 @@ export function createMeshTools(
           dataDir,
           runId: entry.runId,
         });
+        if (!resumed) {
+          return {
+            isError: true,
+            content: `Task '${task_id}' run '${entry.runId}' is no longer available.`,
+          };
+        }
+        if (resumed.processStatus === 'done') {
+          taskStore.update(task_id, {
+            status: 'done',
+            result: resumed.result?.text || '(no output)',
+            error: undefined,
+            doneAt: Date.now(),
+            taskState: entry.taskState
+              ? transitionTaskRun(entry.taskState, { action: 'complete' }, Date.now())
+              : undefined,
+          });
+          return {
+            isError: false,
+            content: `Task '${task_id}' was already complete. Run ID: ${resumed.runId}`,
+          };
+        }
+        if (resumed.processStatus === 'error') {
+          const errorMessage = resumed.error?.message ?? 'The agent turn failed.';
+          taskStore.update(task_id, {
+            status: 'error',
+            error: errorMessage,
+            doneAt: Date.now(),
+            taskState: entry.taskState
+              ? transitionTaskRun(
+                  entry.taskState,
+                  { action: 'fail', reason: errorMessage },
+                  Date.now(),
+                )
+              : undefined,
+          });
+          return {
+            isError: true,
+            content: `Task '${task_id}' cannot be resumed: ${errorMessage}`,
+          };
+        }
         taskStore.update(task_id, {
           status: 'running',
           error: undefined,
           doneAt: undefined,
           taskState: entry.taskState
-            ? transitionTaskRun(entry.taskState, { action: 'start', runId: entry.runId }, Date.now())
+            ? transitionTaskRun(
+                entry.taskState,
+                { action: 'start', runId: entry.runId },
+                Date.now(),
+              )
             : undefined,
         });
         watchTaskRun(task_id, entry.agentId, entry.timeoutMs);
@@ -811,6 +861,7 @@ export function createMeshTools(
             dataDir,
             timeoutMs: DEFAULT_TASK_TIMEOUT_MS,
             label: `mesh_broadcast to ${agentId}`,
+            agentQueues,
           });
           return { agentId, ok: true, output };
         } catch (err) {
@@ -919,6 +970,7 @@ export function createMeshTools(
               dataDir,
               timeoutMs: DEFAULT_TASK_TIMEOUT_MS,
               label: `mesh_discuss turn for ${agentId}`,
+              agentQueues,
             });
             const cfg = configMap.get(agentId);
             const displayName = cfg?.name ?? agentId;
@@ -971,6 +1023,7 @@ export function createMeshTools(
       };
 
       const parts: string[] = [];
+      let shouldMarkCancelled = true;
 
       // Cancel the task record
       const entry = taskStore.get(task_id);
@@ -982,21 +1035,29 @@ export function createMeshTools(
         if (entry.runId) {
           const runner = runners.get(entry.agentId);
           if (runner) {
-            await abortAgentTurnViaKernel({
+            const cancellation = await cancelAgentTurnViaKernel({
               runners: new Map([[entry.agentId, runner]]),
               dataDir,
               runId: entry.runId,
               message: `Mesh task '${task_id}' was cancelled.`,
-            }).catch(() => undefined);
+            }).catch(() => null);
+            if (cancellation && !cancellation.cancelled) {
+              parts.push(
+                `Task '${task_id}' was not cancelled: ${cancellation.reason ?? 'run is already terminal.'}`,
+              );
+              shouldMarkCancelled = false;
+            }
           }
         }
-        taskStore.update(task_id, {
-          status: 'cancelled',
-          error: undefined,
-          doneAt: Date.now(),
-        });
-        logger.info('mesh_cancel: task cancelled', { task_id });
-        parts.push(`Task '${task_id}' cancelled.`);
+        if (shouldMarkCancelled) {
+          taskStore.update(task_id, {
+            status: 'cancelled',
+            error: undefined,
+            doneAt: Date.now(),
+          });
+          logger.info('mesh_cancel: task cancelled', { task_id });
+          parts.push(`Task '${task_id}' cancelled.`);
+        }
       }
 
       // Optionally force-reset a stuck runner
@@ -1115,6 +1176,7 @@ export function createMeshTools(
             dataDir,
             timeoutMs,
             label: `mesh_plan task for ${agentId}`,
+            agentQueues,
           });
           return { agentId, instruction, ok: true, output };
         } catch (err) {

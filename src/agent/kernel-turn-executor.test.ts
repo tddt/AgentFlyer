@@ -6,6 +6,7 @@ import { SessionMetaStore } from '../core/session/meta.js';
 import { SessionStore } from '../core/session/store.js';
 import type { StreamChunk } from '../core/types.js';
 import {
+  cancelAgentTurnViaKernel,
   executeAgentTurnViaKernel,
   getAgentTurnRunViaKernel,
   resumeAgentTurnViaKernel,
@@ -158,6 +159,48 @@ async function waitForRunPhase(
 }
 
 describe('executeAgentTurnViaKernel', () => {
+  it('returns null when cancelling an unknown run', async () => {
+    const dataDir = await createTempDir();
+
+    await expect(
+      cancelAgentTurnViaKernel({
+        runners: new Map(),
+        dataDir,
+        runId: 'missing-run',
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it('returns a noop result when cancelling a completed run', async () => {
+    const dataDir = await createTempDir();
+    const runner = createRunner(dataDir);
+    const runners = new Map([['agent-main', runner]]);
+    const started = await startAgentTurnViaKernel({
+      runners,
+      dataDir,
+      input: {
+        agentId: 'agent-main',
+        userMessage: 'complete before cancellation',
+        threadKey: 'executor-cancel-terminal',
+      },
+    });
+    await waitForRunPhase(dataDir, runners, started.runId, 'done');
+
+    const cancelled = await cancelAgentTurnViaKernel({
+      runners,
+      dataDir,
+      runId: started.runId,
+      message: 'cancel after completion',
+    });
+
+    expect(cancelled).toMatchObject({
+      cancelled: false,
+      runId: started.runId,
+      mode: 'noop',
+      reason: 'Run is already terminal.',
+    });
+  });
+
   it('runs a single agent turn through the kernel helper', async () => {
     const dataDir = await createTempDir();
     const runner = createRunner(dataDir);

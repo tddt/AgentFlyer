@@ -7,6 +7,10 @@ import {
   AgentTurnProcessRuntime,
   type AgentTurnProcessState,
 } from '../agent/process-runtime.js';
+import type {
+  AgentRunRecord,
+  AgentCancelRunResult as SharedAgentCancelRunResult,
+} from '../agent/run-control-contract.js';
 import type { RunnerOptions, TurnResult } from '../agent/runner.js';
 import type { AgentRunner } from '../agent/runner.js';
 import type { TaskRunState } from '../agent/task/task-run-state.js';
@@ -77,20 +81,7 @@ export interface AgentKernelTurnInput {
   taskState?: TaskRunState;
 }
 
-export interface AgentKernelRunRecord {
-  runId: string;
-  agentId: string;
-  threadKey: string;
-  processStatus: ProcessStatus;
-  phase: AgentTurnProcessState['phase'];
-  controlState?: import('../agent/turn-run-state.js').AgentTurnControlState;
-  createdAt: number;
-  updatedAt: number;
-  result?: TurnResult;
-  sessionKey?: string;
-  taskState?: TaskRunState;
-  error?: AgentTurnProcessState['error'];
-}
+export type AgentKernelRunRecord = AgentRunRecord;
 
 export interface AgentActiveRunSummary {
   runId: string;
@@ -114,13 +105,9 @@ export interface AgentQueuedRunSummary {
   updatedAt: number;
 }
 
-export interface AgentCancelRunResult {
-  cancelled: boolean;
-  runId: string;
-  mode: 'queued' | 'ready' | 'active' | 'noop';
+export type AgentCancelRunResult = Omit<SharedAgentCancelRunResult, 'run'> & {
   run?: AgentKernelRunRecord | null;
-  reason?: string;
-}
+};
 
 type CompletionOutcome = { ok: true; result: TurnResult } | { ok: false; message: string };
 

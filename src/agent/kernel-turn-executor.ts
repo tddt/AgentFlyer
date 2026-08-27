@@ -6,7 +6,6 @@ import {
   type KernelProcessSnapshot,
   ScopedCheckpointStore,
 } from '../core/kernel/index.js';
-import type { ProcessStatus } from '../core/kernel/types.js';
 import type { StreamChunk } from '../core/types.js';
 import { asProcessId } from '../core/types.js';
 import { drainWaitingAgentSyscalls } from './kernel-syscall-broker.js';
@@ -15,10 +14,10 @@ import {
   AgentTurnProcessRuntime,
   type AgentTurnProcessState,
 } from './process-runtime.js';
+import type { AgentCancelRunResult, AgentRunRecord } from './run-control-contract.js';
 import type { AgentRunner } from './runner.js';
 import type { TurnResult } from './runner.js';
 import {
-  type AgentTurnControlState,
   deriveAgentTurnRunRecord,
   getAgentTurnCompletionOutcome,
   isSuspendedAgentTurnRun,
@@ -62,20 +61,7 @@ export interface AgentTurnKernelControlOptions {
   dataDir?: string;
 }
 
-export interface AgentTurnKernelRunRecord {
-  runId: string;
-  agentId: string;
-  threadKey: string;
-  processStatus: ProcessStatus;
-  phase: AgentTurnProcessState['phase'];
-  controlState?: AgentTurnControlState;
-  createdAt: number;
-  updatedAt: number;
-  result?: TurnResult;
-  sessionKey?: string;
-  taskState?: AgentTurnProcessState['taskState'];
-  error?: AgentTurnProcessState['error'];
-}
+export type AgentTurnKernelRunRecord = AgentRunRecord;
 
 function resolveRunner(runners: AgentRunnerResolver, agentId: string): AgentRunner | undefined {
   return runners instanceof Map ? runners.get(agentId) : runners(agentId);
@@ -221,6 +207,40 @@ class AgentKernelTurnExecutor {
     const resumed = await this.kernel.resumeProcess(pid);
     this.schedulePump(0);
     return this.snapshotToRunRecord(resumed);
+  }
+
+  async cancelRun(runId: string, activeMessage?: string): Promise<AgentCancelRunResult | null> {
+    await this.initialize();
+    const current = this.getRun(runId);
+    if (!current) {
+      return null;
+    }
+    const controlState = current.controlState ?? 'active';
+    if (controlState === 'done' || controlState === 'error' || current.phase === 'done') {
+      return {
+        cancelled: false,
+        runId,
+        mode: 'noop',
+        run: current,
+        reason: 'Run is already terminal.',
+      };
+    }
+    if (!activeMessage) {
+      return {
+        cancelled: false,
+        runId,
+        mode: 'noop',
+        run: current,
+        reason: 'An active cancellation message is required.',
+      };
+    }
+    await this.abortTurn(runId, activeMessage);
+    return {
+      cancelled: true,
+      runId,
+      mode: controlState === 'ready' ? 'ready' : 'active',
+      run: this.getRun(runId) ?? current,
+    };
   }
 
   async abortTurn(runId: string, message: string): Promise<void> {
@@ -576,6 +596,13 @@ export async function abortAgentTurnViaKernel(
 ): Promise<void> {
   const executor = await getExecutor(options);
   await executor.abortTurn(options.runId, options.message);
+}
+
+export async function cancelAgentTurnViaKernel(
+  options: AgentTurnKernelControlOptions & { runId: string; message?: string },
+): Promise<AgentCancelRunResult | null> {
+  const executor = await getExecutor(options);
+  return await executor.cancelRun(options.runId, options.message);
 }
 
 export async function executeAgentTurnViaKernel(
