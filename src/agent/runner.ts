@@ -232,6 +232,8 @@ export interface RunnerDeps {
   sessionStore: SessionStore;
   metaStore: SessionMetaStore;
   approvalHandler?: ApprovalHandler;
+  /** Structured approval audit sink. Input values are intentionally excluded. */
+  approvalAudit?: (event: ApprovalAuditEvent) => void | Promise<void>;
   /** Resolved model info from config.models registry at agent startup. */
   resolvedModel?: { id: string; maxTokens: number; temperature?: number };
   /** Pre-built skills directory text for Layer 2 (injected at runner construction). */
@@ -248,6 +250,16 @@ export interface RunnerDeps {
    * without going through the tool layer (which requires an LLM call).
    */
   memoryStore?: MemoryStore;
+}
+
+export interface ApprovalAuditEvent {
+  agentId: AgentId;
+  runId: string;
+  toolName: string;
+  toolUseId: string;
+  approved: boolean;
+  inputKeys: string[];
+  timestamp: number;
 }
 
 export interface RunnerOptions {
@@ -1375,6 +1387,19 @@ export class AgentRunner {
       const approved = this.deps.approvalHandler
         ? await this.deps.approvalHandler(toolCall.name, parseToolCallInput(toolCall.inputJson))
         : true;
+      const parsedInput = parseToolCallInput(toolCall.inputJson);
+      await this.deps.approvalAudit?.({
+        agentId: this.agentId,
+        runId: state.runId,
+        toolName: toolCall.name,
+        toolUseId: toolCall.id,
+        approved,
+        inputKeys:
+          parsedInput !== null && typeof parsedInput === 'object'
+            ? Object.keys(parsedInput)
+            : [],
+        timestamp: Date.now(),
+      });
       decisions.push({ toolUseId: toolCall.id, approved });
     }
 

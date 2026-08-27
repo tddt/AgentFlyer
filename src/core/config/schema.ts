@@ -38,7 +38,9 @@ const ModelGroupSchema = z.object({
   provider: z.enum(['anthropic', 'openai', 'google', 'ollama', 'openai-compat']),
   /** Used for ollama and openai-compat providers. */
   apiBaseUrl: z.string().optional(),
-  /** API key for openai-compat/ollama providers. For production use ~/.agentflyer/credentials/. */
+  /** Environment variable containing the provider API key. Takes precedence over apiKey. */
+  apiKeyEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/u).optional(),
+  /** API key for development compatibility. Production configs should use apiKeyEnv. */
   apiKey: z.string().optional(),
   /** Named models within this group. Reference as "groupName/modelKey". */
   models: z.record(z.string(), ModelDefSchema).default({}),
@@ -287,7 +289,10 @@ export const DEFAULT_SANDBOX_PROFILES: Record<string, z.infer<typeof SandboxProf
 };
 
 const SandboxConfigSchema = z.object({
-  enabled: z.boolean().default(false),
+  /** Sandboxed execution is the secure default; disable only for an explicit local-dev fallback. */
+  enabled: z.boolean().default(true),
+  /** Explicit opt-in for host execution when Docker is intentionally unavailable. */
+  allowHostExecution: z.boolean().optional(),
   provider: z.enum(['docker']).default('docker'),
   image: z.string().default('node:22-bookworm-slim'),
   defaultProfile: z.string().default('restricted'),

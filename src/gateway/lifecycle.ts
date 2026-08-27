@@ -225,6 +225,7 @@ type FlatModelEntry = {
   maxTokens: number;
   temperature?: number;
   apiKey?: string;
+  apiKeyEnv?: string;
   apiBaseUrl?: string;
 };
 
@@ -245,6 +246,7 @@ function resolveModelEntry(
       | {
           provider: string;
           apiKey?: string;
+          apiKeyEnv?: string;
           apiBaseUrl?: string;
           models?: Record<string, { id: string; maxTokens: number; temperature?: number }>;
         }
@@ -252,7 +254,13 @@ function resolveModelEntry(
     if (!group?.models) return undefined;
     const def = group.models[modelName];
     if (!def) return undefined;
-    return { provider: group.provider, apiKey: group.apiKey, apiBaseUrl: group.apiBaseUrl, ...def };
+    return {
+      provider: group.provider,
+      apiKey: group.apiKey,
+      apiKeyEnv: group.apiKeyEnv,
+      apiBaseUrl: group.apiBaseUrl,
+      ...def,
+    };
   }
   // Legacy flat-format fallback: key directly maps to { provider, id, maxTokens, ... }
   return models[fullKey] as FlatModelEntry | undefined;
@@ -314,6 +322,7 @@ function buildRunner(
     const group = groupVal as {
       provider?: string;
       apiKey?: string;
+      apiKeyEnv?: string;
       apiBaseUrl?: string;
       models?: Record<string, { id: string }>;
     };
@@ -325,8 +334,15 @@ function buildRunner(
       logger.warn('Skipping compat model registration: missing apiBaseUrl', { groupName });
       continue;
     }
-    const envKey = `AGENTFLYER_API_KEY_${groupName.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
-    const apiKey = group.apiKey ?? process.env[envKey] ?? process.env.OPENAI_API_KEY ?? 'unused';
+    const defaultEnvKey = `AGENTFLYER_API_KEY_${groupName.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+    const envKey = group.apiKeyEnv ?? defaultEnvKey;
+    const environmentApiKey = process.env[envKey] ?? process.env.OPENAI_API_KEY;
+    const apiKey = environmentApiKey ?? group.apiKey ?? 'unused';
+    if (group.apiKey && !environmentApiKey) {
+      logger.warn('Model group uses an inline apiKey; migrate to apiKeyEnv or encrypted credentials', {
+        groupName,
+      });
+    }
 
     if (group.models && typeof group.models === 'object') {
       // Grouped format: register one compat provider per model in the group
@@ -380,6 +396,9 @@ function buildRunner(
   const tools = new ToolRegistry();
   const sandboxRuntime = createSandboxRuntime({ dataDir, config: config.sandbox });
   const approvalHandler = resolveSandboxApprovalHandler(agentCfg.tools.sandboxProfile);
+  const approvalAudit = (event: import('../agent/runner.js').ApprovalAuditEvent): void => {
+    logger.info('Tool approval decision', { ...event });
+  };
   // Pass skill dirs so the agent can read files inside skill directories
   const skillAllowedDirs = agentSkillRegistry
     ? agentSkillRegistry.list().map((s) => dirname(s.filePath))
@@ -478,6 +497,7 @@ function buildRunner(
     sessionStore,
     metaStore,
     approvalHandler,
+    approvalAudit,
     skillsText,
     systemPromptMaxTokens: config.context?.systemPrompt?.maxTokens,
     dataDir,

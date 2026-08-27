@@ -103,6 +103,28 @@ describe('sandbox runtime', () => {
     expect(typeof runtime.execute).toBe('function');
   });
 
+  it('fails closed instead of falling back to host execution', async () => {
+    const runtime = createSandboxRuntime({
+      config: {
+        enabled: false,
+        provider: 'docker',
+        image: 'node:22-bookworm-slim',
+        defaultProfile: 'restricted',
+        profiles: {},
+      },
+    });
+
+    const result = await runtime.execute({
+      command: 'echo should-not-run',
+      cwd: process.cwd(),
+      timeoutMs: 10_000,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.provider).toBe('docker');
+    expect(result.errorMessage).toContain('allowHostExecution');
+  });
+
   it('resolves docker sandbox profile per request', async () => {
     const commandCalls: string[][] = [];
     const commandRunner: DockerCommandRunner = async (_file, args) => {

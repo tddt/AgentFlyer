@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LLMProvider, RunParams } from '../agent/llm/provider.js';
 import { AgentRunner } from '../agent/runner.js';
+import type { ApprovalAuditEvent } from '../agent/runner.js';
 import type { ApprovalHandler } from '../agent/tools/policy.js';
 import { ToolRegistry } from '../agent/tools/registry.js';
 import type { AgentKernel } from '../core/kernel/agent-kernel.js';
@@ -211,7 +212,11 @@ class BlockingProvider implements LLMProvider {
 function createRunner(
   dataDir: string,
   provider: LLMProvider = new FakeProvider(),
-  options: { approval?: string[]; approvalHandler?: ApprovalHandler } = {},
+  options: {
+    approval?: string[];
+    approvalHandler?: ApprovalHandler;
+    approvalAudit?: (event: ApprovalAuditEvent) => void;
+  } = {},
 ): AgentRunner {
   const toolRegistry = new ToolRegistry();
   toolRegistry.register({
@@ -252,6 +257,7 @@ function createRunner(
       sessionStore: new SessionStore(join(dataDir, 'sessions')),
       metaStore: new SessionMetaStore(join(dataDir, 'sessions')),
       approvalHandler: options.approvalHandler,
+      approvalAudit: options.approvalAudit,
       skillsText: '',
     },
   );
@@ -465,6 +471,7 @@ describe('AgentKernelService', () => {
 
   it('auto-resolves approval and tool syscalls in sequence', async () => {
     const dataDir = await createTempDir();
+    const auditEvents: ApprovalAuditEvent[] = [];
     const service = trackService(
       new AgentKernelService({
         dataDir,
@@ -474,6 +481,7 @@ describe('AgentKernelService', () => {
             createRunner(dataDir, new FakeToolProvider(), {
               approval: ['echo_tool'],
               approvalHandler: async () => true,
+              approvalAudit: (event) => auditEvents.push(event),
             }),
           ],
         ]),
@@ -487,6 +495,15 @@ describe('AgentKernelService', () => {
     });
 
     expect(result.text).toContain('kernel tool done');
+    expect(auditEvents).toEqual([
+      expect.objectContaining({
+        agentId: 'agent-main',
+        toolName: 'echo_tool',
+        approved: true,
+        inputKeys: ['message'],
+      }),
+    ]);
+    expect(JSON.stringify(auditEvents)).not.toContain('use approved tool');
   });
 
   it('rejects suspended turns when approval is denied', async () => {

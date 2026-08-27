@@ -490,6 +490,21 @@ describe('AgentRunner recoverable stream retry', () => {
     expect(() => runner.setDefaultThread('thread-allowed-after-reset')).not.toThrow();
   });
 
+  it('rejects a concurrent turn before shared runner state can be reused', async () => {
+    const dataDir = await createTempDir();
+    const provider = new RecoverableRetryProvider();
+    const runner = createRunner(dataDir, provider);
+
+    const firstTurn = runner.beginKernelTurn('run-concurrent-first', 'first turn');
+    await expect(
+      runner.beginKernelTurn('run-concurrent-second', 'second turn'),
+    ).rejects.toThrow("Agent 'agent-main' is already processing a turn");
+
+    const executionState = await firstTurn;
+    expect(executionState.runId).toBe('run-concurrent-first');
+    runner.forceReset(executionState.runId);
+  });
+
   it('syncs runner lease mode explicitly without inferring from runId', async () => {
     const dataDir = await createTempDir();
     const provider = new RecoverableRetryProvider();

@@ -217,5 +217,28 @@ export function createSandboxRuntime(options: CreateSandboxRuntimeOptions = {}):
     };
   }
 
+  if (config && !config.allowHostExecution) {
+    return {
+      async execute(request) {
+        const startedAt = Date.now();
+        const message =
+          'Sandbox is unavailable: Docker execution is disabled or not configured. Enable Docker or explicitly set sandbox.allowHostExecution for local development.';
+        logger.error('拒绝未隔离的 sandbox 执行', { profileName: request.profileName });
+        return finalizeSandboxExecution({
+          dataDir,
+          provider: 'docker',
+          request,
+          startedAt,
+          stdout: '',
+          stderr: message,
+          exitCode: null,
+          timedOut: false,
+          ok: false,
+          errorMessage: message,
+        });
+      },
+    };
+  }
+
   return createHostSandboxRuntime({ dataDir });
 }

@@ -240,7 +240,7 @@ describe('createMeshTools persistence', () => {
     expect(hangingRunner.isRunning).toBe(false);
     for (let attempt = 0; attempt < 40; attempt += 1) {
       const current = await status({ task_id: taskId });
-      if (current.content.includes('Status: error')) return;
+      if (current.content.includes('Status: error')) break;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
 

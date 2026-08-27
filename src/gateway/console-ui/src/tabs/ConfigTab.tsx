@@ -416,6 +416,7 @@ interface GroupedModelDef {
 
 interface ModelGroup {
   provider: ModelProviderKind;
+  apiKeyEnv?: string;
   apiKey?: string;
   apiBaseUrl?: string;
   models: Record<string, GroupedModelDef>;
@@ -2293,7 +2294,12 @@ function ModelsPanel({
       mode: 'edit',
       originalKey: groupName,
       groupName,
-      draft: { provider: group.provider, apiKey: group.apiKey, apiBaseUrl: group.apiBaseUrl },
+      draft: {
+        provider: group.provider,
+        apiKeyEnv: group.apiKeyEnv,
+        apiKey: group.apiKey,
+        apiBaseUrl: group.apiBaseUrl,
+      },
     });
   }
 
@@ -4093,10 +4099,22 @@ export function ConfigTab() {
           />
           <TextRow
             label="API key"
-            help="Shared API key for all models in this group."
+            help="Development fallback only. Prefer API key environment variable."
             value={groupModal.draft.apiKey ?? ''}
             onChange={(apiKey) =>
               setGroupModal({ ...groupModal, draft: { ...groupModal.draft, apiKey } })
+            }
+          />
+          <TextRow
+            label="API key environment variable"
+            help="Environment variable name containing the key. It takes precedence over API key."
+            value={groupModal.draft.apiKeyEnv ?? ''}
+            placeholder="AGENTFLYER_API_KEY_PROVIDER"
+            onChange={(apiKeyEnv) =>
+              setGroupModal({
+                ...groupModal,
+                draft: { ...groupModal.draft, apiKeyEnv: apiKeyEnv || undefined },
+              })
             }
           />
         </FormModal>
