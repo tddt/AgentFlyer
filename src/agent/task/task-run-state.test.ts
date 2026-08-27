@@ -63,10 +63,14 @@ describe('task run state', () => {
       value: '1 passed',
       recordedAt: 210,
     });
-    const suspended = transitionTaskRun(withEvidence, {
-      action: 'suspend',
-      reason: 'Waiting for approval',
-    }, 220);
+    const suspended = transitionTaskRun(
+      withEvidence,
+      {
+        action: 'suspend',
+        reason: 'Waiting for approval',
+      },
+      220,
+    );
 
     const restored = JSON.parse(JSON.stringify(suspended)) as typeof suspended;
     expect(restored).toEqual({

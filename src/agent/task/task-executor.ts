@@ -1,10 +1,10 @@
 import {
-  decideTaskContinuation,
-  recordTaskEvidence,
-  transitionTaskRun,
   type TaskContinuationDecision,
   type TaskEvidence,
   type TaskRunState,
+  decideTaskContinuation,
+  recordTaskEvidence,
+  transitionTaskRun,
 } from './task-run-state.js';
 
 export interface TaskTurnOutcome {

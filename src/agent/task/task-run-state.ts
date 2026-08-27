@@ -109,9 +109,7 @@ export function createTaskRunState(input: CreateTaskRunInput, now: number): Task
   };
 }
 
-export function decideTaskContinuation(
-  input: TaskContinuationInput,
-): TaskContinuationDecision {
+export function decideTaskContinuation(input: TaskContinuationInput): TaskContinuationDecision {
   if (input.turnStatus === 'suspended') {
     return { action: 'suspend', reason: 'The turn is suspended' };
   }
@@ -166,7 +164,13 @@ export function transitionTaskRun(
         updatedAt: now,
       };
     case 'complete':
-      return { ...state, status: 'completed', phase: 'verifying', blockedReason: undefined, updatedAt: now };
+      return {
+        ...state,
+        status: 'completed',
+        phase: 'verifying',
+        blockedReason: undefined,
+        updatedAt: now,
+      };
     case 'retry':
       return {
         ...state,

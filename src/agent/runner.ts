@@ -1395,9 +1395,7 @@ export class AgentRunner {
         toolUseId: toolCall.id,
         approved,
         inputKeys:
-          parsedInput !== null && typeof parsedInput === 'object'
-            ? Object.keys(parsedInput)
-            : [],
+          parsedInput !== null && typeof parsedInput === 'object' ? Object.keys(parsedInput) : [],
         timestamp: Date.now(),
       });
       decisions.push({ toolUseId: toolCall.id, approved });

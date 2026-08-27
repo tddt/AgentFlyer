@@ -496,9 +496,9 @@ describe('AgentRunner recoverable stream retry', () => {
     const runner = createRunner(dataDir, provider);
 
     const firstTurn = runner.beginKernelTurn('run-concurrent-first', 'first turn');
-    await expect(
-      runner.beginKernelTurn('run-concurrent-second', 'second turn'),
-    ).rejects.toThrow("Agent 'agent-main' is already processing a turn");
+    await expect(runner.beginKernelTurn('run-concurrent-second', 'second turn')).rejects.toThrow(
+      "Agent 'agent-main' is already processing a turn",
+    );
 
     const executionState = await firstTurn;
     expect(executionState.runId).toBe('run-concurrent-first');

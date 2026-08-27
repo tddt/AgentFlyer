@@ -11,7 +11,11 @@ const AuthSchema = z.object({
 
 const WorkflowGatewaySchema = z.object({
   /** Timeout budget for one delegated workflow agent step. */
-  agentStepTimeoutMs: z.number().int().positive().default(30 * 60_000),
+  agentStepTimeoutMs: z
+    .number()
+    .int()
+    .positive()
+    .default(30 * 60_000),
 });
 
 const GatewaySchema = z.object({
@@ -39,7 +43,10 @@ const ModelGroupSchema = z.object({
   /** Used for ollama and openai-compat providers. */
   apiBaseUrl: z.string().optional(),
   /** Environment variable containing the provider API key. Takes precedence over apiKey. */
-  apiKeyEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/u).optional(),
+  apiKeyEnv: z
+    .string()
+    .regex(/^[A-Z_][A-Z0-9_]*$/u)
+    .optional(),
   /** API key for development compatibility. Production configs should use apiKeyEnv. */
   apiKey: z.string().optional(),
   /** Named models within this group. Reference as "groupName/modelKey". */

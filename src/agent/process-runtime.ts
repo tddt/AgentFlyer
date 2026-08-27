@@ -11,13 +11,13 @@ import type {
   TurnResult,
 } from './runner.js';
 import type { AgentRunner } from './runner.js';
+import type { TaskRunState } from './task/task-run-state.js';
 import {
   type AgentTurnControlState,
   type AgentTurnPhase,
   deriveAgentTurnControlStateForPhase,
   deriveRunnerLeaseModeForAgentTurnPhase,
 } from './turn-phase-contract.js';
-import type { TaskRunState } from './task/task-run-state.js';
 
 export interface AgentTurnProcessInput {
   agentId: string;

@@ -340,9 +340,12 @@ function buildRunner(
     const environmentApiKey = process.env[envKey] ?? process.env.OPENAI_API_KEY;
     const apiKey = environmentApiKey ?? group.apiKey ?? 'unused';
     if (group.apiKey && !environmentApiKey) {
-      logger.warn('Model group uses an inline apiKey; migrate to apiKeyEnv or encrypted credentials', {
-        groupName,
-      });
+      logger.warn(
+        'Model group uses an inline apiKey; migrate to apiKeyEnv or encrypted credentials',
+        {
+          groupName,
+        },
+      );
     }
 
     if (group.models && typeof group.models === 'object') {

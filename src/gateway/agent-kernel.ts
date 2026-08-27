@@ -260,7 +260,7 @@ export class AgentKernelService {
 
   /**
    * Wait for a run to complete, with an automatic timeout that force-kills
-  * stuck processes. Default timeout is 60 minutes.
+   * stuck processes. Default timeout is 60 minutes.
    */
   async waitForRun(runId: string, timeoutMs = 60 * 60_000): Promise<TurnResult> {
     let timeoutId: ReturnType<typeof setTimeout> | null = null;

@@ -336,7 +336,11 @@ export function createMeshTools(
           error: String(err),
           doneAt: Date.now(),
           taskState: entry.taskState
-            ? transitionTaskRun(entry.taskState, { action: 'fail', reason: String(err) }, Date.now())
+            ? transitionTaskRun(
+                entry.taskState,
+                { action: 'fail', reason: String(err) },
+                Date.now(),
+              )
             : undefined,
         });
         logger.error('mesh_spawn: task error', { taskId, agent_id: agentId, error: String(err) });
@@ -581,7 +585,11 @@ export function createMeshTools(
           status: 'running',
           runId: started.runId,
           error: undefined,
-          taskState: transitionTaskRun(taskState, { action: 'start', runId: started.runId }, Date.now()),
+          taskState: transitionTaskRun(
+            taskState,
+            { action: 'start', runId: started.runId },
+            Date.now(),
+          ),
         });
         watchTaskRun(taskId, agent_id, timeoutMs);
         return {

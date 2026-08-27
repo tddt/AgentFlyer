@@ -8,7 +8,9 @@ import { JsonTaskRunStateStore } from './task-state-store.js';
 const tempDirs: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+  await Promise.all(
+    tempDirs.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
+  );
 });
 
 describe('JsonTaskRunStateStore', () => {

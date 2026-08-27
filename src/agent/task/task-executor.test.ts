@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createTaskRunState } from './task-run-state.js';
 import { TaskExecutor } from './task-executor.js';
+import { createTaskRunState } from './task-run-state.js';
 
 describe('TaskExecutor', () => {
   it('checkpoints progress and continues after a turn without full acceptance', async () => {
