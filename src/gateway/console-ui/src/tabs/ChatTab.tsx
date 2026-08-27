@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { Badge } from '../components/Badge.js';
 import { Button } from '../components/Button.js';
 import { CopyButton } from '../components/CopyButton.js';
@@ -111,6 +119,87 @@ interface AgentPanelProps {
   getChannelLabel: (channelId?: string | null) => string | null;
 }
 
+interface ChatComposerHandle {
+  getValue: () => string;
+  setValue: (value: string) => void;
+  focus: () => void;
+}
+
+interface ChatComposerProps {
+  busy: boolean;
+  inputPlaceholder: string;
+  inputRef: React.RefObject<HTMLTextAreaElement | null>;
+  sendLabel: string;
+  onSend: (value: string) => void;
+}
+
+const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(function ChatComposer(
+  { busy, inputPlaceholder, inputRef, onSend, sendLabel },
+  ref,
+) {
+  const [canSend, setCanSend] = useState(false);
+  const draftRef = useRef('');
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      getValue: () => draftRef.current,
+      setValue: (value: string) => {
+        draftRef.current = value;
+        const textarea = inputRef.current;
+        if (textarea) {
+          textarea.value = value;
+        }
+        setCanSend(Boolean(value.trim()));
+      },
+      focus: () => inputRef.current?.focus(),
+    }),
+    [inputRef],
+  );
+
+  const handleInput = (event: React.FormEvent<HTMLTextAreaElement>): void => {
+    const value = event.currentTarget.value;
+    draftRef.current = value;
+    setCanSend(Boolean(value.trim()));
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      onSend(draftRef.current);
+    }
+  };
+
+  return (
+    <div
+      className="relative flex items-end gap-2 rounded-[1.25rem] p-3"
+      style={{
+        background: 'var(--af-input-bg)',
+        boxShadow: '0 0 0 1px var(--af-input-ring), 0 12px 30px rgba(15,23,42,0.15)',
+      }}
+    >
+      <textarea
+        ref={inputRef}
+        onInput={handleInput}
+        onKeyDown={handleKeyDown}
+        placeholder={inputPlaceholder}
+        rows={2}
+        disabled={busy}
+        className="flex-1 bg-transparent text-sm resize-none focus:outline-none min-h-10"
+        style={{ color: 'var(--af-text-base)' }}
+      />
+      <Button
+        variant="primary"
+        size="sm"
+        onClick={() => onSend(draftRef.current)}
+        disabled={busy || !canSend}
+      >
+        {busy ? '…' : sendLabel}
+      </Button>
+    </div>
+  );
+});
+
 interface RecoveryEvidenceContext {
   userContext: string;
   assistantContext: string;
@@ -172,7 +261,9 @@ function readStoredStringArray(key: string): string[] {
       return [];
     }
     const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === 'string')
+      : [];
   } catch {
     return [];
   }
@@ -188,7 +279,9 @@ function readStoredNumberArray(key: string): number[] {
       return [];
     }
     const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? parsed.filter((item): item is number => typeof item === 'number') : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is number => typeof item === 'number')
+      : [];
   } catch {
     return [];
   }
@@ -362,7 +455,9 @@ function summarizeToolContext(messages: Message[]): string {
     if (!message?.tools?.length) {
       continue;
     }
-    const toolNames = Array.from(new Set(message.tools.map((tool) => compactText(tool.name)).filter(Boolean)));
+    const toolNames = Array.from(
+      new Set(message.tools.map((tool) => compactText(tool.name)).filter(Boolean)),
+    );
     if (toolNames.length === 0) {
       continue;
     }
@@ -463,10 +558,16 @@ function detectToolResultPatterns(messages: Message[]): ToolResultPattern[] {
   ) {
     patterns.add('permission');
   }
-  if (/(not found|no such file|does not exist|cannot find|enoent|unknown id|unknown file)/.test(text)) {
+  if (
+    /(not found|no such file|does not exist|cannot find|enoent|unknown id|unknown file)/.test(text)
+  ) {
     patterns.add('not_found');
   }
-  if (/(already exists|duplicate|conflict|409|precondition failed|version mismatch|stale update)/.test(text)) {
+  if (
+    /(already exists|duplicate|conflict|409|precondition failed|version mismatch|stale update)/.test(
+      text,
+    )
+  ) {
     patterns.add('conflict');
   }
   if (
@@ -639,9 +740,13 @@ function getStructuredRecoverySuggestion(
 ): string {
   const patternLabel =
     patterns.length > 0
-      ? patterns.slice(0, 3).map((pattern) => formatPatternLabel(pattern, t)).join(' + ')
+      ? patterns
+          .slice(0, 3)
+          .map((pattern) => formatPatternLabel(pattern, t))
+          .join(' + ')
       : t('chat.recovery.pattern.none');
-  const evidenceLine = sanitizeStructuredLine(toolResult, 120) || t('chat.recovery.structured.none');
+  const evidenceLine =
+    sanitizeStructuredLine(toolResult, 120) || t('chat.recovery.structured.none');
   const actionLine =
     sanitizeStructuredLine(suggestedMessage, 160) ||
     sanitizeStructuredLine(t('chat.recovery.suggestedMessage.continue'), 160);
@@ -931,8 +1036,14 @@ function getRecoverySuggestedMessage(
   messages: Message[],
   t: (key: string) => string,
 ): string {
-  const { userContext, assistantContext, toolContext, toolInputContext, toolResultContext, errorFragment } =
-    getRecoveryEvidenceContext(messages);
+  const {
+    userContext,
+    assistantContext,
+    toolContext,
+    toolInputContext,
+    toolResultContext,
+    errorFragment,
+  } = getRecoveryEvidenceContext(messages);
   const toolResultPatterns = detectToolResultPatterns(messages);
 
   if (recoveryContext.mode !== 'new_thread' && userContext) {
@@ -949,11 +1060,11 @@ function getRecoverySuggestedMessage(
               toolResult: toolResultContext,
             })
           : errorFragment
-          ? t('chat.recovery.suggestedMessage.retryWithError', {
-              task: userContext,
-              error: errorFragment,
-            })
-          : t('chat.recovery.suggestedMessage.retryWithContext', { task: userContext });
+            ? t('chat.recovery.suggestedMessage.retryWithError', {
+                task: userContext,
+                error: errorFragment,
+              })
+            : t('chat.recovery.suggestedMessage.retryWithContext', { task: userContext });
       case 'tool_round_limit':
         return toolResultContext
           ? t('chat.recovery.suggestedMessage.splitTaskWithToolResult', {
@@ -961,16 +1072,16 @@ function getRecoverySuggestedMessage(
               toolResult: toolResultContext,
             })
           : toolInputContext
-          ? t('chat.recovery.suggestedMessage.splitTaskWithToolInput', {
-              task: userContext,
-              toolInput: toolInputContext,
-            })
-          : toolContext
-          ? t('chat.recovery.suggestedMessage.splitTaskWithTools', {
-              task: userContext,
-              tools: toolContext,
-            })
-          : t('chat.recovery.suggestedMessage.splitTaskWithContext', { task: userContext });
+            ? t('chat.recovery.suggestedMessage.splitTaskWithToolInput', {
+                task: userContext,
+                toolInput: toolInputContext,
+              })
+            : toolContext
+              ? t('chat.recovery.suggestedMessage.splitTaskWithTools', {
+                  task: userContext,
+                  tools: toolContext,
+                })
+              : t('chat.recovery.suggestedMessage.splitTaskWithContext', { task: userContext });
       case 'billing':
         return toolResultContext
           ? t('chat.recovery.suggestedMessage.billingWithToolResult', {
@@ -985,16 +1096,16 @@ function getRecoverySuggestedMessage(
               toolResult: toolResultContext,
             })
           : toolInputContext
-          ? t('chat.recovery.suggestedMessage.inspectWithToolInput', {
-              task: userContext,
-              toolInput: toolInputContext,
-            })
-          : toolContext
-          ? t('chat.recovery.suggestedMessage.inspectWithTools', {
-              task: userContext,
-              tools: toolContext,
-            })
-          : t('chat.recovery.suggestedMessage.inspectWithContext', { task: userContext });
+            ? t('chat.recovery.suggestedMessage.inspectWithToolInput', {
+                task: userContext,
+                toolInput: toolInputContext,
+              })
+            : toolContext
+              ? t('chat.recovery.suggestedMessage.inspectWithTools', {
+                  task: userContext,
+                  tools: toolContext,
+                })
+              : t('chat.recovery.suggestedMessage.inspectWithContext', { task: userContext });
       default:
         return toolResultContext
           ? t('chat.recovery.suggestedMessage.continueWithToolResult', {
@@ -1002,11 +1113,11 @@ function getRecoverySuggestedMessage(
               toolResult: toolResultContext,
             })
           : assistantContext
-          ? t('chat.recovery.suggestedMessage.continueWithProgress', {
-              task: userContext,
-              progress: assistantContext,
-            })
-          : t('chat.recovery.suggestedMessage.continueWithContext', { task: userContext });
+            ? t('chat.recovery.suggestedMessage.continueWithProgress', {
+                task: userContext,
+                progress: assistantContext,
+              })
+            : t('chat.recovery.suggestedMessage.continueWithContext', { task: userContext });
     }
   }
 
@@ -1136,24 +1247,39 @@ function ThreadHeaderSummary({
   const visibleMeta = (meta ?? []).filter(Boolean);
   return (
     <div className="min-w-0">
-      <div className="text-[11px] uppercase tracking-[0.18em]" style={{ color: 'var(--af-text-faint)' }}>
+      <div
+        className="text-[11px] uppercase tracking-[0.18em]"
+        style={{ color: 'var(--af-text-faint)' }}
+      >
         {eyebrow}
       </div>
-      <div className="mt-1 text-sm font-semibold line-clamp-2" style={{ color: 'var(--af-text-heading)' }}>
+      <div
+        className="mt-1 text-sm font-semibold line-clamp-2"
+        style={{ color: 'var(--af-text-heading)' }}
+      >
         {title}
       </div>
       {subtitle ? (
-        <div className="mt-1 line-clamp-2 text-xs leading-5" style={{ color: 'var(--af-text-muted)' }}>
+        <div
+          className="mt-1 line-clamp-2 text-xs leading-5"
+          style={{ color: 'var(--af-text-muted)' }}
+        >
           {subtitle}
         </div>
       ) : null}
       {visibleMeta.length > 0 ? (
-        <div className="mt-2 flex flex-wrap gap-2 text-[10px]" style={{ color: 'var(--af-text-faint)' }}>
+        <div
+          className="mt-2 flex flex-wrap gap-2 text-[10px]"
+          style={{ color: 'var(--af-text-faint)' }}
+        >
           {visibleMeta.map((item) => (
             <span
               key={item}
               className="rounded-full px-2 py-1"
-              style={{ background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}
+              style={{
+                background: 'var(--af-surface-2)',
+                boxShadow: '0 0 0 1px var(--af-card-ring)',
+              }}
             >
               {item}
             </span>
@@ -1168,7 +1294,10 @@ function compactSearchText(text: string): string {
   return text.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
 }
 
-function buildHubContextPrompt(target: HubFocusTarget, t: (key: string, vars?: Record<string, string | number>) => string): string {
+function buildHubContextPrompt(
+  target: HubFocusTarget,
+  t: (key: string, vars?: Record<string, string | number>) => string,
+): string {
   const summary = target.text.trim() || target.title.trim();
   return t('chat.hub.contextPrompt', {
     title: target.title || t('chat.inbox.threadFallback'),
@@ -1283,7 +1412,11 @@ function buildHubThreads(events: InboxEvent[]): HubThread[] {
     .sort((left, right) => right.latestTs - left.latestTs);
 }
 
-function resolveMentionTarget(message: string, agents: AgentInfo[], fallbackAgentId: string): string {
+function resolveMentionTarget(
+  message: string,
+  agents: AgentInfo[],
+  fallbackAgentId: string,
+): string {
   const trimmed = message.trim();
   const match = /^@([^\s]+)\s+/u.exec(trimmed);
   if (!match) {
@@ -1320,7 +1453,6 @@ function AgentPanel({
   getChannelLabel,
 }: AgentPanelProps) {
   const { t } = useLocale();
-  const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
   const [pendingStatus, setPendingStatus] = useState<string | null>(null);
@@ -1331,13 +1463,16 @@ function AgentPanel({
   const [sessionPreviewByKey, setSessionPreviewByKey] = useState<Record<string, string>>({});
   const [confirmRecoverySend, setConfirmRecoverySend] = useState(false);
   const [currentThread, setCurrentThread] = useState(`console:${agent.agentId}`);
-  const [visibleRecoveryContext, setVisibleRecoveryContext] = useState<ChatRecoveryContext | null>(null);
+  const [visibleRecoveryContext, setVisibleRecoveryContext] = useState<ChatRecoveryContext | null>(
+    null,
+  );
   const [focusedMessageId, setFocusedMessageId] = useState<string | null>(null);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [unseenMessageCount, setUnseenMessageCount] = useState(0);
   const [unreadAnchorIndex, setUnreadAnchorIndex] = useState<number | null>(null);
   const [expandedContextPanel, setExpandedContextPanel] = useState<'recovery' | 'hub' | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const composerRef = useRef<ChatComposerHandle>(null);
   const activeRunIdRef = useRef<string | null>(null);
   const streamAttachedRef = useRef(false);
   const sessionRefreshInFlightRef = useRef(false);
@@ -1377,7 +1512,10 @@ function AgentPanel({
   const [showSessions, setShowSessions] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const participantAliases = useMemo(
-    () => Array.from(new Set((agent.mentionAliases ?? []).map((alias) => alias.trim()).filter(Boolean))),
+    () =>
+      Array.from(
+        new Set((agent.mentionAliases ?? []).map((alias) => alias.trim()).filter(Boolean)),
+      ),
     [agent.mentionAliases],
   );
   const inputPlaceholder = useMemo(
@@ -1396,8 +1534,10 @@ function AgentPanel({
         .filter(
           (
             meta,
-          ): meta is { label: string; variant: 'green' | 'blue' | 'yellow' | 'red' | 'purple' | 'gray' } =>
-            meta !== null,
+          ): meta is {
+            label: string;
+            variant: 'green' | 'blue' | 'yellow' | 'red' | 'purple' | 'gray';
+          } => meta !== null,
         ),
     [recoveryPatterns, t],
   );
@@ -1421,8 +1561,20 @@ function AgentPanel({
       recoveryEvidenceContext.toolResultContext ||
       recoveryEvidenceContext.errorFragment ||
       suggestedRecoveryMessage;
-    return getStructuredRecoverySuggestion(task, suggestedRecoveryMessage, evidence, recoveryPatterns, t);
-  }, [visibleRecoveryContext, recoveryEvidenceContext, suggestedRecoveryMessage, recoveryPatterns, t]);
+    return getStructuredRecoverySuggestion(
+      task,
+      suggestedRecoveryMessage,
+      evidence,
+      recoveryPatterns,
+      t,
+    );
+  }, [
+    visibleRecoveryContext,
+    recoveryEvidenceContext,
+    suggestedRecoveryMessage,
+    recoveryPatterns,
+    t,
+  ]);
   const structuredRecoveryVariants = useMemo(() => {
     if (!visibleRecoveryContext) {
       return [];
@@ -1554,7 +1706,8 @@ function AgentPanel({
     .filter((s) => s.agentId === agent.agentId)
     .sort((a, b) => b.lastActivity - a.lastActivity);
   const currentSessionKey = `agent:${agent.agentId}:${currentThread}`;
-  const currentSession = agentSessions.find((session) => session.threadKey === currentThread) ?? null;
+  const currentSession =
+    agentSessions.find((session) => session.threadKey === currentThread) ?? null;
 
   const refreshCurrentSession = useCallback(async (): Promise<void> => {
     if (sessionRefreshInFlightRef.current) {
@@ -1597,7 +1750,9 @@ function AgentPanel({
     if (!showSessions || agentSessions.length === 0) {
       return;
     }
-    const missingSessions = agentSessions.filter((session) => !sessionPreviewByKey[session.sessionKey]).slice(0, 12);
+    const missingSessions = agentSessions
+      .filter((session) => !sessionPreviewByKey[session.sessionKey])
+      .slice(0, 12);
     if (missingSessions.length === 0) {
       return;
     }
@@ -1694,7 +1849,8 @@ function AgentPanel({
   // from the gateway activity snapshot and keep the session history current.
   useEffect(() => {
     const activeRun = agent.activity?.activeRun;
-    const queuedIndex = agent.activity?.queuedRuns.findIndex((run) => run.threadKey === currentThread) ?? -1;
+    const queuedIndex =
+      agent.activity?.queuedRuns.findIndex((run) => run.threadKey === currentThread) ?? -1;
     const queuedRun = queuedIndex >= 0 ? agent.activity?.queuedRuns[queuedIndex] : undefined;
     const isCurrentActiveRun = activeRun?.threadKey === currentThread;
     if (isCurrentActiveRun && activeRun) {
@@ -1724,7 +1880,9 @@ function AgentPanel({
       if (cancelled || !runInfo) {
         return;
       }
-      const isTerminal = ['done', 'error'].includes(runInfo.processStatus) || ['done', 'error'].includes(runInfo.phase);
+      const isTerminal =
+        ['done', 'error'].includes(runInfo.processStatus) ||
+        ['done', 'error'].includes(runInfo.phase);
       if (isTerminal) {
         setBusy(false);
         setPendingStatus(null);
@@ -2063,10 +2221,10 @@ function AgentPanel({
     await streamChatRequest({ runId: resumableRunId, resume: true, thread: currentThread });
   };
 
-  const sendMessage = async (messageText = input) => {
+  const sendMessage = async (messageText = composerRef.current?.getValue() ?? '') => {
     const text = messageText.trim();
     if (!text || busy) return;
-    setInput('');
+    composerRef.current?.setValue('');
     setPendingStatus(null);
     setQueuePosition(null);
     setResumableRunId(null);
@@ -2083,7 +2241,10 @@ function AgentPanel({
       return;
     }
     setConfirmRecoverySend(false);
-    const nextInput = input.trim() || suggestedRecoveryMessage || structuredRecoveryMessage;
+    const nextInput =
+      composerRef.current?.getValue().trim() ||
+      suggestedRecoveryMessage ||
+      structuredRecoveryMessage;
     await sendMessage(nextInput);
   };
 
@@ -2091,24 +2252,24 @@ function AgentPanel({
     if (!suggestedRecoveryMessage) {
       return;
     }
-    setInput(suggestedRecoveryMessage);
+    composerRef.current?.setValue(suggestedRecoveryMessage);
     setConfirmRecoverySend(false);
-    inputRef.current?.focus();
+    composerRef.current?.focus();
   };
 
   const applyStructuredRecoverySuggestion = () => {
     if (!structuredRecoveryMessage) {
       return;
     }
-    setInput(structuredRecoveryMessage);
+    composerRef.current?.setValue(structuredRecoveryMessage);
     setConfirmRecoverySend(false);
-    inputRef.current?.focus();
+    composerRef.current?.focus();
   };
 
   const applyStructuredRecoveryVariant = (template: string) => {
-    setInput(template);
+    composerRef.current?.setValue(template);
     setConfirmRecoverySend(false);
-    inputRef.current?.focus();
+    composerRef.current?.focus();
   };
 
   const applyHubContextToInput = (startNewThreadFromEvent: boolean) => {
@@ -2126,22 +2287,14 @@ function AgentPanel({
       setResumableRunId(null);
       updateActiveRunId(null);
       setFocusedMessageId(null);
-      setInput(prompt);
+      composerRef.current?.setValue(prompt);
     } else {
-      setInput((current) => {
-        const trimmed = current.trim();
-        return trimmed ? `${trimmed}\n\n${prompt}` : prompt;
-      });
+      const current = composerRef.current?.getValue() ?? '';
+      const trimmed = current.trim();
+      composerRef.current?.setValue(trimmed ? `${trimmed}\n\n${prompt}` : prompt);
     }
     setExpandedContextPanel('hub');
-    inputRef.current?.focus();
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      void sendMessage();
-    }
+    composerRef.current?.focus();
   };
 
   const showRecoveryPanel = visibleRecoveryContext !== null;
@@ -2160,7 +2313,9 @@ function AgentPanel({
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-sm font-semibold" style={{ color: 'var(--af-text-heading)' }}>{agent.name ?? agent.agentId}</span>
+              <span className="text-sm font-semibold" style={{ color: 'var(--af-text-heading)' }}>
+                {agent.name ?? agent.agentId}
+              </span>
               <Badge variant="blue">{t('chat.title')}</Badge>
               {participantAliases.map((alias) => (
                 <span
@@ -2175,7 +2330,9 @@ function AgentPanel({
               eyebrow={t('chat.threadSummary.current')}
               title={
                 currentThreadPreview ??
-                (currentSession?.error ? t('chat.session.errorPreview') : t('chat.startConversation', { name: agent.name ?? agent.agentId }))
+                (currentSession?.error
+                  ? t('chat.session.errorPreview')
+                  : t('chat.startConversation', { name: agent.name ?? agent.agentId }))
               }
               subtitle={t('chat.inbox.hint')}
               meta={currentThreadSummaryMeta}
@@ -2183,24 +2340,42 @@ function AgentPanel({
             {hubContextHint ? (
               <div
                 className="mt-3 rounded-xl px-3 py-2.5"
-                style={{ background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}
+                style={{
+                  background: 'var(--af-surface-2)',
+                  boxShadow: '0 0 0 1px var(--af-card-ring)',
+                }}
               >
-                <div className="text-[10px] uppercase tracking-[0.16em]" style={{ color: 'var(--af-accent)' }}>
+                <div
+                  className="text-[10px] uppercase tracking-[0.16em]"
+                  style={{ color: 'var(--af-accent)' }}
+                >
                   {hubContextHint.label}
                 </div>
-                <div className="mt-1 text-xs font-medium line-clamp-2" style={{ color: 'var(--af-text-heading)' }}>
+                <div
+                  className="mt-1 text-xs font-medium line-clamp-2"
+                  style={{ color: 'var(--af-text-heading)' }}
+                >
                   {hubContextHint.title}
                 </div>
-                <div className="mt-1 text-[11px] leading-5 line-clamp-2" style={{ color: 'var(--af-text-muted)' }}>
+                <div
+                  className="mt-1 text-[11px] leading-5 line-clamp-2"
+                  style={{ color: 'var(--af-text-muted)' }}
+                >
                   {hubContextHint.summary}
                 </div>
                 {hubContextHint.meta.length > 0 ? (
-                  <div className="mt-2 flex flex-wrap gap-2 text-[10px]" style={{ color: 'var(--af-text-faint)' }}>
+                  <div
+                    className="mt-2 flex flex-wrap gap-2 text-[10px]"
+                    style={{ color: 'var(--af-text-faint)' }}
+                  >
                     {hubContextHint.meta.map((item) => (
                       <span
                         key={item}
                         className="rounded-full px-2 py-1"
-                        style={{ background: 'var(--af-card-bg)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}
+                        style={{
+                          background: 'var(--af-card-bg)',
+                          boxShadow: '0 0 0 1px var(--af-card-ring)',
+                        }}
                       >
                         {item}
                       </span>
@@ -2226,17 +2401,33 @@ function AgentPanel({
                 {t('chat.sessions', { n: agentSessions.length })}
               </Button>
               {showSessions && (
-                <div className="absolute right-0 top-full mt-2 w-80 rounded-xl shadow-2xl z-50 overflow-hidden"
-                  style={{ background: 'var(--af-overlay-bg)', boxShadow: '0 0 0 1px var(--af-overlay-border), 0 20px 60px rgba(0,0,0,0.35)' }}
+                <div
+                  className="absolute right-0 top-full mt-2 w-80 rounded-xl shadow-2xl z-50 overflow-hidden"
+                  style={{
+                    background: 'var(--af-overlay-bg)',
+                    boxShadow: '0 0 0 1px var(--af-overlay-border), 0 20px 60px rgba(0,0,0,0.35)',
+                  }}
                 >
-                  <div className="px-3 py-2 flex items-center justify-between" style={{ borderBottom: '1px solid var(--af-border)' }}>
-                    <span className="text-xs font-medium" style={{ color: 'var(--af-text-heading)' }}>{t('chat.selectThread')}</span>
+                  <div
+                    className="px-3 py-2 flex items-center justify-between"
+                    style={{ borderBottom: '1px solid var(--af-border)' }}
+                  >
+                    <span
+                      className="text-xs font-medium"
+                      style={{ color: 'var(--af-text-heading)' }}
+                    >
+                      {t('chat.selectThread')}
+                    </span>
                     <button
                       onClick={() => setShowSessions(false)}
                       className="text-xs transition-colors"
                       style={{ color: 'var(--af-text-faint)' }}
-                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--af-text-muted)'; }}
-                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--af-text-faint)'; }}
+                      onMouseEnter={(e) => {
+                        (e.currentTarget as HTMLButtonElement).style.color = 'var(--af-text-muted)';
+                      }}
+                      onMouseLeave={(e) => {
+                        (e.currentTarget as HTMLButtonElement).style.color = 'var(--af-text-faint)';
+                      }}
                     >
                       ✕
                     </button>
@@ -2246,14 +2437,23 @@ function AgentPanel({
                       onClick={startNewThread}
                       className="w-full px-3 py-2.5 text-left flex items-center gap-2 transition-colors"
                       style={{ borderBottom: '1px solid var(--af-border)' }}
-                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--af-surface-2)'; }}
-                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = ''; }}
+                      onMouseEnter={(e) => {
+                        (e.currentTarget as HTMLButtonElement).style.background =
+                          'var(--af-surface-2)';
+                      }}
+                      onMouseLeave={(e) => {
+                        (e.currentTarget as HTMLButtonElement).style.background = '';
+                      }}
                     >
                       <span className="text-emerald-400 text-xs">＋</span>
-                      <span className="text-xs" style={{ color: 'var(--af-text-base)' }}>{t('chat.newThread')}</span>
+                      <span className="text-xs" style={{ color: 'var(--af-text-base)' }}>
+                        {t('chat.newThread')}
+                      </span>
                     </button>
                     {agentSessions.length === 0 && (
-                      <p className="text-xs px-3 py-3" style={{ color: 'var(--af-text-muted)' }}>{t('chat.noSessionsYet')}</p>
+                      <p className="text-xs px-3 py-3" style={{ color: 'var(--af-text-muted)' }}>
+                        {t('chat.noSessionsYet')}
+                      </p>
                     )}
                     {agentSessions.map((s) => (
                       <button
@@ -2263,26 +2463,59 @@ function AgentPanel({
                           s.threadKey === currentThread ? '' : ''
                         }`}
                         style={{
-                          background: s.threadKey === currentThread ? 'var(--af-accent-soft-2)' : 'transparent',
+                          background:
+                            s.threadKey === currentThread
+                              ? 'var(--af-accent-soft-2)'
+                              : 'transparent',
                         }}
-                        onMouseEnter={(e) => { if (s.threadKey !== currentThread) (e.currentTarget as HTMLButtonElement).style.background = 'var(--af-surface-2)'; }}
-                        onMouseLeave={(e) => { if (s.threadKey !== currentThread) (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
+                        onMouseEnter={(e) => {
+                          if (s.threadKey !== currentThread)
+                            (e.currentTarget as HTMLButtonElement).style.background =
+                              'var(--af-surface-2)';
+                        }}
+                        onMouseLeave={(e) => {
+                          if (s.threadKey !== currentThread)
+                            (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
+                        }}
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0 flex-1">
-                            <div className="text-xs font-medium line-clamp-2" style={{ color: 'var(--af-text-base)' }}>
-                              {sessionPreviewByKey[s.sessionKey] ?? (s.error ? t('chat.session.errorPreview') : t('chat.session.emptyPreview'))}
+                            <div
+                              className="text-xs font-medium line-clamp-2"
+                              style={{ color: 'var(--af-text-base)' }}
+                            >
+                              {sessionPreviewByKey[s.sessionKey] ??
+                                (s.error
+                                  ? t('chat.session.errorPreview')
+                                  : t('chat.session.emptyPreview'))}
                             </div>
                           </div>
                           {s.threadKey === currentThread ? (
-                            <span className="text-[10px] ml-1 shrink-0" style={{ color: 'var(--af-accent)' }}>{t('chat.active')}</span>
+                            <span
+                              className="text-[10px] ml-1 shrink-0"
+                              style={{ color: 'var(--af-accent)' }}
+                            >
+                              {t('chat.active')}
+                            </span>
                           ) : null}
                         </div>
-                        <div className="flex items-center gap-2 flex-wrap text-[10px]" style={{ color: 'var(--af-text-faint)' }}>
-                          <span>{t('chat.session.meta', { count: String(s.messageCount), time: timeAgo(s.lastActivity) })}</span>
+                        <div
+                          className="flex items-center gap-2 flex-wrap text-[10px]"
+                          style={{ color: 'var(--af-text-faint)' }}
+                        >
+                          <span>
+                            {t('chat.session.meta', {
+                              count: String(s.messageCount),
+                              time: timeAgo(s.lastActivity),
+                            })}
+                          </span>
                           {s.errorCode ? <Badge variant="red">{s.errorCode}</Badge> : null}
                         </div>
-                        <div className="font-mono text-[10px] truncate" style={{ color: 'var(--af-text-muted)' }} title={s.threadKey}>
+                        <div
+                          className="font-mono text-[10px] truncate"
+                          style={{ color: 'var(--af-text-muted)' }}
+                          title={s.threadKey}
+                        >
                           {s.threadKey}
                         </div>
                       </button>
@@ -2296,7 +2529,9 @@ function AgentPanel({
               variant="ghost"
               onClick={() => {
                 setMessages([]);
-                void rpc('session.clear', { sessionKey: `agent:${agent.agentId}:${currentThread}` });
+                void rpc('session.clear', {
+                  sessionKey: `agent:${agent.agentId}:${currentThread}`,
+                });
               }}
             >
               {t('common.clear')}
@@ -2310,7 +2545,11 @@ function AgentPanel({
                 <div className="flex items-start justify-between gap-3 flex-wrap">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <Badge variant={problemCodeBadgeVariant(visibleRecoveryContext?.errorCode ?? 'generic')}>
+                      <Badge
+                        variant={problemCodeBadgeVariant(
+                          visibleRecoveryContext?.errorCode ?? 'generic',
+                        )}
+                      >
                         {formatProblemCode(visibleRecoveryContext?.errorCode ?? 'generic', t)}
                       </Badge>
                       <span className="text-sm font-medium text-amber-100">
@@ -2326,8 +2565,18 @@ function AgentPanel({
                     </div>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    <Button size="sm" variant="ghost" onClick={() => setExpandedContextPanel((current) => (current === 'recovery' ? null : 'recovery'))}>
-                      {expandedContextPanel === 'recovery' ? t('common.showLess') : t('common.showMore')}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() =>
+                        setExpandedContextPanel((current) =>
+                          current === 'recovery' ? null : 'recovery',
+                        )
+                      }
+                    >
+                      {expandedContextPanel === 'recovery'
+                        ? t('common.showLess')
+                        : t('common.showMore')}
                     </Button>
                     <Button size="sm" variant="default" onClick={applyRecoverySuggestion}>
                       {t('chat.recovery.useSuggestion')}
@@ -2342,30 +2591,54 @@ function AgentPanel({
                         ? t('chat.recovery.confirmSendSuggestion')
                         : t('chat.recovery.sendSuggestion')}
                     </Button>
-                    <Button size="sm" variant="ghost" onClick={() => setVisibleRecoveryContext(null)}>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setVisibleRecoveryContext(null)}
+                    >
                       {t('chat.recovery.dismiss')}
                     </Button>
                   </div>
                 </div>
-                <div className="mt-3 rounded-xl px-3 py-2.5 text-xs leading-5 whitespace-pre-wrap"
-                style={{ border: '1px solid var(--af-border)', background: 'var(--af-surface-2)', color: 'var(--af-text-base)' }}
-              >
-                {suggestedRecoveryMessage}
-              </div>
+                <div
+                  className="mt-3 rounded-xl px-3 py-2.5 text-xs leading-5 whitespace-pre-wrap"
+                  style={{
+                    border: '1px solid var(--af-border)',
+                    background: 'var(--af-surface-2)',
+                    color: 'var(--af-text-base)',
+                  }}
+                >
+                  {suggestedRecoveryMessage}
+                </div>
                 {expandedContextPanel === 'recovery' ? (
                   <div className="mt-3 space-y-3">
-                    <div className="rounded-xl px-3 py-2.5"
-                      style={{ background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}
+                    <div
+                      className="rounded-xl px-3 py-2.5"
+                      style={{
+                        background: 'var(--af-surface-2)',
+                        boxShadow: '0 0 0 1px var(--af-card-ring)',
+                      }}
                     >
                       <div className="flex items-center justify-between gap-2 flex-wrap">
-                        <div className="text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--af-text-muted)' }}>
+                        <div
+                          className="text-[11px] font-medium uppercase tracking-[0.08em]"
+                          style={{ color: 'var(--af-text-muted)' }}
+                        >
                           {t('chat.recovery.structuredLabel')}
                         </div>
-                        <Button size="sm" variant="ghost" onClick={applyStructuredRecoverySuggestion} disabled={!structuredRecoveryMessage}>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={applyStructuredRecoverySuggestion}
+                          disabled={!structuredRecoveryMessage}
+                        >
                           {t('chat.recovery.useStructuredSuggestion')}
                         </Button>
                       </div>
-                      <div className="mt-2 text-xs leading-5 whitespace-pre-wrap break-words" style={{ color: 'var(--af-text-base)' }}>
+                      <div
+                        className="mt-2 text-xs leading-5 whitespace-pre-wrap break-words"
+                        style={{ color: 'var(--af-text-base)' }}
+                      >
                         {structuredRecoveryMessage}
                       </div>
                       {structuredRecoveryVariants.length > 0 ? (
@@ -2385,10 +2658,17 @@ function AgentPanel({
                       ) : null}
                     </div>
                     {recoveryEvidenceEntries.length > 0 ? (
-                      <div className="rounded-xl px-3 py-2.5"
-                      style={{ background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}
-                    >
-                      <div className="flex items-center gap-2 flex-wrap text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--af-text-muted)' }}>
+                      <div
+                        className="rounded-xl px-3 py-2.5"
+                        style={{
+                          background: 'var(--af-surface-2)',
+                          boxShadow: '0 0 0 1px var(--af-card-ring)',
+                        }}
+                      >
+                        <div
+                          className="flex items-center gap-2 flex-wrap text-[11px] font-medium uppercase tracking-[0.08em]"
+                          style={{ color: 'var(--af-text-muted)' }}
+                        >
                           <span>{t('chat.recovery.evidenceLabel')}</span>
                           {recoveryPatternMetas.map((meta) => (
                             <Badge key={`${meta.variant}-${meta.label}`} variant={meta.variant}>
@@ -2418,9 +2698,13 @@ function AgentPanel({
                           ? t('chat.inbox.kind.deliverable')
                           : t('chat.inbox.kind.reply')}
                       </Badge>
-                      <span className="text-sm font-medium text-cyan-100">{t('chat.hub.linkedTitle')}</span>
+                      <span className="text-sm font-medium text-cyan-100">
+                        {t('chat.hub.linkedTitle')}
+                      </span>
                       {getChannelLabel(hubFocusTarget?.channelId) ? (
-                        <span className="text-[11px] text-cyan-300/70">{getChannelLabel(hubFocusTarget?.channelId)}</span>
+                        <span className="text-[11px] text-cyan-300/70">
+                          {getChannelLabel(hubFocusTarget?.channelId)}
+                        </span>
                       ) : null}
                     </div>
                     <div className="mt-1 text-xs text-cyan-100/80 leading-5">
@@ -2428,16 +2712,29 @@ function AgentPanel({
                     </div>
                     <div className="mt-1 text-[11px]" style={{ color: 'var(--af-text-muted)' }}>
                       {focusedMessageId ? t('chat.hub.matchFound') : t('chat.hub.matchPending')}
-                </div>
-                <div className="mt-2 text-xs line-clamp-2" style={{ color: 'var(--af-text-muted)' }}>
+                    </div>
+                    <div
+                      className="mt-2 text-xs line-clamp-2"
+                      style={{ color: 'var(--af-text-muted)' }}
+                    >
                       {truncateText(hubFocusTarget?.text || t('chat.hub.contextEmpty'), 110)}
                     </div>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    <Button size="sm" variant="ghost" onClick={() => setExpandedContextPanel((current) => (current === 'hub' ? null : 'hub'))}>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() =>
+                        setExpandedContextPanel((current) => (current === 'hub' ? null : 'hub'))
+                      }
+                    >
                       {expandedContextPanel === 'hub' ? t('common.showLess') : t('common.showMore')}
                     </Button>
-                    <Button size="sm" variant="default" onClick={() => applyHubContextToInput(false)}>
+                    <Button
+                      size="sm"
+                      variant="default"
+                      onClick={() => applyHubContextToInput(false)}
+                    >
                       {t('chat.hub.quoteIntoInput')}
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => applyHubContextToInput(true)}>
@@ -2446,9 +2743,14 @@ function AgentPanel({
                   </div>
                 </div>
                 {expandedContextPanel === 'hub' ? (
-              <div className="mt-3 rounded-xl px-3 py-2.5 text-xs leading-5 whitespace-pre-wrap"
-                style={{ border: '1px solid var(--af-border)', background: 'var(--af-surface-2)', color: 'var(--af-text-base)' }}
-              >
+                  <div
+                    className="mt-3 rounded-xl px-3 py-2.5 text-xs leading-5 whitespace-pre-wrap"
+                    style={{
+                      border: '1px solid var(--af-border)',
+                      background: 'var(--af-surface-2)',
+                      color: 'var(--af-text-base)',
+                    }}
+                  >
                     {hubFocusTarget?.text || t('chat.hub.contextEmpty')}
                   </div>
                 ) : null}
@@ -2459,10 +2761,18 @@ function AgentPanel({
       </div>
 
       <div className="relative flex-1 min-h-0">
-        <div ref={scrollContainerRef} className="h-full overflow-y-auto flex flex-col gap-4 pr-1 min-h-0 pt-4">
+        <div
+          ref={scrollContainerRef}
+          className="h-full overflow-y-auto flex flex-col gap-4 pr-1 min-h-0 pt-4"
+        >
           {messages.length === 0 && (
-            <div className="rounded-2xl border border-dashed px-5 py-8 text-center text-sm mt-2"
-              style={{ borderColor: 'var(--af-border)', background: 'var(--af-surface-2)', color: 'var(--af-text-muted)' }}
+            <div
+              className="rounded-2xl border border-dashed px-5 py-8 text-center text-sm mt-2"
+              style={{
+                borderColor: 'var(--af-border)',
+                background: 'var(--af-surface-2)',
+                color: 'var(--af-text-muted)',
+              }}
             >
               {t('chat.startConversation', { name: agent.name ?? agent.agentId })}
             </div>
@@ -2528,21 +2838,21 @@ function AgentPanel({
                             ? 'rgba(251, 191, 36, 0.16)'
                             : runStatusNotice.tone === 'queued'
                               ? 'rgba(245, 158, 11, 0.16)'
-                            : runStatusNotice.tone === 'completed'
-                              ? 'rgba(74, 222, 128, 0.16)'
-                              : runStatusNotice.tone === 'running'
-                              ? 'rgba(34, 211, 238, 0.16)'
-                              : 'rgba(148, 163, 184, 0.16)',
+                              : runStatusNotice.tone === 'completed'
+                                ? 'rgba(74, 222, 128, 0.16)'
+                                : runStatusNotice.tone === 'running'
+                                  ? 'rgba(34, 211, 238, 0.16)'
+                                  : 'rgba(148, 163, 184, 0.16)',
                         color:
                           runStatusNotice.tone === 'suspended'
                             ? 'rgb(253, 224, 71)'
                             : runStatusNotice.tone === 'queued'
                               ? 'rgb(253, 230, 138)'
-                            : runStatusNotice.tone === 'completed'
-                              ? 'rgb(187, 247, 208)'
-                              : runStatusNotice.tone === 'running'
-                              ? 'rgb(165, 243, 252)'
-                              : 'rgb(226, 232, 240)',
+                              : runStatusNotice.tone === 'completed'
+                                ? 'rgb(187, 247, 208)'
+                                : runStatusNotice.tone === 'running'
+                                  ? 'rgb(165, 243, 252)'
+                                  : 'rgb(226, 232, 240)',
                       }}
                     >
                       {runStatusNotice.tone === 'running' || runStatusNotice.tone === 'queued' ? (
@@ -2553,7 +2863,9 @@ function AgentPanel({
                       ) : null}
                       {runStatusNotice.label}
                       {runStatusNotice.tone === 'running' ? (
-                        <span aria-hidden="true" className="w-3 text-left animate-pulse">...</span>
+                        <span aria-hidden="true" className="w-3 text-left animate-pulse">
+                          ...
+                        </span>
                       ) : null}
                     </span>
                   ) : null}
@@ -2569,40 +2881,26 @@ function AgentPanel({
                 ) : null}
               </div>
               {resumableRunId ? (
-                <Button size="sm" variant="default" onClick={() => void resumeSuspendedRun()} disabled={busy}>
+                <Button
+                  size="sm"
+                  variant="default"
+                  onClick={() => void resumeSuspendedRun()}
+                  disabled={busy}
+                >
                   {t('chat.run.resume')}
                 </Button>
               ) : null}
             </div>
           </div>
         ) : null}
-        <div
-          className="relative flex items-end gap-2 rounded-[1.25rem] p-3"
-          style={{
-            background: 'var(--af-input-bg)',
-            boxShadow: '0 0 0 1px var(--af-input-ring), 0 12px 30px rgba(15,23,42,0.15)',
-          }}
-        >
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={inputPlaceholder}
-            rows={2}
-            disabled={busy}
-            className="flex-1 bg-transparent text-sm resize-none focus:outline-none min-h-10"
-            style={{ color: 'var(--af-text-base)' }}
-          />
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => void sendMessage()}
-            disabled={busy || !input.trim()}
-          >
-            {busy ? '…' : t('chat.send')}
-          </Button>
-        </div>
+        <ChatComposer
+          ref={composerRef}
+          busy={busy}
+          inputPlaceholder={inputPlaceholder}
+          inputRef={inputRef}
+          onSend={(value) => void sendMessage(value)}
+          sendLabel={t('chat.send')}
+        />
       </div>
     </div>
   );
@@ -2637,12 +2935,18 @@ export function ChatTab({
   const [hubWindowFilter, setHubWindowFilter] = useState<'all' | '1h' | '24h' | '7d'>('all');
   const [hubChannelFilter, setHubChannelFilter] = useState<string>('all');
   const [deliverableId, setDeliverableId] = useState<string | null>(null);
-  const [seenInboxEventIds, setSeenInboxEventIds] = useState<number[]>(() => readStoredNumberArray(HUB_SEEN_EVENT_IDS_STORAGE_KEY));
-  const [processedHubThreadKeys, setProcessedHubThreadKeys] = useState<string[]>(() => readStoredStringArray(HUB_PROCESSED_THREAD_KEYS_STORAGE_KEY));
+  const [seenInboxEventIds, setSeenInboxEventIds] = useState<number[]>(() =>
+    readStoredNumberArray(HUB_SEEN_EVENT_IDS_STORAGE_KEY),
+  );
+  const [processedHubThreadKeys, setProcessedHubThreadKeys] = useState<string[]>(() =>
+    readStoredStringArray(HUB_PROCESSED_THREAD_KEYS_STORAGE_KEY),
+  );
   const [showProcessedThreads, setShowProcessedThreads] = useState(false);
 
   const { agents, refetch } = useAgentsWithActivity();
-  const { data: channelResult } = useQuery<ChannelListResult>(() => rpc<ChannelListResult>('channel.list'));
+  const { data: channelResult } = useQuery<ChannelListResult>(() =>
+    rpc<ChannelListResult>('channel.list'),
+  );
   const channelNameById = useMemo(
     () =>
       Object.fromEntries(
@@ -2663,11 +2967,18 @@ export function ChatTab({
   const processedHubThreadKeySet = new Set(processedHubThreadKeys);
   const hubThreads: HubThreadView[] = buildHubThreads(inboxEvents).map((thread) => ({
     ...thread,
-    unreadCount: thread.events.reduce((count, event) => count + (seenInboxEventIdSet.has(event.id) ? 0 : 1), 0),
+    unreadCount: thread.events.reduce(
+      (count, event) => count + (seenInboxEventIdSet.has(event.id) ? 0 : 1),
+      0,
+    ),
     isProcessed: processedHubThreadKeySet.has(thread.key),
   }));
   const hubChannels = Array.from(
-    new Set(inboxEvents.map((event) => event.channelId).filter((value): value is string => Boolean(value))),
+    new Set(
+      inboxEvents
+        .map((event) => event.channelId)
+        .filter((value): value is string => Boolean(value)),
+    ),
   ).sort((left, right) => {
     const leftLabel = getChannelLabel(left) ?? left;
     const rightLabel = getChannelLabel(right) ?? right;
@@ -2691,16 +3002,15 @@ export function ChatTab({
     ) {
       return false;
     }
-    if (hubChannelFilter !== 'all' && !thread.events.some((event) => event.channelId === hubChannelFilter)) {
+    if (
+      hubChannelFilter !== 'all' &&
+      !thread.events.some((event) => event.channelId === hubChannelFilter)
+    ) {
       return false;
     }
     if (hubWindowFilter !== 'all') {
       const maxAgeMs =
-        hubWindowFilter === '1h'
-          ? 3_600_000
-          : hubWindowFilter === '24h'
-          ? 86_400_000
-          : 604_800_000;
+        hubWindowFilter === '1h' ? 3_600_000 : hubWindowFilter === '24h' ? 86_400_000 : 604_800_000;
       if (Date.now() - thread.latestTs > maxAgeMs) {
         return false;
       }
@@ -2723,8 +3033,12 @@ export function ChatTab({
     return haystacks.some((value) => value.toLocaleLowerCase().includes(normalizedHubQuery));
   });
   const selectedHubThread =
-    filteredHubThreads.find((thread) => thread.key === selectedHubKey) ?? filteredHubThreads[0] ?? null;
-  const unreadHubThreadCount = hubThreads.filter((thread) => thread.unreadCount > 0 && !thread.isProcessed).length;
+    filteredHubThreads.find((thread) => thread.key === selectedHubKey) ??
+    filteredHubThreads[0] ??
+    null;
+  const unreadHubThreadCount = hubThreads.filter(
+    (thread) => thread.unreadCount > 0 && !thread.isProcessed,
+  ).length;
   const processedHubThreadCount = hubThreads.filter((thread) => thread.isProcessed).length;
 
   const markThreadSeen = (thread: HubThreadView | null) => {
@@ -2739,7 +3053,9 @@ export function ChatTab({
 
   const toggleThreadProcessed = (threadKey: string) => {
     setProcessedHubThreadKeys((current) =>
-      current.includes(threadKey) ? current.filter((key) => key !== threadKey) : [...current, threadKey],
+      current.includes(threadKey)
+        ? current.filter((key) => key !== threadKey)
+        : [...current, threadKey],
     );
   };
 
@@ -2754,7 +3070,9 @@ export function ChatTab({
     hubQuery.trim().length > 0;
   const activeHubContextHint = useMemo<HubContextHint | null>(() => {
     const threadMatchesSelection = Boolean(
-      selectedHubThread?.threadKey && selectedThreadKey && selectedHubThread.threadKey === selectedThreadKey,
+      selectedHubThread?.threadKey &&
+        selectedThreadKey &&
+        selectedHubThread.threadKey === selectedThreadKey,
     );
     const focusMatchesSelection = Boolean(
       hubFocusTarget &&
@@ -2779,11 +3097,13 @@ export function ChatTab({
           ? t('chat.inbox.filter.deliverable')
           : '',
       hubAgentFilter !== 'all' ? getAgentLabel(hubAgentFilter, agents) : '',
-      hubChannelFilter !== 'all' ? getChannelLabel(hubChannelFilter) ?? hubChannelFilter : '',
+      hubChannelFilter !== 'all' ? (getChannelLabel(hubChannelFilter) ?? hubChannelFilter) : '',
       hubWindowLabel,
       hubQuery.trim(),
     ].filter(Boolean);
-    const updatedMeta = selectedHubThread?.latestTs ? t('chat.threadSummary.updated', { time: timeAgo(selectedHubThread.latestTs) }) : '';
+    const updatedMeta = selectedHubThread?.latestTs
+      ? t('chat.threadSummary.updated', { time: timeAgo(selectedHubThread.latestTs) })
+      : '';
     return {
       label: t('chat.context.fromHub'),
       title:
@@ -2796,7 +3116,8 @@ export function ChatTab({
         t('chat.context.fromHubHint'),
       meta: [
         updatedMeta,
-        getChannelLabel(selectedHubThread?.latestEvent.channelId ?? hubFocusTarget?.channelId) ?? '',
+        getChannelLabel(selectedHubThread?.latestEvent.channelId ?? hubFocusTarget?.channelId) ??
+          '',
         ...(selectedHubThread?.threadKey ? [selectedHubThread.threadKey] : []),
         ...filterMeta,
       ].filter(Boolean),
@@ -2858,7 +3179,10 @@ export function ChatTab({
   }, [seenInboxEventIds]);
 
   useEffect(() => {
-    window.localStorage.setItem(HUB_PROCESSED_THREAD_KEYS_STORAGE_KEY, JSON.stringify(processedHubThreadKeys));
+    window.localStorage.setItem(
+      HUB_PROCESSED_THREAD_KEYS_STORAGE_KEY,
+      JSON.stringify(processedHubThreadKeys),
+    );
   }, [processedHubThreadKeys]);
 
   useEffect(() => {
@@ -2892,7 +3216,9 @@ export function ChatTab({
       });
       return;
     }
-    setSeenInboxEventIds((current) => (current.includes(event.id) ? current : [...current, event.id]));
+    setSeenInboxEventIds((current) =>
+      current.includes(event.id) ? current : [...current, event.id],
+    );
     setHubFocusTarget({
       eventId: event.id,
       agentId: event.agentId,
@@ -2914,7 +3240,11 @@ export function ChatTab({
     return (
       <div
         className="flex h-[calc(100vh-4rem)] min-h-0 flex-col rounded-[1.75rem]"
-        style={{ border: '1px solid var(--af-card-ring)', background: 'var(--af-card-bg)', boxShadow: '0 24px 80px rgba(8,47,73,0.18)' }}
+        style={{
+          border: '1px solid var(--af-card-ring)',
+          background: 'var(--af-card-bg)',
+          boxShadow: '0 24px 80px rgba(8,47,73,0.18)',
+        }}
       >
         <HubWorkspaceContent
           agents={agents}
@@ -2948,7 +3278,9 @@ export function ChatTab({
           setSeenInboxEventIds={setSeenInboxEventIds}
           setDeliverableId={setDeliverableId}
         />
-        {deliverableId ? <DeliverableModal deliverableId={deliverableId} onClose={() => setDeliverableId(null)} /> : null}
+        {deliverableId ? (
+          <DeliverableModal deliverableId={deliverableId} onClose={() => setDeliverableId(null)} />
+        ) : null}
       </div>
     );
   }
@@ -2957,12 +3289,21 @@ export function ChatTab({
     <div className="grid h-[calc(100vh-4rem)] gap-4 xl:grid-cols-[200px_minmax(0,1fr)]">
       <div
         className="flex min-h-0 flex-col rounded-[1.75rem] p-3"
-        style={{ border: '1px solid var(--af-card-ring)', background: 'var(--af-card-bg)', boxShadow: '0 24px 80px rgba(2,6,23,0.25)' }}
+        style={{
+          border: '1px solid var(--af-card-ring)',
+          background: 'var(--af-card-bg)',
+          boxShadow: '0 24px 80px rgba(2,6,23,0.25)',
+        }}
       >
         <div className="flex items-center justify-between border-b border-white/8 pb-3 shrink-0">
           <div>
-            <h1 className="text-sm font-semibold" style={{ color: 'var(--af-text-heading)' }}>{t('chat.title')}</h1>
-            <p className="mt-1 text-[11px] uppercase tracking-[0.18em]" style={{ color: 'var(--af-text-faint)' }}>
+            <h1 className="text-sm font-semibold" style={{ color: 'var(--af-text-heading)' }}>
+              {t('chat.title')}
+            </h1>
+            <p
+              className="mt-1 text-[11px] uppercase tracking-[0.18em]"
+              style={{ color: 'var(--af-text-faint)' }}
+            >
               Agent Deck
             </p>
           </div>
@@ -2971,7 +3312,11 @@ export function ChatTab({
           </Button>
         </div>
         <div className="mt-3 flex flex-col gap-1 overflow-y-auto pr-1 min-h-0">
-          {agents.length === 0 ? <p className="text-xs pt-2" style={{ color: 'var(--af-text-muted)' }}>{t('chat.noAgents')}</p> : null}
+          {agents.length === 0 ? (
+            <p className="text-xs pt-2" style={{ color: 'var(--af-text-muted)' }}>
+              {t('chat.noAgents')}
+            </p>
+          ) : null}
           {agents.map((a) => {
             const active = a.agentId === effectiveActiveId;
             const stateBadge = chatAgentStateLabel(a.activity, t);
@@ -2981,24 +3326,34 @@ export function ChatTab({
                 key={a.agentId}
                 onClick={() => setActiveAgentId(a.agentId)}
                 className="group rounded-2xl border px-3 py-3 text-left transition-all"
-                style={active ? {
-                  borderColor: 'var(--af-accent-soft)',
-                  background: 'var(--af-accent-soft)',
-                  color: 'var(--af-accent-text)',
-                } : {
-                  borderColor: 'var(--af-card-ring)',
-                  background: 'var(--af-card-bg)',
-                  color: 'var(--af-text-muted)',
-                }}
+                style={
+                  active
+                    ? {
+                        borderColor: 'var(--af-accent-soft)',
+                        background: 'var(--af-accent-soft)',
+                        color: 'var(--af-accent-text)',
+                      }
+                    : {
+                        borderColor: 'var(--af-card-ring)',
+                        background: 'var(--af-card-bg)',
+                        color: 'var(--af-text-muted)',
+                      }
+                }
               >
                 <div className="text-xs font-semibold truncate">{a.name ?? a.agentId}</div>
-                <div className="mt-1 text-[10px] font-mono truncate" style={{ color: 'var(--af-text-faint)' }}>
+                <div
+                  className="mt-1 text-[10px] font-mono truncate"
+                  style={{ color: 'var(--af-text-faint)' }}
+                >
                   {a.agentId}
                 </div>
                 <div className="mt-2 flex items-center gap-1.5 flex-wrap">
                   <Badge variant={stateBadge.variant}>{stateBadge.text}</Badge>
                   {a.activity?.activeRun?.threadKey ? (
-                    <span className="text-[10px] truncate max-w-full" style={{ color: 'var(--af-text-faint)' }}>
+                    <span
+                      className="text-[10px] truncate max-w-full"
+                      style={{ color: 'var(--af-text-faint)' }}
+                    >
                       #{a.activity.activeRun.threadKey}
                     </span>
                   ) : null}
@@ -3029,24 +3384,36 @@ export function ChatTab({
 
       <div
         className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[1.75rem] p-3"
-        style={{ border: '1px solid var(--af-card-ring)', background: 'var(--af-card-bg)', boxShadow: '0 24px 80px rgba(2,6,23,0.2)' }}
+        style={{
+          border: '1px solid var(--af-card-ring)',
+          background: 'var(--af-card-bg)',
+          boxShadow: '0 24px 80px rgba(2,6,23,0.2)',
+        }}
       >
         <div
           className="mb-3 flex items-center justify-between gap-3 rounded-2xl px-4 py-3"
           style={{ border: '1px solid var(--af-card-ring)', background: 'var(--af-surface-2)' }}
         >
           <div>
-            <div className="text-[11px] uppercase tracking-[0.18em]" style={{ color: 'var(--af-accent)' }}>
+            <div
+              className="text-[11px] uppercase tracking-[0.18em]"
+              style={{ color: 'var(--af-accent)' }}
+            >
               {t('chat.inbox.title')}
             </div>
-            <div className="mt-1 text-xs" style={{ color: 'var(--af-text-muted)' }}>{t('chat.hub.mobileHint')}</div>
+            <div className="mt-1 text-xs" style={{ color: 'var(--af-text-muted)' }}>
+              {t('chat.hub.mobileHint')}
+            </div>
           </div>
           <Button size="sm" variant="default" onClick={() => onOpenInbox?.()}>
             {t('chat.hub.openWorkspace')}
           </Button>
         </div>
         {agents.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-sm" style={{ color: 'var(--af-text-muted)' }}>
+          <div
+            className="flex h-full items-center justify-center text-sm"
+            style={{ color: 'var(--af-text-muted)' }}
+          >
             {t('chat.noAgentsAvailable')}
           </div>
         ) : (
@@ -3068,7 +3435,9 @@ export function ChatTab({
                     : null
                 }
                 recoveryContext={
-                  initialRecoveryContext?.agentId === activeAgent.agentId ? initialRecoveryContext : null
+                  initialRecoveryContext?.agentId === activeAgent.agentId
+                    ? initialRecoveryContext
+                    : null
                 }
                 hubContextHint={activeHubContextHint}
                 getChannelLabel={getChannelLabel}
@@ -3078,12 +3447,16 @@ export function ChatTab({
         )}
       </div>
 
-      {deliverableId ? <DeliverableModal deliverableId={deliverableId} onClose={() => setDeliverableId(null)} /> : null}
+      {deliverableId ? (
+        <DeliverableModal deliverableId={deliverableId} onClose={() => setDeliverableId(null)} />
+      ) : null}
     </div>
   );
 }
 
-export function InboxTab({ onOpenChat }: { onOpenChat?: (options: { agentId?: string; threadKey?: string }) => void }) {
+export function InboxTab({
+  onOpenChat,
+}: { onOpenChat?: (options: { agentId?: string; threadKey?: string }) => void }) {
   return <ChatTab mode="inbox" onOpenChatFromInbox={onOpenChat} />;
 }
 
@@ -3091,7 +3464,10 @@ function ThinkingBubble({ msg }: { msg: Message }) {
   const { t } = useLocale();
   const [open, setOpen] = useState(false);
   return (
-    <div className="rounded-lg overflow-hidden" style={{ background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}>
+    <div
+      className="rounded-lg overflow-hidden"
+      style={{ background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}
+    >
       <button
         onClick={() => setOpen((v) => !v)}
         className="w-full flex items-center gap-2 px-3 py-2 transition-colors text-xs"
@@ -3107,7 +3483,10 @@ function ThinkingBubble({ msg }: { msg: Message }) {
         </span>
       </button>
       {open && (
-        <pre className="px-3 pb-3 whitespace-pre-wrap font-mono text-[11px]" style={{ borderTop: '1px solid var(--af-border)', color: 'var(--af-text-muted)' }}>
+        <pre
+          className="px-3 pb-3 whitespace-pre-wrap font-mono text-[11px]"
+          style={{ borderTop: '1px solid var(--af-border)', color: 'var(--af-text-muted)' }}
+        >
           {msg.content}
         </pre>
       )}
@@ -3122,10 +3501,16 @@ function ToolCallList({ tools }: { tools: ToolCall[] }) {
         <div
           key={tool.id}
           className="flex items-center gap-2 text-[11px] rounded-lg px-3 py-1.5"
-          style={{ background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}>
+          style={{ background: 'var(--af-surface-2)', boxShadow: '0 0 0 1px var(--af-card-ring)' }}
+        >
           <span className="text-amber-400 font-mono font-semibold">{tool.name}</span>
           {tool.input && (
-            <span className="truncate max-w-[260px] font-mono" style={{ color: 'var(--af-text-faint)' }}>{tool.input}</span>
+            <span
+              className="truncate max-w-[260px] font-mono"
+              style={{ color: 'var(--af-text-faint)' }}
+            >
+              {tool.input}
+            </span>
           )}
         </div>
       ))}
@@ -3152,14 +3537,15 @@ function CollapsibleTextBlock({
     tone === 'error'
       ? 'bg-red-950/30 ring-red-500/30 text-red-200'
       : tone === 'success'
-      ? 'bg-emerald-950/20 ring-emerald-500/20 text-emerald-100'
-      : 'bg-white/[0.03] ring-white/[0.05]';
+        ? 'bg-emerald-950/20 ring-emerald-500/20 text-emerald-100'
+        : 'bg-white/[0.03] ring-white/[0.05]';
 
-  const textStyle = tone === 'error'
-    ? undefined
-    : tone === 'success'
-    ? undefined
-    : { color: 'var(--af-text-muted)' };
+  const textStyle =
+    tone === 'error'
+      ? undefined
+      : tone === 'success'
+        ? undefined
+        : { color: 'var(--af-text-muted)' };
 
   return (
     <div className={`rounded-md px-2.5 py-2 ring-1 ${toneClass}`} style={textStyle}>
@@ -3167,7 +3553,12 @@ function CollapsibleTextBlock({
       {normalizedText ? (
         <div className="mt-2 flex items-center justify-end gap-2">
           {canExpand ? (
-            <Button size="sm" variant="ghost" className="!px-2 !py-1 text-[10px]" onClick={() => setExpanded((value) => !value)}>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="!px-2 !py-1 text-[10px]"
+              onClick={() => setExpanded((value) => !value)}
+            >
               {expanded ? t('common.showLess') : t('common.showMore')}
             </Button>
           ) : null}
@@ -3181,7 +3572,12 @@ function CollapsibleTextBlock({
 function RecoveryEvidenceCard({ entry }: { entry: RecoveryEvidenceEntry }) {
   return (
     <div className="rounded-md px-2.5 py-2" style={{ background: 'var(--af-surface-2)' }}>
-      <div className="text-[10px] uppercase tracking-[0.08em]" style={{ color: 'var(--af-text-muted)' }}>{entry.label}</div>
+      <div
+        className="text-[10px] uppercase tracking-[0.08em]"
+        style={{ color: 'var(--af-text-muted)' }}
+      >
+        {entry.label}
+      </div>
       <div className="mt-1">
         <CollapsibleTextBlock text={entry.fullValue ?? entry.value} tone={entry.tone} />
       </div>
@@ -3234,14 +3630,20 @@ function HubConversationBubble({
           <div className="flex items-center gap-2 flex-wrap">
             <span
               className={`flex h-7 w-7 items-center justify-center rounded-full text-[10px] font-semibold uppercase ${
-                isDeliverable ? 'bg-fuchsia-200/15 text-fuchsia-100' : 'bg-cyan-200/15 text-cyan-100'
+                isDeliverable
+                  ? 'bg-fuchsia-200/15 text-fuchsia-100'
+                  : 'bg-cyan-200/15 text-cyan-100'
               }`}
             >
               {(agentLabel || t('chat.inbox.system')).slice(0, 1)}
             </span>
             <div className="flex flex-col">
-              <span className="text-[11px] font-medium" style={{ color: 'var(--af-text-heading)' }}>{agentLabel}</span>
-              <span className="text-[10px]" style={{ color: 'var(--af-text-faint)' }}>{new Date(event.ts).toLocaleTimeString()}</span>
+              <span className="text-[11px] font-medium" style={{ color: 'var(--af-text-heading)' }}>
+                {agentLabel}
+              </span>
+              <span className="text-[10px]" style={{ color: 'var(--af-text-faint)' }}>
+                {new Date(event.ts).toLocaleTimeString()}
+              </span>
             </div>
             <Badge variant={isDeliverable ? 'purple' : 'blue'}>
               {isDeliverable ? t('chat.inbox.kind.deliverable') : t('chat.inbox.kind.reply')}
@@ -3249,21 +3651,43 @@ function HubConversationBubble({
             {!seen ? <Badge variant="blue">{t('chat.hub.unreadShort', { count: 1 })}</Badge> : null}
           </div>
         </div>
-        <div className="mt-3 text-sm font-medium" style={{ color: 'var(--af-text-heading)' }}>{event.title}</div>
-        <div className="mt-2 whitespace-pre-wrap text-xs leading-6" style={{ color: 'var(--af-text-base)' }}>{event.text}</div>
-        <div className="mt-3 flex flex-wrap gap-2 text-[10px]" style={{ color: 'var(--af-text-faint)' }}>
-          {getChannelLabel(event.channelId) ? <span>{getChannelLabel(event.channelId)}</span> : null}
+        <div className="mt-3 text-sm font-medium" style={{ color: 'var(--af-text-heading)' }}>
+          {event.title}
+        </div>
+        <div
+          className="mt-2 whitespace-pre-wrap text-xs leading-6"
+          style={{ color: 'var(--af-text-base)' }}
+        >
+          {event.text}
+        </div>
+        <div
+          className="mt-3 flex flex-wrap gap-2 text-[10px]"
+          style={{ color: 'var(--af-text-faint)' }}
+        >
+          {getChannelLabel(event.channelId) ? (
+            <span>{getChannelLabel(event.channelId)}</span>
+          ) : null}
           {event.publicationSummary ? <span>{event.publicationSummary}</span> : null}
           {event.threadKey ? <span>{event.threadKey}</span> : null}
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
           {event.threadKey ? (
-            <Button size="sm" variant="ghost" className="!px-2 !py-1 text-[10px]" onClick={onOpenThread}>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="!px-2 !py-1 text-[10px]"
+              onClick={onOpenThread}
+            >
               {t('chat.inbox.openThread')}
             </Button>
           ) : null}
           {onOpenDeliverable ? (
-            <Button size="sm" variant="ghost" className="!px-2 !py-1 text-[10px]" onClick={onOpenDeliverable}>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="!px-2 !py-1 text-[10px]"
+              onClick={onOpenDeliverable}
+            >
               {t('deliverables.open')}
             </Button>
           ) : null}
@@ -3340,18 +3764,34 @@ function HubWorkspaceContent({
 
   return (
     <>
-      <div className="relative px-4 py-4 shrink-0" style={{ borderBottom: '1px solid var(--af-border)' }}>
+      <div
+        className="relative px-4 py-4 shrink-0"
+        style={{ borderBottom: '1px solid var(--af-border)' }}
+      >
         <div className="flex items-start justify-between gap-3">
           <div>
-            <div className="text-[11px] uppercase tracking-[0.22em]" style={{ color: 'var(--af-accent)' }}>
+            <div
+              className="text-[11px] uppercase tracking-[0.22em]"
+              style={{ color: 'var(--af-accent)' }}
+            >
               {t('chat.inbox.title')}
             </div>
-            <div className="mt-1 text-sm font-semibold" style={{ color: 'var(--af-text-heading)' }}>{t('chat.hub.sidebarTitle')}</div>
-            <div className="mt-1 text-xs leading-5" style={{ color: 'var(--af-text-muted)' }}>{t('chat.hub.sidebarSubtitle')}</div>
+            <div className="mt-1 text-sm font-semibold" style={{ color: 'var(--af-text-heading)' }}>
+              {t('chat.hub.sidebarTitle')}
+            </div>
+            <div className="mt-1 text-xs leading-5" style={{ color: 'var(--af-text-muted)' }}>
+              {t('chat.hub.sidebarSubtitle')}
+            </div>
           </div>
           <div className="flex items-center gap-2">
-            {unreadHubThreadCount > 0 ? <Badge variant="blue">{t('chat.hub.unread', { count: unreadHubThreadCount })}</Badge> : null}
-            {processedHubThreadCount > 0 ? <Badge variant="gray">{t('chat.hub.processed', { count: processedHubThreadCount })}</Badge> : null}
+            {unreadHubThreadCount > 0 ? (
+              <Badge variant="blue">{t('chat.hub.unread', { count: unreadHubThreadCount })}</Badge>
+            ) : null}
+            {processedHubThreadCount > 0 ? (
+              <Badge variant="gray">
+                {t('chat.hub.processed', { count: processedHubThreadCount })}
+              </Badge>
+            ) : null}
           </div>
         </div>
         <div className="mt-4 grid gap-2">
@@ -3360,14 +3800,24 @@ function HubWorkspaceContent({
             onChange={(event) => setHubQuery(event.target.value)}
             placeholder={t('chat.inbox.searchPlaceholder')}
             className="rounded-xl px-3 py-2.5 text-sm focus:outline-none"
-            style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
+            style={{
+              background: 'var(--af-input-bg)',
+              boxShadow: '0 0 0 1px var(--af-input-ring)',
+              color: 'var(--af-text-base)',
+            }}
           />
           <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
             <select
               value={hubKindFilter}
-              onChange={(event) => setHubKindFilter(event.target.value as 'all' | 'reply' | 'deliverable')}
+              onChange={(event) =>
+                setHubKindFilter(event.target.value as 'all' | 'reply' | 'deliverable')
+              }
               className="rounded-xl px-3 py-2.5 text-sm focus:outline-none"
-              style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
+              style={{
+                background: 'var(--af-input-bg)',
+                boxShadow: '0 0 0 1px var(--af-input-ring)',
+                color: 'var(--af-text-base)',
+              }}
             >
               <option value="all">{t('chat.inbox.filter.all')}</option>
               <option value="reply">{t('chat.inbox.filter.reply')}</option>
@@ -3377,7 +3827,11 @@ function HubWorkspaceContent({
               value={hubAgentFilter}
               onChange={(event) => setHubAgentFilter(event.target.value)}
               className="rounded-xl px-3 py-2.5 text-sm focus:outline-none"
-              style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
+              style={{
+                background: 'var(--af-input-bg)',
+                boxShadow: '0 0 0 1px var(--af-input-ring)',
+                color: 'var(--af-text-base)',
+              }}
             >
               <option value="all">{t('chat.inbox.filter.allAgents')}</option>
               {agents.map((agent) => (
@@ -3388,9 +3842,15 @@ function HubWorkspaceContent({
             </select>
             <select
               value={hubWindowFilter}
-              onChange={(event) => setHubWindowFilter(event.target.value as 'all' | '1h' | '24h' | '7d')}
+              onChange={(event) =>
+                setHubWindowFilter(event.target.value as 'all' | '1h' | '24h' | '7d')
+              }
               className="rounded-xl px-3 py-2.5 text-sm focus:outline-none"
-              style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}
+              style={{
+                background: 'var(--af-input-bg)',
+                boxShadow: '0 0 0 1px var(--af-input-ring)',
+                color: 'var(--af-text-base)',
+              }}
             >
               <option value="all">{t('chat.inbox.window.all')}</option>
               <option value="1h">{t('chat.inbox.window.1h')}</option>
@@ -3401,7 +3861,11 @@ function HubWorkspaceContent({
               value={hubChannelFilter}
               onChange={(event) => setHubChannelFilter(event.target.value)}
               className="rounded-xl px-3 py-2.5 text-sm focus:outline-none"
-              style={{ background: 'var(--af-input-bg)', boxShadow: '0 0 0 1px var(--af-input-ring)', color: 'var(--af-text-base)' }}  
+              style={{
+                background: 'var(--af-input-bg)',
+                boxShadow: '0 0 0 1px var(--af-input-ring)',
+                color: 'var(--af-text-base)',
+              }}
             >
               <option value="all">{t('chat.inbox.filter.allChannels')}</option>
               {hubChannels.map((channelId) => (
@@ -3413,10 +3877,18 @@ function HubWorkspaceContent({
           </div>
           <div
             className="flex items-center justify-between gap-2 rounded-xl px-3 py-2 text-xs"
-            style={{ border: '1px solid var(--af-border)', background: 'var(--af-surface-2)', color: 'var(--af-text-muted)' }}
+            style={{
+              border: '1px solid var(--af-border)',
+              background: 'var(--af-surface-2)',
+              color: 'var(--af-text-muted)',
+            }}
           >
             <span>{t('chat.hub.threadListTitle')}</span>
-            <Button size="sm" variant="ghost" onClick={() => setShowProcessedThreads(!showProcessedThreads)}>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setShowProcessedThreads(!showProcessedThreads)}
+            >
               {showProcessedThreads ? t('chat.hub.hideProcessed') : t('chat.hub.showProcessed')}
             </Button>
           </div>
@@ -3439,7 +3911,11 @@ function HubWorkspaceContent({
             {filteredHubThreads.length === 0 ? (
               <div
                 className="rounded-xl border border-dashed px-3 py-4 text-xs"
-                style={{ borderColor: 'var(--af-border)', background: 'var(--af-surface-2)', color: 'var(--af-text-muted)' }}
+                style={{
+                  borderColor: 'var(--af-border)',
+                  background: 'var(--af-surface-2)',
+                  color: 'var(--af-text-muted)',
+                }}
               >
                 {hubThreads.length === 0 ? t('chat.inbox.empty') : t('chat.inbox.emptyFiltered')}
               </div>
@@ -3473,50 +3949,89 @@ function HubWorkspaceContent({
                         setSelectedThreadKey(thread.threadKey);
                       }
                     }}
-                  className={`w-full rounded-[1.35rem] border px-3 py-3 text-left transition-all ${
+                    className={`w-full rounded-[1.35rem] border px-3 py-3 text-left transition-all ${
                       isActive
                         ? 'border-cyan-300/35 bg-cyan-400/10 shadow-[0_12px_30px_rgba(34,211,238,0.08)]'
                         : 'border-white/8 hover:border-white/14'
                     }`}
-                  style={!isActive ? { background: thread.isProcessed ? 'var(--af-surface-2)' : 'var(--af-card-bg)' } : undefined}
+                    style={
+                      !isActive
+                        ? {
+                            background: thread.isProcessed
+                              ? 'var(--af-surface-2)'
+                              : 'var(--af-card-bg)',
+                          }
+                        : undefined
+                    }
                   >
                     <div className="flex items-start gap-3">
-                      <div className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${isActive ? 'bg-cyan-300/18 text-cyan-100' : 'bg-white/6'}`}
-                        style={!isActive ? { color: 'var(--af-text-heading)' } : undefined}>
+                      <div
+                        className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${isActive ? 'bg-cyan-300/18 text-cyan-100' : 'bg-white/6'}`}
+                        style={!isActive ? { color: 'var(--af-text-heading)' } : undefined}
+                      >
                         {participantSummary.slice(0, 1)}
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center justify-between gap-2">
-                      <div className={`truncate text-sm font-medium`} style={{ color: thread.isProcessed ? 'var(--af-text-faint)' : 'var(--af-text-heading)' }}>
+                          <div
+                            className={`truncate text-sm font-medium`}
+                            style={{
+                              color: thread.isProcessed
+                                ? 'var(--af-text-faint)'
+                                : 'var(--af-text-heading)',
+                            }}
+                          >
                             {thread.title || t('chat.inbox.threadFallback')}
                           </div>
-                          <span className="shrink-0 text-[10px]" style={{ color: 'var(--af-text-faint)' }}>{timeAgo(thread.latestTs)}</span>
+                          <span
+                            className="shrink-0 text-[10px]"
+                            style={{ color: 'var(--af-text-faint)' }}
+                          >
+                            {timeAgo(thread.latestTs)}
+                          </span>
                         </div>
-                        <div className={`mt-1 line-clamp-2 text-xs leading-5`} style={{ color: thread.isProcessed ? 'var(--af-text-faint)' : 'var(--af-text-muted)' }}>
+                        <div
+                          className={`mt-1 line-clamp-2 text-xs leading-5`}
+                          style={{
+                            color: thread.isProcessed
+                              ? 'var(--af-text-faint)'
+                              : 'var(--af-text-muted)',
+                          }}
+                        >
                           {thread.preview}
                         </div>
-                        <div className="mt-2 flex items-center gap-2 flex-wrap text-[10px]" style={{ color: 'var(--af-text-faint)' }}>
+                        <div
+                          className="mt-2 flex items-center gap-2 flex-wrap text-[10px]"
+                          style={{ color: 'var(--af-text-faint)' }}
+                        >
                           <span className="truncate max-w-[150px]">{participantSummary}</span>
                           {thread.unreadCount > 0 ? (
                             <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-cyan-400/20 px-1.5 text-[10px] text-cyan-100">
                               {thread.unreadCount}
                             </span>
                           ) : null}
-                          {thread.isProcessed ? <Badge variant="gray">{t('chat.hub.processedShort')}</Badge> : null}
+                          {thread.isProcessed ? (
+                            <Badge variant="gray">{t('chat.hub.processedShort')}</Badge>
+                          ) : null}
                         </div>
                       </div>
                     </div>
-                    <div className="mt-2 flex flex-wrap gap-2 pl-[3.25rem] text-[10px]" style={{ color: 'var(--af-text-faint)' }}>
+                    <div
+                      className="mt-2 flex flex-wrap gap-2 pl-[3.25rem] text-[10px]"
+                      style={{ color: 'var(--af-text-faint)' }}
+                    >
                       <Badge variant={thread.deliverableCount > 0 ? 'purple' : 'green'}>
                         {thread.deliverableCount > 0 && thread.replyCount > 0
                           ? `${thread.replyCount}+${thread.deliverableCount}`
                           : thread.deliverableCount > 0
-                          ? t('chat.inbox.kind.deliverable')
-                          : t('chat.inbox.kind.reply')}
+                            ? t('chat.inbox.kind.deliverable')
+                            : t('chat.inbox.kind.reply')}
                       </Badge>
                       <span>{t('chat.inbox.events', { count: thread.events.length })}</span>
                       {getChannelLabel(thread.latestEvent.channelId) ? (
-                        <span className="truncate max-w-[180px]">{getChannelLabel(thread.latestEvent.channelId)}</span>
+                        <span className="truncate max-w-[180px]">
+                          {getChannelLabel(thread.latestEvent.channelId)}
+                        </span>
                       ) : null}
                       {thread.threadKey ? <span>{thread.threadKey}</span> : null}
                     </div>
@@ -3535,28 +4050,47 @@ function HubWorkspaceContent({
             <>
               <div
                 className="shrink-0 px-4 py-3"
-                style={{ borderBottom: '1px solid var(--af-border)', background: 'var(--af-surface-2)' }}
+                style={{
+                  borderBottom: '1px solid var(--af-border)',
+                  background: 'var(--af-surface-2)',
+                }}
               >
                 <div className="flex items-start justify-between gap-3">
                   <ThreadHeaderSummary
                     eyebrow={t('chat.inbox.activityTitle')}
-                    title={selectedHubThread.title || truncateText(selectedHubThread.preview, 96) || t('chat.inbox.threadFallback')}
+                    title={
+                      selectedHubThread.title ||
+                      truncateText(selectedHubThread.preview, 96) ||
+                      t('chat.inbox.threadFallback')
+                    }
                     subtitle={
                       selectedHubThread.agentIds.length > 0
-                        ? selectedHubThread.agentIds.map((agentId) => getAgentLabel(agentId, agents)).join(' · ')
+                        ? selectedHubThread.agentIds
+                            .map((agentId) => getAgentLabel(agentId, agents))
+                            .join(' · ')
                         : t('chat.inbox.system')
                     }
                     meta={[
-                      t('chat.threadSummary.updated', { time: timeAgo(selectedHubThread.latestTs) }),
+                      t('chat.threadSummary.updated', {
+                        time: timeAgo(selectedHubThread.latestTs),
+                      }),
                       selectedHubThread.threadKey ?? '',
                       getChannelLabel(selectedHubThread.latestEvent.channelId) ?? '',
                     ]}
                   />
                   <div className="flex flex-wrap justify-end gap-2">
-                    <Badge variant="green">{t('chat.inbox.replyCount', { count: selectedHubThread.replyCount })}</Badge>
-                    <Badge variant="purple">{t('chat.inbox.deliverableCount', { count: selectedHubThread.deliverableCount })}</Badge>
+                    <Badge variant="green">
+                      {t('chat.inbox.replyCount', { count: selectedHubThread.replyCount })}
+                    </Badge>
+                    <Badge variant="purple">
+                      {t('chat.inbox.deliverableCount', {
+                        count: selectedHubThread.deliverableCount,
+                      })}
+                    </Badge>
                     {selectedHubThread.unreadCount > 0 ? (
-                      <Badge variant="blue">{t('chat.hub.unreadShort', { count: selectedHubThread.unreadCount })}</Badge>
+                      <Badge variant="blue">
+                        {t('chat.hub.unreadShort', { count: selectedHubThread.unreadCount })}
+                      </Badge>
                     ) : null}
                   </div>
                 </div>
@@ -3566,7 +4100,9 @@ function HubWorkspaceContent({
                     variant={selectedHubThread.isProcessed ? 'default' : 'ghost'}
                     onClick={() => toggleThreadProcessed(selectedHubThread.key)}
                   >
-                    {selectedHubThread.isProcessed ? t('chat.hub.reopenThread') : t('chat.hub.markProcessed')}
+                    {selectedHubThread.isProcessed
+                      ? t('chat.hub.reopenThread')
+                      : t('chat.hub.markProcessed')}
                   </Button>
                 </div>
               </div>
@@ -3589,7 +4125,9 @@ function HubWorkspaceContent({
                             onOpenThreadFromEvent(event, selectedHubThread.key);
                             return;
                           }
-                          setSeenInboxEventIds((current) => (current.includes(event.id) ? current : [...current, event.id]));
+                          setSeenInboxEventIds((current) =>
+                            current.includes(event.id) ? current : [...current, event.id],
+                          );
                           setHubFocusTarget({
                             eventId: event.id,
                             agentId: event.agentId,
@@ -3607,7 +4145,9 @@ function HubWorkspaceContent({
                           setSelectedHubKey(selectedHubThread.key);
                         }}
                         onOpenDeliverable={
-                          event.deliverableId ? () => setDeliverableId(event.deliverableId ?? null) : undefined
+                          event.deliverableId
+                            ? () => setDeliverableId(event.deliverableId ?? null)
+                            : undefined
                         }
                       />
                     );
@@ -3616,7 +4156,10 @@ function HubWorkspaceContent({
               </div>
             </>
           ) : (
-            <div className="m-3 rounded-xl border border-dashed px-3 py-4 text-xs" style={{ borderColor: 'var(--af-border)', color: 'var(--af-text-muted)' }}>
+            <div
+              className="m-3 rounded-xl border border-dashed px-3 py-4 text-xs"
+              style={{ borderColor: 'var(--af-border)', color: 'var(--af-text-muted)' }}
+            >
               {hubThreads.length === 0 ? t('chat.inbox.empty') : t('chat.inbox.emptyFiltered')}
             </div>
           )}
@@ -3630,7 +4173,10 @@ function TokenBadge({ usage }: { usage: TokenUsage }) {
   const total = usage.input + usage.output;
   const cacheNote = usage.cacheRead ? ` · ${usage.cacheRead.toLocaleString()} cached` : '';
   return (
-    <div className="text-[10px] mt-1 text-right font-mono" style={{ color: 'var(--af-text-faint)' }}>
+    <div
+      className="text-[10px] mt-1 text-right font-mono"
+      style={{ color: 'var(--af-text-faint)' }}
+    >
       {usage.input.toLocaleString()}↑ {usage.output.toLocaleString()}↓ · {total.toLocaleString()}{' '}
       tokens{cacheNote}
     </div>
@@ -3656,14 +4202,16 @@ function ChatBubble({
       <div
         className={`max-w-[80%] rounded-2xl px-4 py-3 transition-all ${
           highlighted ? 'ring-2 ring-cyan-400/60 shadow-lg shadow-cyan-500/10' : ''
-        } ${
+        } ${isUser ? 'rounded-br-sm' : 'rounded-bl-sm'}`}
+        style={
           isUser
-            ? 'rounded-br-sm'
-            : 'rounded-bl-sm'
-        }`}
-        style={isUser
-          ? { background: 'var(--af-accent)', color: 'var(--af-btn-primary-text)' }
-          : { background: 'var(--af-card-bg)', boxShadow: '0 0 0 1px var(--af-card-ring)', color: 'var(--af-text-base)' }}
+            ? { background: 'var(--af-accent)', color: 'var(--af-btn-primary-text)' }
+            : {
+                background: 'var(--af-card-bg)',
+                boxShadow: '0 0 0 1px var(--af-card-ring)',
+                color: 'var(--af-text-base)',
+              }
+        }
       >
         {isUser ? (
           <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
@@ -3674,7 +4222,11 @@ function ChatBubble({
             {msg.toolResults && msg.toolResults.length > 0 && (
               <ToolResultList toolResults={msg.toolResults} />
             )}
-            {msg.streaming && <span className="text-xs animate-pulse" style={{ color: 'var(--af-text-muted)' }}>typing…</span>}
+            {msg.streaming && (
+              <span className="text-xs animate-pulse" style={{ color: 'var(--af-text-muted)' }}>
+                typing…
+              </span>
+            )}
           </div>
         )}
         {!isUser && !msg.streaming && msg.content && (
