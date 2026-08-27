@@ -1339,6 +1339,8 @@ function AgentPanel({
   const [expandedContextPanel, setExpandedContextPanel] = useState<'recovery' | 'hub' | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const activeRunIdRef = useRef<string | null>(null);
+  const streamAttachedRef = useRef(false);
+  const sessionRefreshInFlightRef = useRef(false);
   const focusedRecoveryEventIdRef = useRef<number | null>(null);
   const messageRefs = useRef(new Map<string, HTMLDivElement>());
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -1554,6 +1556,33 @@ function AgentPanel({
   const currentSessionKey = `agent:${agent.agentId}:${currentThread}`;
   const currentSession = agentSessions.find((session) => session.threadKey === currentThread) ?? null;
 
+  const refreshCurrentSession = useCallback(async (): Promise<void> => {
+    if (sessionRefreshInFlightRef.current) {
+      return;
+    }
+    sessionRefreshInFlightRef.current = true;
+    try {
+      const result = await rpc<SessionMessagesResult>('session.messages', {
+        sessionKey: currentSessionKey,
+        includeToolResults: true,
+      });
+      setMessages(
+        result.messages.map((m, index) => ({
+          id: `${currentSessionKey}:${m.timestamp}:${index}`,
+          role: m.isToolResult ? 'assistant' : m.role,
+          content: m.text,
+          timestamp: m.timestamp,
+          tools: m.tools?.map((tool) => ({ id: '', name: tool.name, input: tool.input })),
+          toolResults: m.toolResults,
+        })),
+      );
+    } catch {
+      // Keep the current view when a transient refresh fails.
+    } finally {
+      sessionRefreshInFlightRef.current = false;
+    }
+  }, [currentSessionKey]);
+
   useEffect(() => {
     const preview = findLastPreviewText(messages) ?? t('chat.session.emptyPreview');
     setSessionPreviewByKey((current) => {
@@ -1626,21 +1655,8 @@ function AgentPanel({
 
   // Reload history whenever thread changes
   useEffect(() => {
-    rpc<SessionMessagesResult>('session.messages', { sessionKey: currentSessionKey, includeToolResults: true })
-      .then((res) => {
-        setMessages(
-          res.messages.map((m, index) => ({
-            id: `${currentSessionKey}:${m.timestamp}:${index}`,
-            role: m.isToolResult ? 'assistant' : m.role,
-            content: m.text,
-            timestamp: m.timestamp,
-            tools: m.tools?.map((t) => ({ id: '', name: t.name, input: t.input })),
-            toolResults: m.toolResults,
-          })),
-        );
-      })
-      .catch(() => setMessages([]));
-  }, [currentSessionKey]); // eslint-disable-line react-hooks/exhaustive-deps
+    void refreshCurrentSession();
+  }, [refreshCurrentSession]);
 
   const loadSession = (session: SessionMetaInfo) => {
     setCurrentThread(session.threadKey);
@@ -1674,8 +1690,63 @@ function AgentPanel({
     }
   };
 
+  // A tab switch disconnects the POST SSE stream. Rebuild the local control state
+  // from the gateway activity snapshot and keep the session history current.
+  useEffect(() => {
+    const activeRun = agent.activity?.activeRun;
+    const queuedIndex = agent.activity?.queuedRuns.findIndex((run) => run.threadKey === currentThread) ?? -1;
+    const queuedRun = queuedIndex >= 0 ? agent.activity?.queuedRuns[queuedIndex] : undefined;
+    const isCurrentActiveRun = activeRun?.threadKey === currentThread;
+    if (isCurrentActiveRun && activeRun) {
+      updateActiveRunId(activeRun.runId);
+      setBusy(true);
+      setQueuePosition(null);
+      setPendingStatus(t('chat.run.streaming'));
+    } else if (queuedRun) {
+      updateActiveRunId(queuedRun.runId);
+      setBusy(true);
+      setQueuePosition(queuedIndex + 1);
+      setPendingStatus(t('chat.queue.waiting', { position: String(queuedIndex + 1) }));
+    }
+
+    if (!streamAttachedRef.current && (isCurrentActiveRun || queuedRun)) {
+      void refreshCurrentSession();
+    }
+  }, [agent.activity, currentThread, refreshCurrentSession, t]);
+
+  useEffect(() => {
+    if (streamAttachedRef.current || !busy || !activeRunId) {
+      return;
+    }
+    let cancelled = false;
+    const sync = async (): Promise<void> => {
+      const runInfo = await fetchRunStatus(activeRunId);
+      if (cancelled || !runInfo) {
+        return;
+      }
+      const isTerminal = ['done', 'error'].includes(runInfo.processStatus) || ['done', 'error'].includes(runInfo.phase);
+      if (isTerminal) {
+        setBusy(false);
+        setPendingStatus(null);
+        setQueuePosition(null);
+        setCompletionNoticeRunId(runInfo.runId);
+        updateActiveRunId(null);
+        await refreshCurrentSession();
+        return;
+      }
+      await refreshCurrentSession();
+    };
+    void sync();
+    const interval = window.setInterval(() => void sync(), 1200);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [activeRunId, busy, refreshCurrentSession]);
+
   const streamChatRequest = async (requestBody: Record<string, unknown>): Promise<void> => {
     const TOKEN = window.__AF_TOKEN__;
+    streamAttachedRef.current = true;
     setBusy(true);
     setCompletionNoticeRunId(null);
     setQueuePosition(null);
@@ -1970,6 +2041,7 @@ function AgentPanel({
         ];
       });
     } finally {
+      streamAttachedRef.current = false;
       setBusy(false);
     }
   };
@@ -2449,7 +2521,7 @@ function AgentPanel({
                 <div className="flex items-center gap-2 flex-wrap">
                   {runStatusNotice?.label ? (
                     <span
-                      className="rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-[0.08em]"
+                      className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-[0.08em]"
                       style={{
                         background:
                           runStatusNotice.tone === 'suspended'
@@ -2473,7 +2545,16 @@ function AgentPanel({
                               : 'rgb(226, 232, 240)',
                       }}
                     >
+                      {runStatusNotice.tone === 'running' || runStatusNotice.tone === 'queued' ? (
+                        <span
+                          aria-hidden="true"
+                          className="h-1.5 w-1.5 rounded-full bg-current animate-pulse"
+                        />
+                      ) : null}
                       {runStatusNotice.label}
+                      {runStatusNotice.tone === 'running' ? (
+                        <span aria-hidden="true" className="w-3 text-left animate-pulse">...</span>
+                      ) : null}
                     </span>
                   ) : null}
                   {runStatusNotice?.summary ? <div>{runStatusNotice.summary}</div> : null}

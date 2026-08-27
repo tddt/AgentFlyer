@@ -73,6 +73,7 @@ export interface AgentTurnKernelRunRecord {
   updatedAt: number;
   result?: TurnResult;
   sessionKey?: string;
+  taskState?: AgentTurnProcessState['taskState'];
   error?: AgentTurnProcessState['error'];
 }
 

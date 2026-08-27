@@ -17,6 +17,7 @@ import {
   deriveAgentTurnControlStateForPhase,
   deriveRunnerLeaseModeForAgentTurnPhase,
 } from './turn-phase-contract.js';
+import type { TaskRunState } from './task/task-run-state.js';
 
 export interface AgentTurnProcessInput {
   agentId: string;
@@ -24,6 +25,7 @@ export interface AgentTurnProcessInput {
   userMessage: string;
   options?: RunnerOptions;
   threadKey?: string;
+  taskState?: TaskRunState;
 }
 
 export interface AgentTurnProcessState {
@@ -34,6 +36,7 @@ export interface AgentTurnProcessState {
   userMessage: string;
   options?: RunnerOptions;
   threadKey: string;
+  taskState?: TaskRunState;
   runnerState: SerializedAgentRunnerState;
   executionState?: SerializedAgentTurnExecutionState;
   stream: StreamChunk[];
@@ -334,6 +337,7 @@ export class AgentTurnProcessRuntime
       userMessage: input.userMessage,
       options: input.options,
       threadKey,
+      taskState: input.taskState,
       runnerState: buildInitialRunnerState(runner, threadKey),
       stream: [],
     };

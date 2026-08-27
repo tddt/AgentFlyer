@@ -9,6 +9,7 @@ import {
 } from '../agent/process-runtime.js';
 import type { RunnerOptions, TurnResult } from '../agent/runner.js';
 import type { AgentRunner } from '../agent/runner.js';
+import type { TaskRunState } from '../agent/task/task-run-state.js';
 import {
   deriveAgentTurnControlState,
   deriveAgentTurnRunRecord,
@@ -73,6 +74,7 @@ export interface AgentKernelTurnInput {
   userMessage: string;
   threadKey?: string;
   options?: RunnerOptions;
+  taskState?: TaskRunState;
 }
 
 export interface AgentKernelRunRecord {
@@ -86,6 +88,7 @@ export interface AgentKernelRunRecord {
   updatedAt: number;
   result?: TurnResult;
   sessionKey?: string;
+  taskState?: TaskRunState;
   error?: AgentTurnProcessState['error'];
 }
 
@@ -220,6 +223,7 @@ export class AgentKernelService {
           userMessage: input.userMessage,
           threadKey: input.threadKey,
           options: input.options,
+          taskState: input.taskState,
         },
       });
     } catch (error) {

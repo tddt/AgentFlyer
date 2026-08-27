@@ -16,6 +16,11 @@ import {
   waitForAgentTurnViaKernel,
 } from '../kernel-turn-executor.js';
 import type { AgentRunner } from '../runner.js';
+import {
+  createTaskRunState,
+  transitionTaskRun,
+  type TaskRunState,
+} from '../task/task-run-state.js';
 import { isSuspendedAgentTurnRun } from '../turn-run-state.js';
 import type { RegisteredTool } from './registry.js';
 
@@ -94,6 +99,7 @@ interface TaskEntry {
   doneAt?: number;
   /** Milliseconds after which a still-running task is auto-expired. */
   timeoutMs: number;
+  taskState?: TaskRunState;
 }
 
 class MeshTaskStore {
@@ -267,6 +273,9 @@ export function createMeshTools(
           result: output || '(no output)',
           error: undefined,
           doneAt: Date.now(),
+          taskState: entry.taskState
+            ? transitionTaskRun(entry.taskState, { action: 'complete' }, Date.now())
+            : undefined,
         });
         logger.info('mesh_spawn: task done', { taskId, agent_id: agentId, runId });
         try {
@@ -306,6 +315,13 @@ export function createMeshTools(
             status: 'suspended',
             error: current.error?.message ?? String(err),
             doneAt: undefined,
+            taskState: entry.taskState
+              ? transitionTaskRun(
+                  entry.taskState,
+                  { action: 'suspend', reason: current.error?.message ?? String(err) },
+                  Date.now(),
+                )
+              : undefined,
           });
           logger.info('mesh_spawn: task suspended', { taskId, agent_id: agentId, runId });
           return;
@@ -314,6 +330,9 @@ export function createMeshTools(
           status: 'error',
           error: String(err),
           doneAt: Date.now(),
+          taskState: entry.taskState
+            ? transitionTaskRun(entry.taskState, { action: 'fail', reason: String(err) }, Date.now())
+            : undefined,
         });
         logger.error('mesh_spawn: task error', { taskId, agent_id: agentId, error: String(err) });
         try {
@@ -467,15 +486,21 @@ export function createMeshTools(
             type: 'number',
             description: `Seconds before the task is auto-expired (default: ${DEFAULT_TASK_TIMEOUT_MS / 1000})`,
           },
+          acceptance_criteria: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Optional acceptance checks retained with the task state',
+          },
         },
         required: ['agent_id', 'message'],
       },
     },
     async handler(input) {
-      const { agent_id, message, timeout_s } = input as {
+      const { agent_id, message, timeout_s, acceptance_criteria } = input as {
         agent_id: string;
         message: string;
         timeout_s?: number;
+        acceptance_criteria?: string[];
       };
       const runner = runners.get(agent_id);
       if (!runner) {
@@ -515,6 +540,16 @@ export function createMeshTools(
       const timeoutMs = typeof timeout_s === 'number' ? timeout_s * 1_000 : DEFAULT_TASK_TIMEOUT_MS;
       const taskId = ulid();
       const taskThread = `mesh-spawn-${taskId}`;
+      const taskState = createTaskRunState(
+        {
+          taskId,
+          goal: message,
+          acceptanceCriteria: acceptance_criteria?.length
+            ? acceptance_criteria
+            : ['The delegated agent turn completes successfully'],
+        },
+        Date.now(),
+      );
       taskStore.set({
         taskId,
         agentId: agent_id,
@@ -523,6 +558,7 @@ export function createMeshTools(
         status: 'pending',
         startedAt: Date.now(),
         timeoutMs,
+        taskState,
       });
 
       try {
@@ -539,6 +575,7 @@ export function createMeshTools(
           status: 'running',
           runId: started.runId,
           error: undefined,
+          taskState: transitionTaskRun(taskState, { action: 'start', runId: started.runId }, Date.now()),
         });
         watchTaskRun(taskId, agent_id, timeoutMs);
         return {
@@ -682,6 +719,9 @@ export function createMeshTools(
           status: 'running',
           error: undefined,
           doneAt: undefined,
+          taskState: entry.taskState
+            ? transitionTaskRun(entry.taskState, { action: 'start', runId: entry.runId }, Date.now())
+            : undefined,
         });
         watchTaskRun(task_id, entry.agentId, entry.timeoutMs);
         return {

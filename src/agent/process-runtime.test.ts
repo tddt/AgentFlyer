@@ -13,6 +13,7 @@ import type { LLMProvider, RunParams } from './llm/provider.js';
 import { AgentTurnProcessRuntime } from './process-runtime.js';
 import type { SerializedAgentRunnerState, SerializedAgentTurnExecutionState } from './runner.js';
 import { AgentRunner } from './runner.js';
+import { createTaskRunState } from './task/task-run-state.js';
 import type { ApprovalHandler } from './tools/policy.js';
 import type { RegisteredTool } from './tools/registry.js';
 import { ToolRegistry } from './tools/registry.js';
@@ -275,6 +276,38 @@ describe('AgentRunner state serialization', () => {
       promptLayerHashes: [{ index: 0, hash: 'hash-0' }],
       cachedSystemPrompt: 'cached-prompt',
     });
+  });
+
+  it('keeps task state in the serialized turn checkpoint', () => {
+    const runner = {
+      serializeState(): SerializedAgentRunnerState {
+        return {
+          activeThreadKey: 'default',
+          defaultThreadKey: 'default',
+          toolResultCache: [],
+          promptLayerHashes: [],
+          cachedSystemPrompt: null,
+        };
+      },
+    } as unknown as AgentRunner;
+    const runtime = new AgentTurnProcessRuntime(new Map([['agent-main', runner]]));
+    const taskState = createTaskRunState(
+      {
+        taskId: 'task-checkpoint',
+        goal: 'Preserve task context',
+        acceptanceCriteria: ['Task state survives serialization'],
+      },
+      100,
+    );
+
+    const initialState = runtime.createInitialState({
+      agentId: 'agent-main',
+      userMessage: 'continue task',
+      taskState,
+    });
+    const restored = runtime.deserialize(runtime.serialize(initialState));
+
+    expect(restored.taskState).toEqual(taskState);
   });
 
   it('inherits prompt and tool caches when the requested thread matches the default thread', async () => {

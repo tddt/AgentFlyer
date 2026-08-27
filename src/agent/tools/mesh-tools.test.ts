@@ -162,9 +162,18 @@ describe('createMeshTools persistence', () => {
     // Drain write-behind queue before reading the persisted file.
     await waitForMeshDrain(dataDir);
     const raw = await readFile(join(dataDir, 'mesh-tasks.json'), 'utf-8');
-    const parsed = JSON.parse(raw) as Array<{ taskId: string; status: string; result?: string }>;
+    const parsed = JSON.parse(raw) as Array<{
+      taskId: string;
+      status: string;
+      result?: string;
+      taskState?: { goal: string; acceptanceCriteria: Array<{ description: string }> };
+    }>;
     expect(parsed.some((entry) => entry.taskId === taskId && entry.status === 'done')).toBe(true);
     expect(parsed.find((entry) => entry.taskId === taskId)?.result).toContain('mesh task finished');
+    expect(parsed.find((entry) => entry.taskId === taskId)?.taskState?.goal).toBe('do work');
+    expect(parsed.find((entry) => entry.taskId === taskId)?.taskState?.acceptanceCriteria[0]?.description).toBe(
+      'The delegated agent turn completes successfully',
+    );
   });
 
   it('marks unfinished persisted tasks as interrupted on startup', async () => {

@@ -5,6 +5,7 @@ import type {
 } from '../core/kernel/types.js';
 import type { AgentTurnProcessState } from './process-runtime.js';
 import type { TurnResult } from './runner.js';
+import type { TaskRunState } from './task/task-run-state.js';
 import {
   type AgentTurnControlState,
   type AgentTurnPhase,
@@ -20,6 +21,7 @@ export interface AgentTurnRunRecordLike {
   phase: AgentTurnPhase;
   controlState?: AgentTurnControlState;
   result?: TurnResult;
+  taskState?: TaskRunState;
   error?: ProcessErrorEvent;
 }
 
@@ -31,6 +33,7 @@ export interface AgentTurnDerivedRunRecord extends AgentTurnRunRecordLike {
   updatedAt: number;
   controlState: AgentTurnControlState;
   sessionKey?: string;
+  taskState?: TaskRunState;
 }
 
 export interface AgentTurnLifecycleState {
@@ -41,7 +44,7 @@ export interface AgentTurnLifecycleState {
 
 type AgentTurnRunStateLike = Pick<
   AgentTurnProcessState,
-  'agentId' | 'threadKey' | 'phase' | 'controlState' | 'result' | 'error'
+  'agentId' | 'threadKey' | 'phase' | 'controlState' | 'result' | 'taskState' | 'error'
 >;
 
 export type AgentTurnCompletionOutcome =
@@ -114,6 +117,7 @@ export function deriveAgentTurnRunRecord(
     controlState: lifecycle.controlState,
     result: state?.result,
     sessionKey: state?.result?.sessionKey,
+    taskState: state?.taskState,
     error: state?.error ?? snapshot.lastError,
   };
 }
