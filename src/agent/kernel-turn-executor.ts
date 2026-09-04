@@ -6,9 +6,10 @@ import {
   type KernelProcessSnapshot,
   ScopedCheckpointStore,
 } from '../core/kernel/index.js';
+import { RuntimeResourceGovernor } from '../core/runtime-resource-governor.js';
 import type { StreamChunk } from '../core/types.js';
 import { asProcessId } from '../core/types.js';
-import { drainWaitingAgentSyscalls } from './kernel-syscall-broker.js';
+import { executeWaitingAgentSyscall } from './kernel-syscall-broker.js';
 import {
   type AgentTurnProcessInput,
   AgentTurnProcessRuntime,
@@ -54,11 +55,13 @@ export interface ExecuteAgentTurnViaKernelOptions {
   timeoutMs?: number;
   /** Called for every StreamChunk emitted by the agent during this turn. */
   onChunk?: (chunk: StreamChunk) => void;
+  resourceGovernor?: RuntimeResourceGovernor;
 }
 
 export interface AgentTurnKernelControlOptions {
   runners: AgentRunnerResolver;
   dataDir?: string;
+  resourceGovernor?: RuntimeResourceGovernor;
 }
 
 export type AgentTurnKernelRunRecord = AgentRunRecord;
@@ -80,6 +83,10 @@ class AgentKernelTurnExecutor {
   private pumpPromise: Promise<void> | null = null;
   private pumpTimer: ReturnType<typeof setTimeout> | null = null;
   private scheduledPumpAt: number | null = null;
+  private disposed = false;
+  private readonly activeSyscalls = new Set<string>();
+  private readonly syscallAbortControllers = new Map<string, AbortController>();
+  private readonly activeSyscallPromises = new Set<Promise<void>>();
   private readonly completions = new Map<
     string,
     { ok: true; result: TurnResult } | { ok: false; message: string }
@@ -94,8 +101,14 @@ class AgentKernelTurnExecutor {
   private resolveRunnerFn: (agentId: string) => AgentRunner | undefined;
   private readonly chunkSubscribers = new Map<string, Set<(chunk: StreamChunk) => void>>();
   private readonly activitySubscribers = new Map<string, Set<() => void>>();
+  private readonly resourceGovernor: RuntimeResourceGovernor;
 
-  constructor(runners: AgentRunnerResolver, checkpointStore: CheckpointStore) {
+  constructor(
+    runners: AgentRunnerResolver,
+    checkpointStore: CheckpointStore,
+    resourceGovernor = new RuntimeResourceGovernor(),
+  ) {
+    this.resourceGovernor = resourceGovernor;
     this.resolveRunnerFn = (agentId) => resolveRunner(runners, agentId);
     this.kernel = new AgentKernel({ checkpointStore });
     this.runtime = new AgentTurnProcessRuntime((agentId) => this.resolveRunnerFn(agentId), {
@@ -143,6 +156,9 @@ class AgentKernelTurnExecutor {
   }
 
   async initialize(): Promise<void> {
+    if (this.disposed) {
+      throw new Error('Agent kernel turn executor is disposed');
+    }
     if (this.initPromise) {
       return this.initPromise;
     }
@@ -163,6 +179,7 @@ class AgentKernelTurnExecutor {
       metadata: {
         agentId: input.agentId,
       },
+      priority: input.priority,
       input: {
         ...input,
         runId,
@@ -246,6 +263,7 @@ class AgentKernelTurnExecutor {
   async abortTurn(runId: string, message: string): Promise<void> {
     await this.initialize();
     const snapshot = this.kernel.getSnapshot(asProcessId(runId));
+    this.abortSyscall(runId);
     if (snapshot) {
       try {
         const state = this.runtime.deserialize(snapshot.state) as AgentTurnProcessState;
@@ -285,8 +303,26 @@ class AgentKernelTurnExecutor {
     this.completeRun(runId, { ok: false, message });
   }
 
+  async dispose(): Promise<void> {
+    this.disposed = true;
+    if (this.pumpTimer) {
+      clearTimeout(this.pumpTimer);
+      this.pumpTimer = null;
+    }
+    for (const controller of this.syscallAbortControllers.values()) {
+      controller.abort();
+    }
+    await Promise.race([
+      Promise.allSettled(this.activeSyscallPromises),
+      new Promise<void>((resolve) => setTimeout(resolve, 1_000)),
+    ]);
+    this.activeSyscalls.clear();
+    this.syscallAbortControllers.clear();
+    this.activeSyscallPromises.clear();
+  }
+
   private schedulePump(delayMs: number): void {
-    if (this.pumpPromise) {
+    if (this.disposed || this.pumpPromise) {
       return;
     }
     const targetAt = Date.now() + Math.max(0, delayMs);
@@ -316,7 +352,7 @@ class AgentKernelTurnExecutor {
       .filter(
         (snapshot) => snapshot.processType === this.runtime.type && snapshot.status === 'waiting',
       );
-    if (waitingSnapshots.length > 0) {
+    if (waitingSnapshots.some((snapshot) => !this.activeSyscalls.has(String(snapshot.pid)))) {
       this.schedulePump(0);
       return;
     }
@@ -345,6 +381,9 @@ class AgentKernelTurnExecutor {
   }
 
   private async runPump(): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
     await this.reconcileSnapshots();
     // Notify activity for any process that is actively waiting for a syscall.
     // This resets the idle-timeout clock at the START of syscall execution so
@@ -355,17 +394,50 @@ class AgentKernelTurnExecutor {
         this.notifyStepActivity(String(snapshot.pid));
       }
     }
-    const resolvedSyscalls = await drainWaitingAgentSyscalls(this.kernel, this.runtime);
-    if (!resolvedSyscalls) {
-      const tickResult = await this.kernel.tick();
-      if (tickResult.kind === 'executed' && tickResult.pid !== undefined) {
-        this.notifyStepActivity(String(tickResult.pid));
-      }
-    } else {
-      // One or more syscalls resolved — notify all still-alive run IDs
-      this.notifyStepActivityAll();
+    this.startSyscallWorkers();
+    const tickResult = await this.kernel.tick();
+    if (tickResult.kind === 'executed' && tickResult.pid !== undefined) {
+      this.notifyStepActivity(String(tickResult.pid));
     }
     await this.reconcileSnapshots();
+  }
+
+  private startSyscallWorkers(): void {
+    const waitingSnapshots = this.kernel
+      .listSnapshots()
+      .filter(
+        (snapshot) =>
+          snapshot.processType === this.runtime.type &&
+          snapshot.status === 'waiting' &&
+          snapshot.pendingSyscall &&
+          !this.activeSyscalls.has(String(snapshot.pid)),
+      );
+    for (const snapshot of waitingSnapshots) {
+      const runId = String(snapshot.pid);
+      const controller = new AbortController();
+      this.activeSyscalls.add(runId);
+      this.syscallAbortControllers.set(runId, controller);
+      const worker = executeWaitingAgentSyscall(
+        this.kernel,
+        this.runtime,
+        snapshot,
+        this.resourceGovernor,
+        controller.signal,
+      ).finally(() => {
+        this.activeSyscalls.delete(runId);
+        if (this.syscallAbortControllers.get(runId) === controller) {
+          this.syscallAbortControllers.delete(runId);
+        }
+        this.activeSyscallPromises.delete(worker);
+        this.notifyStepActivityAll();
+        this.schedulePump(0);
+      });
+      this.activeSyscallPromises.add(worker);
+    }
+  }
+
+  private abortSyscall(runId: string): void {
+    this.syscallAbortControllers.get(runId)?.abort();
   }
 
   /** Fire step-activity for a specific run ID. */
@@ -537,7 +609,11 @@ async function getExecutor(
 ): Promise<AgentKernelTurnExecutor> {
   const key = buildExecutorKey(options);
   if (!key) {
-    const executor = new AgentKernelTurnExecutor(options.runners, createCheckpointStore());
+    const executor = new AgentKernelTurnExecutor(
+      options.runners,
+      createCheckpointStore(),
+      options.resourceGovernor,
+    );
     await executor.initialize();
     return executor;
   }
@@ -553,6 +629,7 @@ async function getExecutor(
     const executor = new AgentKernelTurnExecutor(
       options.runners,
       createCheckpointStore(options.dataDir),
+      options.resourceGovernor,
     );
     await executor.initialize();
     return executor;

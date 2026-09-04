@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { ulid } from 'ulid';
 import type { AgentConfig } from '../../core/config/schema.js';
 import { createLogger } from '../../core/logger.js';
+import type { RuntimeResourceGovernor } from '../../core/runtime-resource-governor.js';
 import { asAgentId } from '../../core/types.js';
 import type { AgentQueueRegistry } from '../../gateway/agent-queue.js';
 import { getGlobalBus } from '../../mesh/bus.js';
@@ -46,16 +47,19 @@ async function runMeshTurn(options: {
   timeoutMs: number;
   label: string;
   agentQueues?: AgentQueueRegistry;
+  resourceGovernor?: RuntimeResourceGovernor;
 }): Promise<string> {
   const execute = async (): Promise<string> => {
     const result = await executeAgentTurnViaKernel({
       runners: new Map([[options.agentId, options.runner]]),
       dataDir: options.dataDir,
+      resourceGovernor: options.resourceGovernor,
       timeoutMs: options.timeoutMs,
       input: {
         agentId: options.agentId,
         userMessage: options.message,
         threadKey: options.threadKey,
+        priority: 'normal',
       },
     });
     return result.text || '(no output)';
@@ -237,6 +241,7 @@ export function createMeshTools(
   dataDir: string,
   agentConfigs: AgentConfig[] = [],
   agentQueues?: AgentQueueRegistry,
+  resourceGovernor?: RuntimeResourceGovernor,
 ): RegisteredTool[] {
   let store = sharedTaskStores.get(dataDir);
   if (!store) {
@@ -268,6 +273,7 @@ export function createMeshTools(
             runners: new Map([[agentId, runner]]),
             dataDir,
             runId,
+            resourceGovernor,
           }).then((result) => result.text || '(no output)'),
           timeoutMs,
           `mesh_spawn ${taskId}`,
@@ -307,6 +313,7 @@ export function createMeshTools(
             runners: new Map([[agentId, runner]]),
             dataDir,
             runId,
+            resourceGovernor,
             message: `Mesh task '${taskId}' timed out after ${Math.round(timeoutMs / 1000)}s.`,
           });
         }
@@ -314,6 +321,7 @@ export function createMeshTools(
           runners: new Map([[agentId, runner]]),
           dataDir,
           runId,
+          resourceGovernor,
         });
         if (current && isSuspendedAgentTurnRun(current)) {
           taskStore.update(taskId, {
@@ -468,6 +476,7 @@ export function createMeshTools(
           timeoutMs,
           label: `mesh_send to ${agent_id}`,
           agentQueues,
+          resourceGovernor,
         });
         logger.info('mesh_send: task complete', { agent_id });
         return { isError: false, content: output || '(agent returned no output)' };
@@ -575,10 +584,12 @@ export function createMeshTools(
         const started = await startAgentTurnViaKernel({
           runners: new Map([[agent_id, runner]]),
           dataDir,
+          resourceGovernor,
           input: {
             agentId: agent_id,
             userMessage: message,
             threadKey: taskThread,
+            priority: 'normal',
           },
         });
         taskStore.update(taskId, {
@@ -646,6 +657,7 @@ export function createMeshTools(
               runners: new Map([[entry.agentId, runner]]),
               dataDir,
               runId: entry.runId,
+              resourceGovernor,
               message: `Mesh task '${task_id}' timed out after ${Math.round(entry.timeoutMs / 1000)}s.`,
             });
           }
@@ -728,6 +740,7 @@ export function createMeshTools(
           runners: new Map([[entry.agentId, runner]]),
           dataDir,
           runId: entry.runId,
+          resourceGovernor,
         });
         if (!resumed) {
           return {
@@ -1047,6 +1060,7 @@ export function createMeshTools(
               runners: new Map([[entry.agentId, runner]]),
               dataDir,
               runId: entry.runId,
+              resourceGovernor,
               message: `Mesh task '${task_id}' was cancelled.`,
             }).catch(() => null);
             if (cancellation && !cancellation.cancelled) {

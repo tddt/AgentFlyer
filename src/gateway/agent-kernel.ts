@@ -24,6 +24,7 @@ import {
 } from '../agent/turn-run-state.js';
 import {
   AgentKernel,
+  CoalescingCheckpointStore,
   JsonFileCheckpointStore,
   type KernelProcessSnapshot,
   ScopedCheckpointStore,
@@ -32,9 +33,11 @@ import type { ProcessStatus } from '../core/kernel/types.js';
 import { createLogger } from '../core/logger.js';
 import type { ProcessId, StreamChunk } from '../core/types.js';
 import { asProcessId } from '../core/types.js';
+import { type ResourceLane, RuntimeResourceGovernor } from './runtime-resource-governor.js';
 
 const logger = createLogger('gateway:agent-kernel');
 const MAX_RUN_RECORDS = 200;
+const STREAM_TEXT_FLUSH_MS = 32;
 
 class AgentKernelRunRecordStore {
   private readonly filePath: string;
@@ -75,6 +78,7 @@ class AgentKernelRunRecordStore {
 export interface AgentKernelTurnInput {
   runId?: string;
   agentId: string;
+  priority?: KernelProcessSnapshot['priority'];
   userMessage: string;
   threadKey?: string;
   options?: RunnerOptions;
@@ -114,6 +118,7 @@ type CompletionOutcome = { ok: true; result: TurnResult } | { ok: false; message
 export interface AgentKernelServiceOptions {
   dataDir: string;
   runners: Map<string, AgentRunner>;
+  resourceGovernor?: RuntimeResourceGovernor;
 }
 
 export class AgentKernelService {
@@ -121,12 +126,15 @@ export class AgentKernelService {
   private readonly runtime: AgentTurnProcessRuntime;
   private readonly runRecordStore: AgentKernelRunRecordStore;
   private readonly runners: Map<string, AgentRunner>;
+  private readonly resourceGovernor: RuntimeResourceGovernor;
   private initPromise: Promise<void> | null = null;
   private pumpPromise: Promise<void> | null = null;
   private pumpTimer: ReturnType<typeof setTimeout> | null = null;
   private scheduledPumpAt: number | null = null;
   private disposed = false;
   private readonly subscribers = new Map<string, Set<(chunk: StreamChunk) => void>>();
+  private readonly pendingText = new Map<string, string>();
+  private readonly textFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly completionWaiters = new Map<
     string,
     Array<{ resolve: (result: TurnResult) => void; reject: (error: Error) => void }>
@@ -138,6 +146,7 @@ export class AgentKernelService {
   // re-fire the same syscall a second time if the pump runs again while the
   // first background task is still awaiting a response.
   private readonly activeSyscalls = new Set<ProcessId>();
+  private readonly syscallAbortControllers = new Map<ProcessId, AbortController>();
   // RATIONALE: Tracks the active promises of background syscall workers so that
   // dispose() can await them all before clearing the tempDir, preventing ENOENT
   // errors when checkpoint files are written after cleanup.
@@ -147,6 +156,7 @@ export class AgentKernelService {
 
   constructor(options: AgentKernelServiceOptions) {
     this.runners = options.runners;
+    this.resourceGovernor = options.resourceGovernor ?? new RuntimeResourceGovernor();
     this.runRecordStore = new AgentKernelRunRecordStore(options.dataDir);
     const loadedRecords = this.runRecordStore.load();
     let prunedLegacyLiveRecord = false;
@@ -162,7 +172,7 @@ export class AgentKernelService {
     }
     this.kernel = new AgentKernel({
       checkpointStore: new ScopedCheckpointStore(
-        new JsonFileCheckpointStore(options.dataDir),
+        new CoalescingCheckpointStore(new JsonFileCheckpointStore(options.dataDir)),
         'agent.turn',
       ),
     });
@@ -204,6 +214,7 @@ export class AgentKernelService {
         metadata: {
           agentId: input.agentId,
         },
+        priority: input.priority,
         input: {
           runId,
           agentId: input.agentId,
@@ -317,6 +328,7 @@ export class AgentKernelService {
       });
     this.completeRun(runId, { ok: false, message: 'Run cancelled before execution.' });
     this.activeSyscalls.delete(pid);
+    this.abortSyscall(pid);
     return cancelledRecord;
   }
 
@@ -361,6 +373,7 @@ export class AgentKernelService {
       message: 'Agent run timed out and was force-killed.',
     });
     this.activeSyscalls.delete(pid);
+    this.abortSyscall(pid);
     logger.warn('Force-killed timed-out agent run', { runId });
   }
 
@@ -375,6 +388,9 @@ export class AgentKernelService {
     // A 5-second per-run timeout is used so that a hung process in tests never
     // blocks afterEach indefinitely.
     const DRAIN_TIMEOUT_MS = 5_000;
+    for (const controller of this.syscallAbortControllers.values()) {
+      controller.abort();
+    }
     const liveRunIds = this.kernel
       .listSnapshots()
       .filter((s) => s.processType === this.runtime.type)
@@ -401,6 +417,11 @@ export class AgentKernelService {
       );
     }
     this.disposed = true;
+    for (const timer of this.textFlushTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.textFlushTimers.clear();
+    this.pendingText.clear();
     if (this.pumpTimer) {
       clearTimeout(this.pumpTimer);
       this.pumpTimer = null;
@@ -529,6 +550,7 @@ export class AgentKernelService {
       }
       await this.kernel.deleteProcess(snapshot.pid);
       this.activeSyscalls.delete(snapshot.pid);
+      this.abortSyscall(snapshot.pid);
       this.publishActivity(activityAgentId);
     }
     this.completeRun(runId, { ok: false, message });
@@ -671,6 +693,44 @@ export class AgentKernelService {
     if (!listeners) {
       return;
     }
+    if (chunk.type === 'text_delta' && chunk.text) {
+      this.pendingText.set(runId, `${this.pendingText.get(runId) ?? ''}${chunk.text}`);
+      if (!this.textFlushTimers.has(runId)) {
+        this.textFlushTimers.set(
+          runId,
+          setTimeout(() => {
+            this.textFlushTimers.delete(runId);
+            this.flushPendingText(runId);
+          }, STREAM_TEXT_FLUSH_MS),
+        );
+      }
+      return;
+    }
+    this.flushPendingText(runId);
+    this.publishChunkImmediately(listeners, chunk);
+  }
+
+  private flushPendingText(runId: string): void {
+    const timer = this.textFlushTimers.get(runId);
+    if (timer) {
+      clearTimeout(timer);
+      this.textFlushTimers.delete(runId);
+    }
+    const text = this.pendingText.get(runId);
+    if (!text) {
+      return;
+    }
+    this.pendingText.delete(runId);
+    const listeners = this.subscribers.get(runId);
+    if (listeners) {
+      this.publishChunkImmediately(listeners, { type: 'text_delta', text });
+    }
+  }
+
+  private publishChunkImmediately(
+    listeners: Set<(chunk: StreamChunk) => void>,
+    chunk: StreamChunk,
+  ): void {
     for (const listener of listeners) {
       listener(chunk);
     }
@@ -788,10 +848,10 @@ export class AgentKernelService {
     // workers so they run independently of the pump gate. The pump then ticks all
     // currently ready processes and exits immediately, releasing pumpPromise.
     // This means:
-    //  (a) Multiple agents' LLM calls run fully in parallel.
+    //  (a) Multiple agents' calls can run concurrently up to the shared
+    //      RuntimeResourceGovernor lane limits.
     //  (b) A new agent that starts while an LLM is in flight gets its own tick
-    //      pump started immediately (pumpPromise is null between tick cycles),
-    //      rather than waiting up to 30 seconds for the slow LLM to finish.
+    //      pump started immediately, rather than waiting for the slow LLM.
     this.firePendingSyscalls();
     await this.tickAllReady();
     await this.reconcileSnapshots();
@@ -824,6 +884,8 @@ export class AgentKernelService {
   }
 
   private async runSyscallBackground(snapshot: KernelProcessSnapshot): Promise<void> {
+    const abortController = new AbortController();
+    this.syscallAbortControllers.set(snapshot.pid, abortController);
     try {
       const pendingSyscall = snapshot.pendingSyscall;
       if (!pendingSyscall) {
@@ -849,11 +911,22 @@ export class AgentKernelService {
         }
       }
       const state = this.runtime.deserialize(snapshot.state);
-      const resolution = await this.runtime.executePendingSyscall(
-        state,
-        pendingSyscall,
-        Date.now(),
-      );
+      const execute = (): Promise<
+        Awaited<ReturnType<AgentTurnProcessRuntime['executePendingSyscall']>>
+      > => this.runtime.executePendingSyscall(state, pendingSyscall, Date.now());
+      const lane = this.resourceLaneFor(pendingSyscall.kind);
+      const priority = this.resourcePriorityFor(snapshot.priority);
+      const resolution = lane
+        ? await this.resourceGovernor.run(
+            {
+              lane,
+              agentId: snapshot.metadata.agentId ?? 'unknown',
+              priority,
+              signal: abortController.signal,
+            },
+            execute,
+          )
+        : await execute();
       if (!this.kernel.getSnapshot(snapshot.pid)) {
         return;
       }
@@ -865,9 +938,42 @@ export class AgentKernelService {
       });
     } finally {
       this.activeSyscalls.delete(snapshot.pid);
+      if (this.syscallAbortControllers.get(snapshot.pid) === abortController) {
+        this.syscallAbortControllers.delete(snapshot.pid);
+      }
       // Wake up a tick pump to advance the now-resolved process.
       this.schedulePump(0);
     }
+  }
+
+  private abortSyscall(pid: ProcessId): void {
+    this.syscallAbortControllers.get(pid)?.abort();
+  }
+
+  private resourceLaneFor(
+    kind: NonNullable<KernelProcessSnapshot['pendingSyscall']>['kind'],
+  ): ResourceLane | null {
+    if (kind === 'llm.generate') {
+      return 'llm';
+    }
+    if (kind === 'tool.call') {
+      return 'tool';
+    }
+    return null;
+  }
+
+  private resourcePriorityFor(priority: KernelProcessSnapshot['priority']):
+    | 'interactive'
+    | 'recovery'
+    | 'workflow'
+    | 'scheduler' {
+    if (priority === 'critical' || priority === 'high') {
+      return 'interactive';
+    }
+    if (priority === 'low') {
+      return 'scheduler';
+    }
+    return 'workflow';
   }
 
   /**
@@ -1058,6 +1164,7 @@ const agentKernelServices = new WeakMap<object, Promise<AgentKernelService>>();
 export async function getAgentKernelService(ctx: {
   dataDir: string;
   runners: Map<string, AgentRunner>;
+  resourceGovernor?: RuntimeResourceGovernor;
 }): Promise<AgentKernelService> {
   const existing = agentKernelServices.get(ctx);
   if (existing) {
@@ -1067,6 +1174,7 @@ export async function getAgentKernelService(ctx: {
     const service = new AgentKernelService({
       dataDir: ctx.dataDir,
       runners: ctx.runners,
+      resourceGovernor: ctx.resourceGovernor,
     });
     await service.initialize();
     return service;

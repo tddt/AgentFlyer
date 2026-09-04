@@ -67,6 +67,86 @@ export class JsonFileCheckpointStore implements CheckpointStore {
   }
 }
 
+interface PendingCheckpoint {
+  snapshot: KernelProcessSnapshot;
+}
+
+/** Coalesces same-turn saves while preserving save/delete ordering per PID. */
+export class CoalescingCheckpointStore implements CheckpointStore {
+  private readonly pending = new Map<ProcessId, PendingCheckpoint>();
+  private readonly operationTails = new Map<ProcessId, Promise<void>>();
+
+  constructor(private readonly inner: CheckpointStore) {}
+
+  save(snapshot: KernelProcessSnapshot): Promise<void> {
+    const existing = this.pending.get(snapshot.pid);
+    if (existing) {
+      existing.snapshot = snapshot;
+      return this.operationTails.get(snapshot.pid) ?? Promise.resolve();
+    }
+
+    const pending: PendingCheckpoint = {
+      snapshot,
+    };
+    this.pending.set(snapshot.pid, pending);
+    const previous = this.operationTails.get(snapshot.pid) ?? Promise.resolve();
+    const operation = previous
+      .catch(() => undefined)
+      .then(() => this.flush(snapshot.pid, pending));
+    this.setOperationTail(snapshot.pid, operation);
+    return operation;
+  }
+
+  async load(pid: ProcessId): Promise<KernelProcessSnapshot | null> {
+    await this.flushPid(pid);
+    return this.inner.load(pid);
+  }
+
+  async list(): Promise<KernelProcessSnapshot[]> {
+    await Promise.all(Array.from(this.pending.keys(), (pid) => this.flushPid(pid)));
+    return this.inner.list();
+  }
+
+  async delete(pid: ProcessId): Promise<void> {
+    const previous = this.operationTails.get(pid) ?? Promise.resolve();
+    this.pending.delete(pid);
+    const operation = previous
+      .catch(() => undefined)
+      .then(() => this.inner.delete(pid));
+    this.setOperationTail(pid, operation);
+    await operation;
+  }
+
+  private async flushPid(pid: ProcessId): Promise<void> {
+    const pending = this.operationTails.get(pid);
+    if (pending) {
+      await pending;
+    }
+  }
+
+  private async flush(pid: ProcessId, pending: PendingCheckpoint): Promise<void> {
+    if (this.pending.get(pid) !== pending) {
+      return;
+    }
+    this.pending.delete(pid);
+    await this.inner.save(pending.snapshot);
+  }
+
+  private setOperationTail(pid: ProcessId, operation: Promise<void>): void {
+    this.operationTails.set(pid, operation);
+    void operation.then(
+      () => this.clearOperationTail(pid, operation),
+      () => this.clearOperationTail(pid, operation),
+    );
+  }
+
+  private clearOperationTail(pid: ProcessId, operation: Promise<void>): void {
+    if (this.operationTails.get(pid) === operation) {
+      this.operationTails.delete(pid);
+    }
+  }
+}
+
 export class ScopedCheckpointStore implements CheckpointStore {
   constructor(
     private readonly inner: CheckpointStore,

@@ -1183,6 +1183,7 @@ export async function getWorkflowKernelService(ctx: RpcContext): Promise<Workflo
       dataDir: ctx.dataDir,
       runners: ctx.runners,
       agentQueues: ctx.agentQueues,
+      resourceGovernor: ctx.resourceGovernor,
       workflowAgentStepTimeoutMs: config.gateway?.workflow?.agentStepTimeoutMs,
       callbacks: {
         async onRunComplete(workflow, run) {

@@ -1,4 +1,9 @@
-import type { ProcessRuntime, SyscallRequest, SyscallResolution } from '../core/kernel/types.js';
+import type {
+  ProcessPriority,
+  ProcessRuntime,
+  SyscallRequest,
+  SyscallResolution,
+} from '../core/kernel/types.js';
 import type { ProcessStepContext, ProcessStepResult } from '../core/kernel/types.js';
 import type { ProcessErrorEvent } from '../core/kernel/types.js';
 import type { StreamChunk } from '../core/types.js';
@@ -22,6 +27,7 @@ import {
 export interface AgentTurnProcessInput {
   agentId: string;
   runId?: string;
+  priority?: ProcessPriority;
   userMessage: string;
   options?: RunnerOptions;
   threadKey?: string;

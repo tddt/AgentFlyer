@@ -71,6 +71,30 @@ class FakeProvider implements LLMProvider {
   }
 }
 
+class BurstProvider implements LLMProvider {
+  readonly id = 'fake-burst';
+
+  async *run(_params: RunParams): AsyncIterable<StreamChunk> {
+    yield { type: 'text_delta', text: 'one' };
+    yield { type: 'text_delta', text: ' two' };
+    yield { type: 'text_delta', text: ' three' };
+    yield {
+      type: 'done',
+      inputTokens: 1,
+      outputTokens: 3,
+      stopReason: 'end_turn',
+    };
+  }
+
+  async countTokens(): Promise<number> {
+    return 0;
+  }
+
+  supports(): boolean {
+    return true;
+  }
+}
+
 class FakeToolProvider implements LLMProvider {
   readonly id = 'fake-tool';
 
@@ -449,6 +473,33 @@ describe('AgentKernelService', () => {
     ).toBe(true);
     expect(chunks.some((chunk) => chunk.type === 'done')).toBe(true);
     expect(next.value?.text).toContain('kernel hello');
+  });
+
+  it('batches burst text chunks without delaying terminal chunks', async () => {
+    const dataDir = await createTempDir();
+    const service = trackService(
+      new AgentKernelService({
+        dataDir,
+        runners: new Map([['agent-main', createRunner(dataDir, new BurstProvider())]]),
+      }),
+    );
+
+    const chunks: StreamChunk[] = [];
+    const stream = service.streamTurn({
+      agentId: 'agent-main',
+      userMessage: 'stream burst',
+      threadKey: 'burst-thread',
+    });
+    let next = await stream.next();
+    while (!next.done) {
+      chunks.push(next.value);
+      next = await stream.next();
+    }
+
+    expect(chunks.filter((chunk) => chunk.type === 'text_delta')).toEqual([
+      { type: 'text_delta', text: 'one two three' },
+    ]);
+    expect(chunks.at(-1)?.type).toBe('done');
   });
 
   it('auto-resolves tool syscalls and completes the turn', async () => {

@@ -15,6 +15,7 @@ import {
 import { createLogger } from '../core/logger.js';
 import { asProcessId } from '../core/types.js';
 import { AgentQueueRegistry } from './agent-queue.js';
+import type { RuntimeResourceGovernor } from './runtime-resource-governor.js';
 import type { WorkflowDef, WorkflowRunRecord, WorkflowStepResult } from './workflow-backend.js';
 import {
   type WorkflowAgentStepExecutionResult,
@@ -67,6 +68,7 @@ export interface WorkflowKernelServiceOptions {
   workflowAgentStepTimeoutMs?: number;
   /** Reuse the gateway queue so workflow and foreground turns share agent serialization. */
   agentQueues?: AgentQueueRegistry;
+  resourceGovernor?: RuntimeResourceGovernor;
 }
 
 function cloneStepResults(stepResults: WorkflowStepResult[]): WorkflowStepResult[] {
@@ -99,6 +101,7 @@ export class WorkflowKernelService {
   private readonly callbacks: WorkflowKernelCallbacks;
   private readonly liveRunners: Map<string, AgentRunner>;
   private readonly workflowAgentQueues: AgentQueueRegistry;
+  private readonly resourceGovernor?: RuntimeResourceGovernor;
   private readonly cancelRequested = new Set<string>();
   private readonly forcedRunStates = new Map<string, WorkflowRunRecord>();
   private readonly runnerSnapshots = new Map<string, Map<string, AgentRunner>>();
@@ -116,6 +119,7 @@ export class WorkflowKernelService {
     this.callbacks = options.callbacks;
     this.liveRunners = options.runners;
     this.workflowAgentQueues = options.agentQueues ?? new AgentQueueRegistry();
+    this.resourceGovernor = options.resourceGovernor;
     const workflowAgentStepTimeoutMs =
       options.workflowAgentStepTimeoutMs ?? DEFAULT_WORKFLOW_AGENT_STEP_TIMEOUT_MS;
     const service = this;
@@ -152,11 +156,13 @@ export class WorkflowKernelService {
                     runners: new Map([[request.agentId, runner]]),
                     dataDir: options.dataDir,
                     runId: delegatedRunId,
+                    resourceGovernor: service.resourceGovernor,
                   });
                   return await waitForAgentTurnViaKernel({
                     runners: new Map([[request.agentId, runner]]),
                     dataDir: options.dataDir,
                     runId: delegatedRunId,
+                    resourceGovernor: service.resourceGovernor,
                   });
                 })()
               : await executeAgentTurnViaKernel({

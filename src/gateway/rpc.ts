@@ -69,6 +69,7 @@ import {
 } from './deliverables.js';
 import type { DeliverableStore } from './deliverables.js';
 import type { InboxBroadcaster } from './inbox-broadcaster.js';
+import type { RuntimeResourceGovernor } from './runtime-resource-governor.js';
 import type { SchedulerActivityBroadcaster } from './scheduler-activity.js';
 import {
   type WorkflowRpcMethod,
@@ -457,6 +458,7 @@ export interface RpcResponse {
 export interface RpcContext {
   runners: Map<string, AgentRunner>;
   agentQueues?: AgentQueueRegistry;
+  resourceGovernor?: RuntimeResourceGovernor;
   gatewayVersion: string;
   startedAt: number;
   dataDir: string;

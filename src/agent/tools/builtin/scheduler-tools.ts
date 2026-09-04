@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ulid } from 'ulid';
 import { createLogger } from '../../../core/logger.js';
+import type { RuntimeResourceGovernor } from '../../../core/runtime-resource-governor.js';
 import type { CronScheduler } from '../../../scheduler/cron.js';
 import {
   type ScheduledAgentActiveRunStatus,
@@ -78,6 +79,7 @@ async function runTurn(
   thread: string,
   dataDir: string,
   runId: string,
+  resourceGovernor?: RuntimeResourceGovernor,
 ): Promise<ScheduledAgentTurnOutcome> {
   return executeDelegatedAgentRun({
     resolveRunId: async () => runId,
@@ -85,17 +87,20 @@ async function runTurn(
       await executeAgentTurnViaKernel({
         runners: new Map([[agentId, runner]]),
         dataDir,
+        resourceGovernor,
         input: {
           runId: resolvedRunId,
           agentId,
           userMessage: message,
           threadKey: thread,
+          priority: 'low',
         },
       }),
     readRun: async (resolvedRunId) =>
       await getAgentTurnRunViaKernel({
         runners: new Map([[agentId, runner]]),
         dataDir,
+        resourceGovernor,
         runId: resolvedRunId,
       }),
   });
@@ -107,6 +112,7 @@ async function waitForTurn(
   dataDir: string,
   runId: string,
   onRunState?: (runId: string) => void,
+  resourceGovernor?: RuntimeResourceGovernor,
 ): Promise<ScheduledAgentTurnOutcome> {
   return executeDelegatedAgentRun({
     resolveRunId: async () => runId,
@@ -114,6 +120,7 @@ async function waitForTurn(
       await resumeAgentTurnViaKernel({
         runners: new Map([[agentId, runner]]),
         dataDir,
+        resourceGovernor,
         runId: resolvedRunId,
       });
     },
@@ -122,12 +129,14 @@ async function waitForTurn(
       await waitForAgentTurnViaKernel({
         runners: new Map([[agentId, runner]]),
         dataDir,
+        resourceGovernor,
         runId: resolvedRunId,
       }),
     readRun: async (resolvedRunId) =>
       await getAgentTurnRunViaKernel({
         runners: new Map([[agentId, runner]]),
         dataDir,
+        resourceGovernor,
         runId: resolvedRunId,
       }),
   });
@@ -232,6 +241,7 @@ export function createSchedulerTools(
   runners: Map<string, AgentRunner>,
   scheduler: CronScheduler,
   dataDir: string,
+  resourceGovernor?: RuntimeResourceGovernor,
 ): RegisteredTool[] {
   let store = sharedTaskStores.get(dataDir);
   if (!store) {
@@ -258,6 +268,7 @@ export function createSchedulerTools(
       runners: new Map([[activeRun.agentId, runners.get(activeRun.agentId) as AgentRunner]]),
       dataDir,
       runId: activeRun.runId,
+      resourceGovernor,
     });
     if (!current) {
       return activeRun;
@@ -343,6 +354,7 @@ export function createSchedulerTools(
             reportThread,
             dataDir,
             reportRunId,
+            resourceGovernor,
           );
           if (reportTurn.runStatus === 'done') {
             logger.info('Task report sent', { taskId: current.id, reportTo: current.reportTo });
@@ -421,6 +433,7 @@ export function createSchedulerTools(
           thread,
           dataDir,
           delegatedRunId,
+          resourceGovernor,
         );
         await finalizeTaskRun(current, turn, {
           runKey: thread,
@@ -654,6 +667,7 @@ export function createSchedulerTools(
             runStatus: 'running',
           });
         },
+        resourceGovernor,
       );
       await finalizeTaskRun(meta, resumedOutcome, {
         runKey: `sched-${task_id}-resume-${resumedAt}`,
@@ -713,6 +727,7 @@ export function createSchedulerTools(
               runners: new Map([[activeRun.agentId, activeRunner]]),
               dataDir,
               runId: activeRun.runId,
+              resourceGovernor,
               message: `Scheduled task '${meta.name}' (${task_id}) cancelled.`,
             });
           }

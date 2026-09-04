@@ -91,6 +91,7 @@ import {
 } from './metrics-store.js';
 import { SenderRateLimiter } from './rate-limiter.js';
 import type { RpcContext } from './rpc.js';
+import { RuntimeResourceGovernor } from './runtime-resource-governor.js';
 import { SchedulerActivityBroadcaster } from './scheduler-activity.js';
 import { type GatewayServer, createGatewayServer } from './server.js';
 
@@ -104,6 +105,7 @@ export const GATEWAY_VERSION: string = _gw_pkg.version;
 export interface GatewayState {
   runners: Map<string, AgentRunner>;
   agentQueues: AgentQueueRegistry;
+  resourceGovernor: RuntimeResourceGovernor;
   config: Config;
   startedAt: number;
   authToken: string;
@@ -428,10 +430,18 @@ function buildRunner(
   // RATIONALE: Both runners and agentConfigs are passed by reference/value respectively.
   // The runners Map is fully populated before any tool is invoked at runtime.
   tools.registerMany(
-    createMeshTools(state.runners, state.dataDir, state.config.agents, state.agentQueues),
+    createMeshTools(
+      state.runners,
+      state.dataDir,
+      state.config.agents,
+      state.agentQueues,
+      state.resourceGovernor,
+    ),
   );
   // Scheduler tools share the same CronScheduler singleton across all agents.
-  tools.registerMany(createSchedulerTools(state.runners, state.scheduler, state.dataDir));
+  tools.registerMany(
+    createSchedulerTools(state.runners, state.scheduler, state.dataDir, state.resourceGovernor),
+  );
   // Channel tools — let the agent send text/files to any registered channel.
   tools.registerMany(
     createChannelTools({
@@ -551,6 +561,7 @@ export async function startGateway(
 
   const runners = new Map<string, AgentRunner>();
   const agentQueues = new AgentQueueRegistry();
+  const resourceGovernor = new RuntimeResourceGovernor(config.gateway.resources);
   const scheduler = new CronScheduler();
   const mcpReconnectPolicy = resolveGatewayMcpReconnectPolicy(config);
   const mcpHistoryRecorder = createMcpHistoryRecorder(dataDir);
@@ -562,6 +573,7 @@ export async function startGateway(
   const state: GatewayState = {
     runners,
     agentQueues,
+    resourceGovernor,
     config,
     startedAt: Date.now(),
     authToken,
@@ -729,6 +741,7 @@ export async function startGateway(
   async function reloadAgents(agentId?: string): Promise<{ reloaded: string[] }> {
     const prevConfig = state.config;
     const newConfig = loadConfig(configFilePath);
+    resourceGovernor.updateLimits(newConfig.gateway.resources ?? {});
 
     // ── Config diff detection: only rebuild the subsystems that changed ──
     const mcpChanged = JSON.stringify(prevConfig.mcp) !== JSON.stringify(newConfig.mcp);
@@ -852,7 +865,6 @@ export async function startGateway(
 
   const inboxBroadcaster = new InboxBroadcaster();
   const schedulerActivity = new SchedulerActivityBroadcaster();
-
   // RATIONALE: gateway-level MemoryStore so the federation node can answer
   // MEMORY_QUERY messages from remote peers and so RPC memory.search works
   // without needing an agent-scoped runner.
@@ -861,6 +873,7 @@ export async function startGateway(
   const rpcContext: RpcContext = {
     runners,
     agentQueues: state.agentQueues,
+    resourceGovernor,
     gatewayVersion: GATEWAY_VERSION,
     startedAt: state.startedAt,
     dataDir,

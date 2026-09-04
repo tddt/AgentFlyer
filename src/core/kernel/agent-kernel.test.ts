@@ -3,10 +3,71 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { AgentKernel } from './agent-kernel.js';
-import { JsonFileCheckpointStore } from './checkpoint-store.js';
-import type { ProcessRuntime } from './types.js';
+import { CoalescingCheckpointStore, JsonFileCheckpointStore } from './checkpoint-store.js';
+import type { CheckpointStore, KernelProcessSnapshot, ProcessRuntime } from './types.js';
+import type { ProcessId } from '../types.js';
 
 const tempDirs: string[] = [];
+
+class RecordingCheckpointStore implements CheckpointStore {
+  readonly saves: KernelProcessSnapshot[] = [];
+  private readonly snapshots = new Map<ProcessId, KernelProcessSnapshot>();
+
+  async save(snapshot: KernelProcessSnapshot): Promise<void> {
+    this.saves.push(snapshot);
+    this.snapshots.set(snapshot.pid, snapshot);
+  }
+
+  async load(pid: ProcessId): Promise<KernelProcessSnapshot | null> {
+    return this.snapshots.get(pid) ?? null;
+  }
+
+  async list(): Promise<KernelProcessSnapshot[]> {
+    return Array.from(this.snapshots.values());
+  }
+
+  async delete(pid: ProcessId): Promise<void> {
+    this.snapshots.delete(pid);
+  }
+}
+
+class BlockingCheckpointStore extends RecordingCheckpointStore {
+  private firstSaveStartedResolve: (() => void) | undefined;
+  private releaseFirstSaveResolve: (() => void) | undefined;
+  readonly firstSaveStarted = new Promise<void>((resolve) => {
+    this.firstSaveStartedResolve = resolve;
+  });
+  readonly releaseFirstSave = new Promise<void>((resolve) => {
+    this.releaseFirstSaveResolve = resolve;
+  });
+
+  override async save(snapshot: KernelProcessSnapshot): Promise<void> {
+    this.firstSaveStartedResolve?.();
+    this.firstSaveStartedResolve = undefined;
+    await this.releaseFirstSave;
+    await super.save(snapshot);
+  }
+
+  release(): void {
+    this.releaseFirstSaveResolve?.();
+  }
+}
+
+function checkpointSnapshot(pid: ProcessId, status: KernelProcessSnapshot['status']): KernelProcessSnapshot {
+  return {
+    pid,
+    processType: 'test',
+    version: 1,
+    status,
+    priority: 'normal',
+    state: { status },
+    createdAt: 1,
+    updatedAt: status === 'done' ? 3 : 2,
+    runCount: 1,
+    retryCount: 0,
+    metadata: {},
+  };
+}
 
 async function createTempDir(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'agentflyer-kernel-'));
@@ -70,6 +131,36 @@ const counterRuntime: ProcessRuntime<CounterState, { remaining: number }> = {
 };
 
 describe('AgentKernel', () => {
+  it('coalesces same-turn checkpoint saves and preserves delete ordering', async () => {
+    const inner = new RecordingCheckpointStore();
+    const store = new CoalescingCheckpointStore(inner);
+    const pid = 'checkpoint-test' as ProcessId;
+    const first = store.save(checkpointSnapshot(pid, 'ready'));
+    const second = store.save(checkpointSnapshot(pid, 'done'));
+
+    await Promise.all([first, second]);
+    expect(inner.saves).toHaveLength(1);
+    expect(inner.saves[0]?.status).toBe('done');
+
+    await store.delete(pid);
+    await expect(store.load(pid)).resolves.toBeNull();
+  });
+
+  it('serializes save-delete-save operations for one process', async () => {
+    const inner = new BlockingCheckpointStore();
+    const store = new CoalescingCheckpointStore(inner);
+    const pid = 'checkpoint-ordering-test' as ProcessId;
+
+    const firstSave = store.save(checkpointSnapshot(pid, 'ready'));
+    await inner.firstSaveStarted;
+    const deletion = store.delete(pid);
+    const secondSave = store.save(checkpointSnapshot(pid, 'done'));
+
+    inner.release();
+    await Promise.all([firstSave, deletion, secondSave]);
+    await expect(store.load(pid)).resolves.toMatchObject({ status: 'done' });
+  });
+
   it('runs a process step-by-step and persists checkpoints', async () => {
     const dataDir = await createTempDir();
     const checkpointStore = new JsonFileCheckpointStore(dataDir);

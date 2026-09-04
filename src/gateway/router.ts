@@ -1082,6 +1082,7 @@ async function _routeRequest(
       try {
         const gen = agentKernel.streamTurn({
           agentId: model,
+          priority: 'high',
           userMessage: lastUserMsg.content,
         });
         let next = await gen.next();
@@ -1101,6 +1102,7 @@ async function _routeRequest(
       try {
         const result = await agentKernel.executeTurn({
           agentId: model,
+          priority: 'high',
           userMessage: lastUserMsg.content,
         });
         parts.push(result.text);

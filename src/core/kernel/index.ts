@@ -1,5 +1,9 @@
 export { AgentKernel, type AgentKernelDeps } from './agent-kernel.js';
-export { JsonFileCheckpointStore, ScopedCheckpointStore } from './checkpoint-store.js';
+export {
+  CoalescingCheckpointStore,
+  JsonFileCheckpointStore,
+  ScopedCheckpointStore,
+} from './checkpoint-store.js';
 export {
   deriveProcessStatusForSignal,
   isRunnableProcessStatus,

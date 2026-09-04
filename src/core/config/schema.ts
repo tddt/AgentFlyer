@@ -18,11 +18,21 @@ const WorkflowGatewaySchema = z.object({
     .default(30 * 60_000),
 });
 
+const RuntimeResourceSchema = z.object({
+  /** Maximum concurrent LLM requests across all agents. */
+  llm: z.number().int().positive().default(4),
+  /** Maximum concurrent tool batches across all agents. */
+  tool: z.number().int().positive().default(6),
+  /** Maximum concurrent CPU-heavy runtime jobs. */
+  cpu: z.number().int().positive().default(2),
+});
+
 const GatewaySchema = z.object({
   bind: BindModeSchema.default('loopback'),
   port: z.number().int().min(1024).max(65535).default(19789),
   auth: AuthSchema.default({}),
   workflow: WorkflowGatewaySchema.default({}),
+  resources: RuntimeResourceSchema.optional(),
 });
 
 // ─── Model registry ───────────────────────────────────────────────────────────
