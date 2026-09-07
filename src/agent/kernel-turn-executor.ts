@@ -187,7 +187,13 @@ class AgentKernelTurnExecutor {
   }
 
   async startTurn(input: AgentTurnProcessInput): Promise<{ runId: string }> {
+    if (this.disposed) {
+      throw new Error('Agent kernel turn executor is disposed');
+    }
     await this.initialize();
+    if (this.disposed) {
+      throw new Error('Agent kernel turn executor is disposed');
+    }
     const runId = input.runId ?? ulid();
     await this.kernel.createProcess<AgentTurnProcessInput>({
       processType: this.runtime.type,
@@ -201,6 +207,10 @@ class AgentKernelTurnExecutor {
         runId,
       },
     });
+    if (this.disposed) {
+      await this.abortTurn(runId, 'Agent kernel turn executor is shutting down');
+      throw new Error('Agent kernel turn executor is disposed');
+    }
     this.schedulePump(0);
     return { runId };
   }
@@ -223,7 +233,13 @@ class AgentKernelTurnExecutor {
   }
 
   async resumeTurn(runId: string): Promise<AgentTurnKernelRunRecord | null> {
+    if (this.disposed) {
+      throw new Error('Agent kernel turn executor is disposed');
+    }
     await this.initialize();
+    if (this.disposed) {
+      throw new Error('Agent kernel turn executor is disposed');
+    }
     if (this.pumpPromise) {
       await this.pumpPromise;
     }
@@ -243,6 +259,9 @@ class AgentKernelTurnExecutor {
   }
 
   async cancelRun(runId: string, activeMessage?: string): Promise<AgentCancelRunResult | null> {
+    if (this.disposed) {
+      throw new Error('Agent kernel turn executor is disposed');
+    }
     await this.initialize();
     const current = this.getRun(runId);
     if (!current) {
@@ -277,7 +296,9 @@ class AgentKernelTurnExecutor {
   }
 
   async abortTurn(runId: string, message: string): Promise<void> {
-    await this.initialize();
+    if (!this.disposed) {
+      await this.initialize();
+    }
     const snapshot = this.kernel.getSnapshot(asProcessId(runId));
     if (snapshot) {
       await this.kernel.deleteProcess(snapshot.pid);
@@ -321,10 +342,37 @@ class AgentKernelTurnExecutor {
 
   async dispose(): Promise<void> {
     this.disposed = true;
+    if (this.initPromise) {
+      await this.initPromise.catch(() => undefined);
+    }
     if (this.pumpTimer) {
       clearTimeout(this.pumpTimer);
       this.pumpTimer = null;
       this.scheduledPumpAt = null;
+    }
+    for (const controller of this.syscallAbortControllers.values()) {
+      controller.abort();
+    }
+    if (this.pumpPromise) {
+      await this.pumpPromise;
+    }
+    const DRAIN_TIMEOUT_MS = 1_000;
+    while (this.activeSyscallPromises.size > 0) {
+      for (const controller of this.syscallAbortControllers.values()) {
+        controller.abort();
+      }
+      const stillPending = Array.from(this.activeSyscallPromises);
+      await Promise.allSettled(
+        stillPending.map((promise) =>
+          Promise.race([
+            promise,
+            new Promise<void>((resolve) => setTimeout(resolve, DRAIN_TIMEOUT_MS)),
+          ]),
+        ),
+      );
+      if (stillPending.every((promise) => this.activeSyscallPromises.has(promise))) {
+        break;
+      }
     }
     const liveRunIds = this.kernel
       .listSnapshots()
@@ -378,13 +426,6 @@ class AgentKernelTurnExecutor {
         message: 'Agent kernel turn executor is shutting down',
       });
     }
-    for (const controller of this.syscallAbortControllers.values()) {
-      controller.abort();
-    }
-    await Promise.race([
-      Promise.allSettled(this.activeSyscallPromises),
-      new Promise<void>((resolve) => setTimeout(resolve, 1_000)),
-    ]);
     this.activeSyscalls.clear();
     this.syscallAbortControllers.clear();
     this.activeSyscallPromises.clear();
@@ -417,7 +458,7 @@ class AgentKernelTurnExecutor {
   }
 
   private scheduleNextPump(): void {
-    if (this.pumpPromise) {
+    if (this.disposed || this.pumpPromise) {
       return;
     }
     const waitingSnapshots = this.kernel
@@ -443,12 +484,17 @@ class AgentKernelTurnExecutor {
   }
 
   private async ensurePump(): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
     if (this.pumpPromise) {
       return this.pumpPromise;
     }
     this.pumpPromise = this.runPump().finally(() => {
       this.pumpPromise = null;
-      this.scheduleNextPump();
+      if (!this.disposed) {
+        this.scheduleNextPump();
+      }
     });
     return this.pumpPromise;
   }
@@ -458,6 +504,9 @@ class AgentKernelTurnExecutor {
       return;
     }
     await this.reconcileSnapshots();
+    if (this.disposed) {
+      return;
+    }
     // Notify activity for any process that is actively waiting for a syscall.
     // This resets the idle-timeout clock at the START of syscall execution so
     // long-running tool calls or slow-starting LLM responses don't mistakenly

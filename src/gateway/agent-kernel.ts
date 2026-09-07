@@ -131,6 +131,7 @@ export class AgentKernelService {
   private pumpPromise: Promise<void> | null = null;
   private pumpTimer: ReturnType<typeof setTimeout> | null = null;
   private scheduledPumpAt: number | null = null;
+  private shuttingDown = false;
   private disposed = false;
   private readonly subscribers = new Map<string, Set<(chunk: StreamChunk) => void>>();
   private readonly pendingText = new Map<string, string>();
@@ -191,6 +192,9 @@ export class AgentKernelService {
     if (this.initPromise) {
       return this.initPromise;
     }
+    if (this.shuttingDown) {
+      throw new Error('AgentKernelService is shutting down');
+    }
     this.initPromise = (async () => {
       const restored = await this.kernel.restoreFromCheckpoints();
       if (restored > 0) {
@@ -203,11 +207,14 @@ export class AgentKernelService {
   }
 
   async startTurn(input: AgentKernelTurnInput): Promise<{ runId: string }> {
+    this.assertAcceptingTurns();
     await this.initialize();
+    this.assertAcceptingTurns();
     const runId = input.runId ?? ulid();
     const queuedRecord = this.queuedRuns.get(runId);
     this.queuedRuns.delete(runId);
     try {
+      this.assertAcceptingTurns();
       await this.kernel.createProcess<AgentTurnProcessInput>({
         processType: this.runtime.type,
         processId: asProcessId(runId),
@@ -240,16 +247,23 @@ export class AgentKernelService {
       }
       throw error;
     }
+    if (this.shuttingDown || this.disposed) {
+      await this.abortTurn(runId, 'Gateway agent kernel is shutting down');
+      throw new Error('AgentKernelService is shutting down');
+    }
     this.schedulePump(0);
     this.publishActivity(input.agentId);
     return { runId };
   }
 
   async reserveQueuedTurn(input: AgentKernelTurnInput): Promise<{ runId: string }> {
+    this.assertAcceptingTurns();
     await this.initialize();
+    this.assertAcceptingTurns();
     const runId = input.runId ?? ulid();
     const threadKey = input.threadKey?.trim() ? input.threadKey : 'default';
     const now = Date.now();
+    this.assertAcceptingTurns();
     this.queuedRuns.set(runId, {
       runId,
       agentId: input.agentId,
@@ -378,16 +392,16 @@ export class AgentKernelService {
   }
 
   async dispose(): Promise<void> {
-    // RATIONALE: Do NOT set disposed=true immediately. Background syscall workers
-    // (LLM / tool calls) run through multiple pump rounds; if disposed=true is set
-    // first, schedulePump() becomes a no-op and those workers stall mid-flight.
-    // Instead, wait for every live kernel process to reach a terminal state
-    // (done / error / suspended all call completeRun, which resolves waiters), then
-    // mark disposed and cancel any remaining timer.
-    //
-    // A 5-second per-run timeout is used so that a hung process in tests never
-    // blocks afterEach indefinitely.
+    // RATIONALE: shuttingDown rejects new turns immediately, but disposed stays
+    // false until live workers have had a chance to reach a terminal state.
+    // Setting disposed first would make schedulePump() a no-op and stall
+    // in-flight syscall workers mid-checkpoint.
     const DRAIN_TIMEOUT_MS = 5_000;
+    this.shuttingDown = true;
+    if (this.initPromise) {
+      await this.initPromise.catch(() => undefined);
+    }
+    this.failQueuedRuns('Gateway agent kernel is shutting down');
     for (const controller of this.syscallAbortControllers.values()) {
       controller.abort();
     }
@@ -458,6 +472,15 @@ export class AgentKernelService {
         break;
       }
     }
+    const leftoverRunIds = this.kernel
+      .listSnapshots()
+      .filter((snapshot) => snapshot.processType === this.runtime.type)
+      .map((snapshot) => String(snapshot.pid));
+    await Promise.allSettled(
+      leftoverRunIds.map((runId) =>
+        this.abortTurn(runId, 'Gateway agent kernel is shutting down').catch(() => undefined),
+      ),
+    );
   }
 
   getRun(runId: string): AgentKernelRunRecord | null {
@@ -537,7 +560,9 @@ export class AgentKernelService {
   }
 
   async abortTurn(runId: string, message: string): Promise<void> {
-    await this.initialize();
+    if (!this.disposed && !this.shuttingDown) {
+      await this.initialize();
+    }
     const snapshot = this.kernel.getSnapshot(asProcessId(runId));
     let activityAgentId = snapshot?.metadata.agentId ?? '';
     if (snapshot) {
@@ -635,7 +660,9 @@ export class AgentKernelService {
   }
 
   async resumeTurn(runId: string): Promise<AgentKernelRunRecord | null> {
+    this.assertAcceptingTurns();
     await this.initialize();
+    this.assertAcceptingTurns();
     if (this.pumpPromise) {
       await this.pumpPromise;
     }
@@ -1137,6 +1164,36 @@ export class AgentKernelService {
     snapshot: ReturnType<AgentKernel['getSnapshot']> extends infer T ? Exclude<T, null> : never,
   ): AgentKernelRunRecord {
     return deriveAgentTurnRunRecord(snapshot, this.snapshotToState(snapshot));
+  }
+
+  private assertAcceptingTurns(): void {
+    if (this.disposed) {
+      throw new Error('AgentKernelService is disposed');
+    }
+    if (this.shuttingDown) {
+      throw new Error('AgentKernelService is shutting down');
+    }
+  }
+
+  private failQueuedRuns(message: string): void {
+    const queued = Array.from(this.queuedRuns.values());
+    this.queuedRuns.clear();
+    for (const record of queued) {
+      this.rememberRunRecord({
+        ...record,
+        processStatus: 'error',
+        phase: 'error',
+        controlState: 'error',
+        updatedAt: Date.now(),
+        error: {
+          code: 'AGENT_TURN_CANCELLED',
+          message,
+          retryable: false,
+        },
+      });
+      this.completeRun(record.runId, { ok: false, message });
+      this.publishActivity(record.agentId);
+    }
   }
 
   private rememberRunRecord(record: AgentKernelRunRecord, persist = true): AgentKernelRunRecord {
