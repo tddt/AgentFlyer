@@ -19,6 +19,16 @@
 
 AgentFlyer 面向的是希望把 Agent 当作系统来运营的人，而不是只想再套一层聊天界面的使用者。它把 Agent 执行、工作流编排、记忆检索、工具接入、操作者控制面和多通道交付统一到一个 runtime 里，并且已经能在单机或单主机场景中实际运行，后续再继续向多主机协作演进。
 
+## 一句话定位
+
+AgentFlyer 是面向操作者的 AgentOS Runtime，适合已经走出单聊天 Demo、需要“可持续运行流程 + 可控工具执行 + 多通道交付”的团队。
+
+## 3 个核心场景
+
+- **团队级 AgentOS**：在同一 runtime 内运行协调者与专家 Agent，并共享状态与操作视图。
+- **流程化运营**：把重复任务变成可检查的工作流执行，配合调度、审批与 Deliverables。
+- **受控工具执行**：通过 MCP 与沙箱 profile 接入外部工具，而非默认放开宿主机权限。
+
 ## 它是什么
 
 AgentFlyer 正在形成一个更接近实用 AgentOS 的形态：
@@ -243,6 +253,23 @@ pnpm check
 pnpm test
 ```
 
+## 5 分钟上手
+
+1. 安装并启动：
+   - `npm install -g agentflyer`
+   - `agentflyer start`
+2. 打开 Console UI：`http://localhost:19789`
+3. 打开 CLI 对话：`agentflyer chat`
+4. 在 `~/.agentflyer/config.json` 配置 1 个模型与 1 个 agent
+5. 跑通 1 次对话 + 1 次工作流，验证本地运营闭环
+
+## FAQ（快速答疑）
+
+- **现在能用吗？** 可以，已支持本地/单主机运营。
+- **联邦能力完成了吗？** 还没有，仍在持续扩展。
+- **适合谁？** 需要会话、审批、工作流、交付物和多通道运营的团队。
+- **谁更适合小工具？** 只有单助手或一次性聊天场景的项目。
+
 ## 更适合用来做什么
 
 - 在同一个 runtime 中运行个人或团队级的多 agent 协作系统。
@@ -286,6 +313,14 @@ pnpm typecheck
 pnpm check
 pnpm test
 ```
+
+## 增长执行资产
+
+- [30 天冷启动执行手册](docs/zh/growth/launch-playbook.md)
+- [介绍文模板](docs/zh/growth/intro-post-template.md)
+- [渠道帖子模板](docs/zh/growth/channel-post-templates.md)
+- [指标基线](docs/zh/growth/analytics-baseline.md)
+- [周复盘模板](docs/zh/growth/weekly-retro-template.md)
 
 ## 路线方向
 

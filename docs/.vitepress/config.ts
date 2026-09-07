@@ -5,6 +5,7 @@ function getThemeConfig(locale: 'en' | 'zh') {
   const guidePrefix = `${prefix}/guide`;
   const apiPrefix = `${prefix}/api`;
   const pluginsPrefix = `${prefix}/plugins`;
+  const growthPrefix = `${prefix}/growth`;
 
   if (locale === 'zh') {
     return {
@@ -16,6 +17,7 @@ function getThemeConfig(locale: 'en' | 'zh') {
         { text: '架构', link: '/zh/guide/architecture' },
         { text: '路线图', link: '/zh/roadmap' },
         { text: '常见问题', link: '/zh/faq' },
+        { text: '增长手册', link: '/zh/growth/launch-playbook' },
         { text: 'GitHub', link: 'https://github.com/tddt/AgentFlyer' },
       ],
       sidebar: {
@@ -53,6 +55,18 @@ function getThemeConfig(locale: 'en' | 'zh') {
               { text: '概览', link: `${pluginsPrefix}/overview` },
               { text: '发布插件包', link: `${pluginsPrefix}/writing` },
               { text: '市场', link: `${pluginsPrefix}/marketplace` },
+            ],
+          },
+        ],
+        '/zh/growth/': [
+          {
+            text: '增长',
+            items: [
+              { text: '30 天执行手册', link: `${growthPrefix}/launch-playbook` },
+              { text: '介绍文模板', link: `${growthPrefix}/intro-post-template` },
+              { text: '渠道帖子模板', link: `${growthPrefix}/channel-post-templates` },
+              { text: '指标基线', link: `${growthPrefix}/analytics-baseline` },
+              { text: '周复盘模板', link: `${growthPrefix}/weekly-retro-template` },
             ],
           },
         ],
@@ -104,6 +118,7 @@ function getThemeConfig(locale: 'en' | 'zh') {
       { text: 'Architecture', link: '/guide/architecture' },
       { text: 'Roadmap', link: '/roadmap' },
       { text: 'FAQ', link: '/faq' },
+      { text: 'Growth', link: '/growth/launch-playbook' },
       { text: 'Reference', link: '/api/rpc-reference' },
       { text: 'GitHub', link: 'https://github.com/tddt/AgentFlyer' },
     ],
@@ -142,6 +157,18 @@ function getThemeConfig(locale: 'en' | 'zh') {
             { text: 'Overview', link: `${pluginsPrefix}/overview` },
             { text: 'Publishing Packages', link: `${pluginsPrefix}/writing` },
             { text: 'Marketplace', link: `${pluginsPrefix}/marketplace` },
+          ],
+        },
+      ],
+      '/growth/': [
+        {
+          text: 'Growth',
+          items: [
+            { text: '30-Day Launch Playbook', link: `${growthPrefix}/launch-playbook` },
+            { text: 'Intro Post Template', link: `${growthPrefix}/intro-post-template` },
+            { text: 'Channel Post Templates', link: `${growthPrefix}/channel-post-templates` },
+            { text: 'Analytics Baseline', link: `${growthPrefix}/analytics-baseline` },
+            { text: 'Weekly Retro Template', link: `${growthPrefix}/weekly-retro-template` },
           ],
         },
       ],

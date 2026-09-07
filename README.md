@@ -19,6 +19,16 @@ Distributed AgentOS for multi-agent orchestration, workflows, memory, deliverabl
 
 AgentFlyer is for teams and builders who want more than a chat wrapper. It brings agent execution, workflow coordination, memory retrieval, tool access, operator control, and multi-channel delivery into one runtime that already works on a single machine and is being shaped toward cross-host collaboration.
 
+## One-line Positioning
+
+AgentFlyer is an operator-first AgentOS runtime for teams who have outgrown single-chat agent demos and need durable workflows, controllable tooling, and multi-channel delivery in one system.
+
+## 3 Core Scenarios
+
+- **Team AgentOS**: Run coordinator + specialist agents in one runtime with shared state and operational visibility.
+- **Workflow Operations**: Convert repeat work into inspectable workflow runs with scheduler triggers, approvals, and deliverables.
+- **Controlled Tool Execution**: Integrate external tools via MCP and sandbox profiles instead of giving unbounded host access.
+
 ## What It Is
 
 AgentFlyer is aiming at a practical AgentOS shape:
@@ -243,6 +253,23 @@ pnpm check
 pnpm test
 ```
 
+## 5-Minute Quick Start
+
+1. Install and boot:
+   - `npm install -g agentflyer`
+   - `agentflyer start`
+2. Open Console UI: `http://localhost:19789`
+3. Open CLI chat: `agentflyer chat`
+4. Configure one model and one agent in `~/.agentflyer/config.json`
+5. Run one chat and one workflow to validate your local operator loop
+
+## FAQ (Fast Answers)
+
+- **Is it usable now?** Yes for local/single-host operations.
+- **Is federation complete?** No, federation is actively expanding.
+- **Who is it for?** Teams that need sessions, approvals, workflows, deliverables, and multi-channel runtime operations.
+- **Who should use a smaller stack?** Single-assistant or disposable chat-only use cases.
+
 ## Where It Fits Best
 
 - Run a personal or team AgentOS with multiple specialist agents in one runtime.
@@ -286,6 +313,14 @@ pnpm typecheck
 pnpm check
 pnpm test
 ```
+
+## Launch and Growth Assets
+
+- [30-Day Launch Playbook](docs/growth/launch-playbook.md)
+- [Intro Post Template](docs/growth/intro-post-template.md)
+- [Channel Post Templates](docs/growth/channel-post-templates.md)
+- [Analytics Baseline](docs/growth/analytics-baseline.md)
+- [Weekly Retro Template](docs/growth/weekly-retro-template.md)
 
 ## Roadmap Direction
 
