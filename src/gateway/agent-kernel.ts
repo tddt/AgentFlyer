@@ -439,6 +439,25 @@ export class AgentKernelService {
     if (this.pumpPromise) {
       await this.pumpPromise;
     }
+    // The pump that was still in-flight above may have fired new background
+    // syscalls after the earlier drain snapshot was taken; sweep those up too.
+    while (this.activeSyscallPromises.size > 0) {
+      for (const controller of this.syscallAbortControllers.values()) {
+        controller.abort();
+      }
+      const stillPending = Array.from(this.activeSyscallPromises);
+      await Promise.allSettled(
+        stillPending.map((promise) =>
+          Promise.race([
+            promise,
+            new Promise<void>((resolve) => setTimeout(resolve, DRAIN_TIMEOUT_MS)),
+          ]),
+        ),
+      );
+      if (stillPending.every((promise) => this.activeSyscallPromises.has(promise))) {
+        break;
+      }
+    }
   }
 
   getRun(runId: string): AgentKernelRunRecord | null {
@@ -865,7 +884,11 @@ export class AgentKernelService {
     //      RuntimeResourceGovernor lane limits.
     //  (b) A new agent that starts while an LLM is in flight gets its own tick
     //      pump started immediately, rather than waiting for the slow LLM.
-    this.firePendingSyscalls();
+    // Skip firing new syscalls once disposal has begun so dispose() cannot race
+    // against freshly spawned background workers it never gets to await.
+    if (!this.disposed) {
+      this.firePendingSyscalls();
+    }
     await this.tickAllReady();
     await this.reconcileSnapshots();
   }
