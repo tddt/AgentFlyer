@@ -252,6 +252,33 @@ pnpm test
 - 用 sandbox profile 和审批策略收紧执行边界，而不是默认开放宿主机权限。
 - 在联邦能力成熟的过程中逐步扩展到跨主机场景。
 
+## 快速价值证明（Quick Value Proof）
+
+### 典型流程形态
+
+- 采集 → 研究 → 评审 → 发布可沉淀为可复用 workflow，并保留 deliverables 与执行历史。
+
+### 可观测运营
+
+- 操作者可在同一控制面查看 sessions、审批状态、scheduler 活动和 workflow 进度。
+
+### 安全与执行边界
+
+- 外部工具通过 MCP 接入，并由审批策略 + Docker sandbox profile 约束执行边界。
+
+### 适用边界
+
+- 更适合需要协作、记忆、控制和持续交付的团队。
+- 对单助手或一次性聊天自动化场景，可能偏重。
+
+### 按角色入口
+
+- 开发者： https://tddt.github.io/AgentFlyer/zh/audiences/developers
+- 运营团队： https://tddt.github.io/AgentFlyer/zh/audiences/operators
+- 企业： https://tddt.github.io/AgentFlyer/zh/audiences/enterprise
+- 插件作者： https://tddt.github.io/AgentFlyer/zh/audiences/plugin-authors
+- 项目事实： https://tddt.github.io/AgentFlyer/zh/project-facts
+
 ## 为什么这个仓库值得关注
 
 - 它瞄准的类别比单一聊天应用更大。

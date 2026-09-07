@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://tddt.github.io/AgentFlyer/
+    about: Start from docs, role-based entry pages, and project facts.

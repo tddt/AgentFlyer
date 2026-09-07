@@ -1,0 +1,18 @@
+{
+  "name": "AgentFlyer",
+  "short_name": "AgentFlyer",
+  "description": "AgentOS runtime for multi-agent orchestration, workflows, memory, MCP, sandboxed execution, and multi-channel operations.",
+  "start_url": "/AgentFlyer/",
+  "scope": "/AgentFlyer/",
+  "display": "standalone",
+  "background_color": "#081714",
+  "theme_color": "#0d3b36",
+  "icons": [
+    {
+      "src": "/AgentFlyer/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

@@ -344,6 +344,37 @@ features:
   </section>
 
   <section class="marketing-panel">
+    <div class="marketing-panel-inner">
+      <p class="marketing-eyebrow">Adoption path</p>
+      <h2 class="marketing-title">Who should use it, when to avoid it, and where to start now.</h2>
+      <div class="marketing-decisions">
+        <article class="marketing-decision-card">
+          <h3>Who should use it</h3>
+          <p>Teams that need durable workflows, operator visibility, approval-aware tool execution, and one runtime shared across channels.</p>
+        </article>
+        <article class="marketing-decision-card">
+          <h3>When to avoid it</h3>
+          <p>Single-assistant or disposable chat tasks with no workflow state, no control plane, and no policy boundaries.</p>
+        </article>
+      </div>
+      <div class="marketing-links">
+        <a class="marketing-link-card" href="/audiences/developers">
+          <strong>By Role</strong>
+          <span>Choose the shortest path for developers, operators, enterprise teams, and plugin authors.</span>
+        </a>
+        <a class="marketing-link-card" href="/project-facts">
+          <strong>Project Facts</strong>
+          <span>Review scope, capability boundaries, and evaluator checklists in one page.</span>
+        </a>
+        <a class="marketing-link-card" href="/guide/getting-started">
+          <strong>Try It Now</strong>
+          <span>Launch one runtime and validate fit with a practical first workflow.</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <section class="marketing-panel">
     <div class="marketing-panel-inner marketing-cta">
       <div>
         <p class="marketing-eyebrow">Fast start</p>

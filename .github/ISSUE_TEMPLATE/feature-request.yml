@@ -1,0 +1,46 @@
+name: Feature request
+about: Propose new capability with audience, value, and boundaries
+labels: ["type:feature", "need:triage"]
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Request summary
+      placeholder: Describe the capability in one sentence
+    validations:
+      required: true
+  - type: dropdown
+    id: audience
+    attributes:
+      label: Primary audience
+      options:
+        - Developers / Engineering teams
+        - AI Product / Operations teams
+        - Enterprise technology leaders
+        - Plugin authors / Open source contributors
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      placeholder: What operational problem cannot be solved today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach
+      placeholder: What should be added and where should it live?
+    validations:
+      required: true
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Security / policy / boundary impact
+      placeholder: Mention approvals, sandbox, MCP, federation, or governance impact
+  - type: textarea
+    id: success
+    attributes:
+      label: Success criteria
+      placeholder: How will we know this is done and valuable?

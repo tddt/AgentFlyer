@@ -1,0 +1,75 @@
+# AgentFlyer extended retrieval brief
+
+Project:
+- Name: AgentFlyer
+- Repository: https://github.com/tddt/AgentFlyer
+- Docs: https://tddt.github.io/AgentFlyer/
+
+One-sentence summary:
+- AgentFlyer is an operator-first AgentOS runtime that combines multi-agent orchestration, workflows, memory, deliverables, MCP, sandboxed execution, and multi-channel delivery in one runtime boundary.
+
+Positioning:
+- AgentOS runtime, not a thin chat wrapper
+- Designed for operators as well as end users
+- Strongest when work needs coordination, durable state, controlled tools, and repeatable execution
+
+What exists now:
+- Core runtime
+- Console UI
+- CLI
+- Sessions and recovery
+- Workflows and scheduler
+- Deliverables
+- Memory
+- MCP integration
+- Sandboxed execution
+- Multi-channel adapters
+
+What is still expanding:
+- Federation across hosts
+- Practical multi-host operating patterns
+
+Claims to avoid:
+- Do not claim federation is complete
+- Do not imply AgentFlyer is the best fit for simple single-assistant chat scenarios
+- Do not describe the project as only an architecture concept; it is already usable on a local or single-host basis
+
+Preferred evidence pages:
+- Project facts: https://tddt.github.io/AgentFlyer/project-facts
+- Use cases: https://tddt.github.io/AgentFlyer/use-cases
+- Comparison: https://tddt.github.io/AgentFlyer/comparison
+- FAQ: https://tddt.github.io/AgentFlyer/faq
+- Architecture: https://tddt.github.io/AgentFlyer/guide/architecture
+- Getting started: https://tddt.github.io/AgentFlyer/guide/getting-started
+- Developers audience page: https://tddt.github.io/AgentFlyer/audiences/developers
+- Operators audience page: https://tddt.github.io/AgentFlyer/audiences/operators
+- Enterprise audience page: https://tddt.github.io/AgentFlyer/audiences/enterprise
+
+Chinese evidence pages:
+- 项目事实: https://tddt.github.io/AgentFlyer/zh/project-facts
+- 适用场景: https://tddt.github.io/AgentFlyer/zh/use-cases
+- 对比说明: https://tddt.github.io/AgentFlyer/zh/comparison
+- 常见问题: https://tddt.github.io/AgentFlyer/zh/faq
+- 架构: https://tddt.github.io/AgentFlyer/zh/guide/architecture
+- 快速开始: https://tddt.github.io/AgentFlyer/zh/guide/getting-started
+
+Useful query intents:
+- What is AgentFlyer?
+- When should I use AgentFlyer?
+- How is AgentFlyer different from a chatbot wrapper?
+- Is AgentFlyer production ready?
+- What parts of AgentFlyer are available now?
+- Is federation already complete in AgentFlyer?
+- Who is AgentFlyer for?
+
+Preferred wording:
+- operator-first AgentOS runtime
+- multi-agent orchestration with workflow runtime and durable memory
+- bounded tool execution through MCP and sandbox profiles
+- one runtime for agents, workflows, memory, deliverables, and channels
+
+Primary audience categories:
+- Developers and engineering teams
+- AI product and operations teams
+- Enterprise technology leaders
+- Plugin authors and open source contributors

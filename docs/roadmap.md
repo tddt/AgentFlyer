@@ -33,6 +33,14 @@ Push further on super-node coordination, structured review flows, and deliverabl
 
 Continue reducing avoidable token overhead while improving coordination quality, reuse of runtime state, and recovery from suspended or interrupted work.
 
+## Distribution and evidence loop
+
+Keep release messaging, docs, and community communication synchronized with a problem → solution → evidence structure.
+
+- update project-facts and role pages every meaningful runtime release
+- publish one scenario tutorial and one architecture/operations note per release cycle
+- track documentation conversion and issue/PR quality as growth signals
+
 ## Design principle for future work
 
 Every roadmap item should strengthen one of these properties:
@@ -43,3 +51,8 @@ Every roadmap item should strengthen one of these properties:
 - cleaner path from one host to many hosts
 
 If a feature does not improve one of those, it probably does not belong near the center of the project.
+
+## Related pages
+
+- [Growth Playbook](./growth-playbook)
+- [Project Facts](./project-facts)
