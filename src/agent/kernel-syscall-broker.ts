@@ -43,7 +43,6 @@ export async function executeWaitingAgentSyscall(
   if (!pendingSyscall || !kernel.getSnapshot(snapshot.pid)) {
     return;
   }
-  const state = runtime.deserialize(snapshot.state);
   const lane =
     pendingSyscall.kind === 'llm.generate'
       ? 'llm'
@@ -56,12 +55,13 @@ export async function executeWaitingAgentSyscall(
       : snapshot.priority === 'low'
         ? 'scheduler'
         : 'workflow';
-  const execute = (): Promise<
-    Awaited<ReturnType<AgentTurnProcessRuntime['executePendingSyscall']>>
-  > => runtime.executePendingSyscall(state, pendingSyscall, Date.now());
 
   let resolution: SyscallResolution;
   try {
+    const state = runtime.deserialize(snapshot.state);
+    const execute = (): Promise<
+      Awaited<ReturnType<AgentTurnProcessRuntime['executePendingSyscall']>>
+    > => runtime.executePendingSyscall(state, pendingSyscall, Date.now());
     resolution = lane
       ? await resourceGovernor.run(
           {

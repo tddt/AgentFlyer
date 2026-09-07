@@ -6,6 +6,7 @@ import {
   type KernelProcessSnapshot,
   ScopedCheckpointStore,
 } from '../core/kernel/index.js';
+import { createLogger } from '../core/logger.js';
 import { RuntimeResourceGovernor } from '../core/runtime-resource-governor.js';
 import type { StreamChunk } from '../core/types.js';
 import { asProcessId } from '../core/types.js';
@@ -27,6 +28,8 @@ import {
 type AgentRunnerResolver =
   | Map<string, AgentRunner>
   | ((agentId: string) => AgentRunner | undefined);
+
+const logger = createLogger('agent:kernel-turn-executor');
 
 class InMemoryCheckpointStore implements CheckpointStore {
   private readonly snapshots = new Map<string, KernelProcessSnapshot>();
@@ -101,14 +104,16 @@ class AgentKernelTurnExecutor {
   private resolveRunnerFn: (agentId: string) => AgentRunner | undefined;
   private readonly chunkSubscribers = new Map<string, Set<(chunk: StreamChunk) => void>>();
   private readonly activitySubscribers = new Map<string, Set<() => void>>();
-  private readonly resourceGovernor: RuntimeResourceGovernor;
+  private resourceGovernor: RuntimeResourceGovernor;
+  private resourceGovernorExplicit = false;
 
   constructor(
     runners: AgentRunnerResolver,
     checkpointStore: CheckpointStore,
-    resourceGovernor = new RuntimeResourceGovernor(),
+    resourceGovernor?: RuntimeResourceGovernor,
   ) {
-    this.resourceGovernor = resourceGovernor;
+    this.resourceGovernor = resourceGovernor ?? new RuntimeResourceGovernor();
+    this.resourceGovernorExplicit = resourceGovernor !== undefined;
     this.resolveRunnerFn = (agentId) => resolveRunner(runners, agentId);
     this.kernel = new AgentKernel({ checkpointStore });
     this.runtime = new AgentTurnProcessRuntime((agentId) => this.resolveRunnerFn(agentId), {
@@ -124,6 +129,17 @@ class AgentKernelTurnExecutor {
 
   setRunnerResolver(runners: AgentRunnerResolver): void {
     this.resolveRunnerFn = (agentId) => resolveRunner(runners, agentId);
+  }
+
+  setResourceGovernor(resourceGovernor: RuntimeResourceGovernor): void {
+    if (this.resourceGovernorExplicit && this.resourceGovernor !== resourceGovernor) {
+      throw new Error('Shared executor requires one stable RuntimeResourceGovernor');
+    }
+    if (this.activeSyscalls.size > 0 && this.resourceGovernor !== resourceGovernor) {
+      throw new Error('Cannot change RuntimeResourceGovernor while syscalls are active');
+    }
+    this.resourceGovernor = resourceGovernor;
+    this.resourceGovernorExplicit = true;
   }
 
   subscribeToTurnChunks(runId: string, onChunk: (chunk: StreamChunk) => void): () => void {
@@ -263,8 +279,9 @@ class AgentKernelTurnExecutor {
   async abortTurn(runId: string, message: string): Promise<void> {
     await this.initialize();
     const snapshot = this.kernel.getSnapshot(asProcessId(runId));
-    this.abortSyscall(runId);
     if (snapshot) {
+      await this.kernel.deleteProcess(snapshot.pid);
+      this.abortSyscall(runId);
       try {
         const state = this.runtime.deserialize(snapshot.state) as AgentTurnProcessState;
         const runner = this.resolveRunnerFn(state.agentId);
@@ -297,7 +314,6 @@ class AgentKernelTurnExecutor {
       } catch {
         // Best effort: timeout cleanup should not fail if lease recovery is unavailable.
       }
-      await this.kernel.deleteProcess(snapshot.pid);
     }
     this.suspendedRuns.delete(runId);
     this.completeRun(runId, { ok: false, message });
@@ -308,6 +324,59 @@ class AgentKernelTurnExecutor {
     if (this.pumpTimer) {
       clearTimeout(this.pumpTimer);
       this.pumpTimer = null;
+      this.scheduledPumpAt = null;
+    }
+    const liveRunIds = this.kernel
+      .listSnapshots()
+      .filter((snapshot) => snapshot.processType === this.runtime.type)
+      .map((snapshot) => String(snapshot.pid));
+    for (const runId of liveRunIds) {
+      const snapshot = this.kernel.getSnapshot(asProcessId(runId));
+      if (snapshot) {
+        try {
+          const state = this.runtime.deserialize(snapshot.state) as AgentTurnProcessState;
+          const runner = this.resolveRunnerFn(state.agentId);
+          runner?.syncRuntimeState(
+            state.threadKey,
+            runId,
+            state.runnerState.toolResultCache,
+            state.runnerState.promptLayerHashes,
+            state.runnerState.cachedSystemPrompt,
+            state.runnerState.defaultThreadKey,
+            'kernel',
+          );
+          runner?.forceReset(runId);
+          this.runRecords.set(runId, {
+            runId,
+            agentId: state.agentId,
+            threadKey: state.threadKey,
+            processStatus: 'error',
+            phase: 'error',
+            createdAt: snapshot.createdAt,
+            updatedAt: Date.now(),
+            error: {
+              code: 'AGENT_TURN_EXECUTOR_DISPOSED',
+              message: 'Agent kernel turn executor is shutting down',
+              retryable: false,
+            },
+          });
+        } catch (error: unknown) {
+          logger.warn('Failed to reset runner during executor shutdown', {
+            runId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      await this.kernel.deleteProcess(asProcessId(runId)).catch((error: unknown) => {
+        logger.warn('Failed to delete run during executor shutdown', {
+          runId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+      this.completeRun(runId, {
+        ok: false,
+        message: 'Agent kernel turn executor is shutting down',
+      });
     }
     for (const controller of this.syscallAbortControllers.values()) {
       controller.abort();
@@ -337,7 +406,11 @@ class AgentKernelTurnExecutor {
       () => {
         this.pumpTimer = null;
         this.scheduledPumpAt = null;
-        void this.ensurePump();
+        void this.ensurePump().catch((error: unknown) => {
+          logger.error('Agent kernel pump failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
       },
       Math.max(0, targetAt - Date.now()),
     );
@@ -423,16 +496,28 @@ class AgentKernelTurnExecutor {
         snapshot,
         this.resourceGovernor,
         controller.signal,
-      ).finally(() => {
-        this.activeSyscalls.delete(runId);
-        if (this.syscallAbortControllers.get(runId) === controller) {
-          this.syscallAbortControllers.delete(runId);
-        }
-        this.activeSyscallPromises.delete(worker);
-        this.notifyStepActivityAll();
-        this.schedulePump(0);
-      });
-      this.activeSyscallPromises.add(worker);
+      );
+      const safeWorker = worker
+        .catch(async (error: unknown) => {
+          logger.error('Agent kernel syscall worker failed', {
+            runId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          await this.abortTurn(
+            runId,
+            `Agent kernel syscall worker failed: ${error instanceof Error ? error.message : String(error)}`,
+          ).catch(() => undefined);
+        })
+        .finally(() => {
+          this.activeSyscalls.delete(runId);
+          if (this.syscallAbortControllers.get(runId) === controller) {
+            this.syscallAbortControllers.delete(runId);
+          }
+          this.activeSyscallPromises.delete(safeWorker);
+          this.notifyStepActivityAll();
+          this.schedulePump(0);
+        });
+      this.activeSyscallPromises.add(safeWorker);
     }
   }
 
@@ -622,6 +707,9 @@ async function getExecutor(
   if (existing) {
     const executor = await existing;
     executor.setRunnerResolver(options.runners);
+    if (options.resourceGovernor) {
+      executor.setResourceGovernor(options.resourceGovernor);
+    }
     return executor;
   }
 
@@ -635,9 +723,27 @@ async function getExecutor(
     return executor;
   })();
   sharedExecutors.set(key, created);
+  void created.catch(() => {
+    if (sharedExecutors.get(key) === created) {
+      sharedExecutors.delete(key);
+    }
+  });
   const executor = await created;
   executor.setRunnerResolver(options.runners);
   return executor;
+}
+
+export async function disposeAgentTurnKernelExecutors(dataDir: string): Promise<void> {
+  const matching = Array.from(sharedExecutors.entries()).filter(
+    ([key]) => key === dataDir || key.startsWith(`${dataDir}::`),
+  );
+  await Promise.all(
+    matching.map(async ([key, executorPromise]) => {
+      sharedExecutors.delete(key);
+      const executor = await executorPromise;
+      await executor.dispose();
+    }),
+  );
 }
 
 export async function startAgentTurnViaKernel(

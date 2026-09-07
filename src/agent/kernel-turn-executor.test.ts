@@ -68,6 +68,33 @@ class HangingProvider implements LLMProvider {
   }
 }
 
+class DelayedProvider implements LLMProvider {
+  readonly id = 'delayed';
+  readonly started: Promise<void>;
+  private markStarted!: () => void;
+
+  constructor(private readonly delayMs: number) {
+    this.started = new Promise<void>((resolve) => {
+      this.markStarted = resolve;
+    });
+  }
+
+  async *run(_params: RunParams): AsyncIterable<StreamChunk> {
+    this.markStarted();
+    await new Promise<void>((resolve) => setTimeout(resolve, this.delayMs));
+    yield { type: 'text_delta', text: 'delayed response' };
+    yield { type: 'done', inputTokens: 1, outputTokens: 1, stopReason: 'end_turn' };
+  }
+
+  async countTokens(): Promise<number> {
+    return 0;
+  }
+
+  supports(): boolean {
+    return true;
+  }
+}
+
 class FakeRecoverableBlockedLlmProvider implements LLMProvider {
   readonly id = 'fake-recoverable-blocked-llm';
 
@@ -305,6 +332,44 @@ describe('executeAgentTurnViaKernel', () => {
     expect(mainResult.sessionKey).toContain('executor-main-narrow');
     expect(altResult.text).toContain('hello from agent-alt');
     expect(altResult.sessionKey).toContain('executor-alt-narrow');
+  });
+
+  it('does not let a slow syscall block another agent turn', async () => {
+    const dataDir = await createTempDir();
+    const delayedProvider = new DelayedProvider(200);
+    const runners = new Map([
+      ['agent-main', createRunner(dataDir, 'agent-main', delayedProvider)],
+      ['agent-alt', createRunner(dataDir, 'agent-alt')],
+    ]);
+    const slowTurn = executeAgentTurnViaKernel({
+      runners,
+      dataDir,
+      input: {
+        agentId: 'agent-main',
+        userMessage: 'slow turn',
+        threadKey: 'executor-slow',
+      },
+    });
+    await delayedProvider.started;
+
+    const fastTurn = executeAgentTurnViaKernel({
+      runners,
+      dataDir,
+      input: {
+        agentId: 'agent-alt',
+        userMessage: 'fast turn',
+        threadKey: 'executor-fast',
+      },
+    });
+    const fastResult = await Promise.race([
+      fastTurn,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('fast turn was blocked by slow syscall')), 120),
+      ),
+    ]);
+
+    expect(fastResult.text).toContain('hello from agent-alt');
+    await slowTurn;
   });
 
   it('aborts timed out kernel turns and releases the runner lease', async () => {

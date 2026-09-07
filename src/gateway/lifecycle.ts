@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ulid } from 'ulid';
 import type { WebSocket as WsWebSocket } from 'ws';
+import { disposeAgentTurnKernelExecutors } from '../agent/kernel-turn-executor.js';
 import { AnthropicProvider } from '../agent/llm/anthropic.js';
 import { FailoverProvider } from '../agent/llm/failover.js';
 import { OpenAIProvider, createCompatProvider } from '../agent/llm/openai.js';
@@ -1477,6 +1478,8 @@ export async function startGateway(
     }
     state.scheduler.stopAll();
     await state.mcpRegistry?.close().catch(() => undefined);
+    await disposeAgentTurnKernelExecutors(dataDir);
+    state.resourceGovernor.dispose();
     await federationNode?.stop().catch(() => undefined);
     // Stop external channels gracefully
     for (const ch of activeChannels) {

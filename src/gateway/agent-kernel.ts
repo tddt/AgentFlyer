@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ulid } from 'ulid';
+import { executeWaitingAgentSyscall } from '../agent/kernel-syscall-broker.js';
 import {
   type AgentTurnProcessInput,
   AgentTurnProcessRuntime,
@@ -31,9 +32,8 @@ import {
 } from '../core/kernel/index.js';
 import type { ProcessStatus } from '../core/kernel/types.js';
 import { createLogger } from '../core/logger.js';
-import type { ProcessId, StreamChunk } from '../core/types.js';
-import { asProcessId } from '../core/types.js';
-import { type ResourceLane, RuntimeResourceGovernor } from './runtime-resource-governor.js';
+import { type ProcessId, type StreamChunk, asProcessId } from '../core/types.js';
+import { RuntimeResourceGovernor } from './runtime-resource-governor.js';
 
 const logger = createLogger('gateway:agent-kernel');
 const MAX_RUN_RECORDS = 200;
@@ -405,6 +405,15 @@ export class AgentKernelService {
         ),
       );
     }
+    const remainingRunIds = this.kernel
+      .listSnapshots()
+      .filter((snapshot) => snapshot.processType === this.runtime.type)
+      .map((snapshot) => String(snapshot.pid));
+    await Promise.allSettled(
+      remainingRunIds.map((runId) =>
+        this.abortTurn(runId, 'Gateway agent kernel is shutting down').catch(() => undefined),
+      ),
+    );
     const inFlightSyscalls = Array.from(this.activeSyscallPromises);
     if (inFlightSyscalls.length > 0) {
       await Promise.allSettled(
@@ -783,7 +792,11 @@ export class AgentKernelService {
       () => {
         this.pumpTimer = null;
         this.scheduledPumpAt = null;
-        void this.ensurePump();
+        void this.ensurePump().catch((error: unknown) => {
+          logger.error('Gateway agent kernel pump failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
       },
       Math.max(0, targetAt - Date.now()),
     );
@@ -910,32 +923,22 @@ export class AgentKernelService {
           }
         }
       }
-      const state = this.runtime.deserialize(snapshot.state);
-      const execute = (): Promise<
-        Awaited<ReturnType<AgentTurnProcessRuntime['executePendingSyscall']>>
-      > => this.runtime.executePendingSyscall(state, pendingSyscall, Date.now());
-      const lane = this.resourceLaneFor(pendingSyscall.kind);
-      const priority = this.resourcePriorityFor(snapshot.priority);
-      const resolution = lane
-        ? await this.resourceGovernor.run(
-            {
-              lane,
-              agentId: snapshot.metadata.agentId ?? 'unknown',
-              priority,
-              signal: abortController.signal,
-            },
-            execute,
-          )
-        : await execute();
-      if (!this.kernel.getSnapshot(snapshot.pid)) {
-        return;
-      }
-      await this.kernel.resolveSyscall(snapshot.pid, resolution);
+      await executeWaitingAgentSyscall(
+        this.kernel,
+        this.runtime,
+        snapshot,
+        this.resourceGovernor,
+        abortController.signal,
+      );
     } catch (error) {
       logger.error('Background syscall execution failed', {
         pid: snapshot.pid,
         error: error instanceof Error ? error.message : String(error),
       });
+      await this.abortTurn(
+        String(snapshot.pid),
+        `Background syscall execution failed: ${error instanceof Error ? error.message : String(error)}`,
+      ).catch(() => undefined);
     } finally {
       this.activeSyscalls.delete(snapshot.pid);
       if (this.syscallAbortControllers.get(snapshot.pid) === abortController) {
@@ -948,32 +951,6 @@ export class AgentKernelService {
 
   private abortSyscall(pid: ProcessId): void {
     this.syscallAbortControllers.get(pid)?.abort();
-  }
-
-  private resourceLaneFor(
-    kind: NonNullable<KernelProcessSnapshot['pendingSyscall']>['kind'],
-  ): ResourceLane | null {
-    if (kind === 'llm.generate') {
-      return 'llm';
-    }
-    if (kind === 'tool.call') {
-      return 'tool';
-    }
-    return null;
-  }
-
-  private resourcePriorityFor(priority: KernelProcessSnapshot['priority']):
-    | 'interactive'
-    | 'recovery'
-    | 'workflow'
-    | 'scheduler' {
-    if (priority === 'critical' || priority === 'high') {
-      return 'interactive';
-    }
-    if (priority === 'low') {
-      return 'scheduler';
-    }
-    return 'workflow';
   }
 
   /**
@@ -1180,5 +1157,10 @@ export async function getAgentKernelService(ctx: {
     return service;
   })();
   agentKernelServices.set(ctx, created);
+  void created.catch(() => {
+    if (agentKernelServices.get(ctx) === created) {
+      agentKernelServices.delete(ctx);
+    }
+  });
   return created;
 }
